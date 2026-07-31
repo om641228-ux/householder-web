@@ -1,0 +1,7 @@
+{
+  "appId": "com.receipt.manager",
+  "appName": "Receipt Manager",
+  "webDir": "build",
+  "bundledWebRuntime": false,
+  "packageClassList": ["ReceiptScannerPlugin"]
+}
