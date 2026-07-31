@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import './App.css';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 
-const API_URL = 'https://recept-web-back-production.up.railway.app';
+const API_URL = 'https://householder-api-production.up.railway.app';
 
 const OBJECTS = ['other', 'Duqe', 'Maria', 'Kit', 'Dubai', 'Tich'];
 const ITEMS_PER_PAGE_OPTIONS = [10, 20, 50, 'all'];
