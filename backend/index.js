@@ -206,12 +206,13 @@ Cambio: <как на документе>
 ══════ ПРОЧИЙ ТЕКСТ ══════
 <все остальные строки с документа на языке оригинала, не вошедшие в модули выше: реклама, примечания, реквизиты, футеры — каждая с новой строки>
 
-14. raw_text_ru — ПОЛНЫЙ ПЕРЕВОД raw_text на русский язык с той же модульной структурой и порядком строк. Все названия, подписи и примечания переведи; числа, даты, артикулы и реквизиты оставь без изменений. Заголовки модулей те же: ══════ МАГАЗИН ══════, ══════ ДОКУМЕНТ ══════, ══════ ТОВАРЫ ══════, ══════ СУММЫ ══════, ══════ ОПЛАТА ══════, ══════ ПРОЧИЙ ТЕКСТ ══════.
+14. raw_text_ru — ОБЯЗАТЕЛЬНОЕ ПОЛЕ: ПОЛНЫЙ ПЕРЕВОД raw_text на русский язык с той же модульной структурой и порядком строк. Все названия, подписи и примечания переведи; числа, даты, артикулы и реквизиты оставь без изменений. Заголовки модулей те же: ══════ МАГАЗИН ══════, ══════ ДОКУМЕНТ ══════, ══════ ТОВАРЫ ══════, ══════ СУММЫ ══════, ══════ ОПЛАТА ══════, ══════ ПРОЧИЙ ТЕКСТ ══════. Ответ БЕЗ поля raw_text_ru считается НЕВАЛИДНЫМ.
 
 ПРАВИЛА ДЛЯ raw_text:
 - Модули идут строго в этом порядке, заголовок модуля — отдельная строка "══════ ИМЯ ══════"
 - Если данных для модуля нет на чеке — НЕ выдумывай, пропусти модуль целиком
 - raw_text — строго на языке оригинала; raw_text_ru — полный перевод на русский; обе структуры идентичны
+- ОБА поля ОБЯЗАТЕЛЬНЫ: если на документе есть хоть какой-то текст, raw_text_ru должен присутствовать и содержать перевод КАЖДОЙ строки raw_text
 - ЗАПРЕЩЕНО выводить raw_text и raw_text_ru как JSON-массив или одной строкой без переносов
 
 Верни ТОЛЬКО JSON, без markdown, без объяснений:
@@ -250,7 +251,12 @@ const GEMINI_FALLBACK_CANDIDATES = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gem
 
 async function recognizeWithGemini(imageBuffer, modelName, currency, docType, mimeType = 'image/jpeg') {
   if (!genAI) throw new Error('Gemini API key not configured');
-  const model = genAI.getGenerativeModel({ model: modelName || DEFAULT_GEMINI_MODEL });
+  // maxOutputTokens задан явно: raw_text (оригинал) + raw_text_ru (перевод) — длинный вывод,
+  // а у 2.5 thinking-токены тоже идут в этот лимит. Без запаса ответ обрезается и перевод теряется.
+  const model = genAI.getGenerativeModel({
+    model: modelName || DEFAULT_GEMINI_MODEL,
+    generationConfig: { maxOutputTokens: 8192, temperature: 0.1 }
+  });
   const prompt = buildReceiptPrompt(currency, docType);
   
   const result = await model.generateContent([
@@ -297,7 +303,7 @@ async function recognizeWithOpenAICompat(imageBuffer, modelName, currency, docTy
         ]
       }
     ],
-    max_tokens: 4096,
+    max_tokens: 8192, // запас: оригинал + полный перевод raw_text
     temperature: 0.1
   };
 
@@ -391,10 +397,10 @@ async function recognizeWithGroq(imageBuffer, modelName, currency, docType) {
         ]
       }
     ],
-    max_tokens: 4096,
+    max_tokens: 8192, // запас: оригинал + полный перевод raw_text
     temperature: 0.1
   });
-  
+
   return parseAIResponse(response.choices[0].message.content);
 }
 
