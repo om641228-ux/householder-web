@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import './App.css';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 
-const API_URL = 'https://householder-api-production.up.railway.app';
+const API_URL = 'https://recept-web-back-production.up.railway.app';
 
 const OBJECTS = ['other', 'Duqe', 'Maria', 'Kit', 'Dubai', 'Tich'];
 const ITEMS_PER_PAGE_OPTIONS = [10, 20, 50, 'all'];
@@ -1757,7 +1757,19 @@ function App() {
 
           <div style={{ marginBottom: 10 }}>
             <label style={{ cursor: 'pointer', fontSize: 14 }}>
-              <input type="checkbox" onChange={(e) => e.target.checked ? selectAllVisible() : deselectAll()} style={{ marginRight: 6 }} />
+              <input
+                type="checkbox"
+                checked={paginatedReceipts.length > 0 && paginatedReceipts.every(r => selectedReceiptIds.has(r.id))}
+                ref={el => {
+                  if (el) {
+                    const some = paginatedReceipts.some(r => selectedReceiptIds.has(r.id));
+                    const all = paginatedReceipts.length > 0 && paginatedReceipts.every(r => selectedReceiptIds.has(r.id));
+                    el.indeterminate = some && !all;
+                  }
+                }}
+                onChange={(e) => e.target.checked ? selectAllVisible() : deselectAll()}
+                style={{ marginRight: 6 }}
+              />
               Выбрать все на странице
             </label>
           </div>
