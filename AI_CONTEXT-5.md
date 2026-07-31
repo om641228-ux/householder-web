@@ -92,6 +92,7 @@ Node.js >= 20.0.0. Supabase подключён с `realtime.transport: ws` (об
 | POST | `/api/bulk-delete` | Массовое удаление (admin) |
 | POST | `/api/bulk-update-object` | Массовая смена объекта |
 | POST | `/api/bulk-update-currency` | Массовая смена валюты |
+| POST | `/api/bulk-update-type` | Массовая смена типа (body: {ids, document_type: 'receipt'|'invoice'}) |
 | POST | `/api/upload-receipt` | Загрузка + распознавание (multipart/form-data: image/pdf, model, currency, docType, object, token) |
 | POST | `/api/reprocess-receipt` | Перераспознавание |
 | POST | `/api/export-excel` | Экспорт Excel (.xlsx) |
@@ -253,6 +254,10 @@ Bucket: `receipt-images` (public, policies SELECT/INSERT/DELETE).
 - Состояния: filterYears/filterMonths/filterTypes/filterObjects — массивы, [] = без фильтра
 - Компактная строка поиска
 - Фикс вёрстки ExcelFilter: ширина dropdown 240px + maxWidth 92vw + overflow hidden; строка авто-применения — кастомный чекбокс cb() + nowrap + короткая подпись "Авто-применение"; кнопки сокращены до "Применить"/"Очистить" (minWidth 0, nowrap); автовыравнивание dropdown влево у правого края экрана (alignRight по getBoundingClientRect)
+- Группировка карточек по годам и месяцам: sortedReceipts (дата desc по receipt_date||created_at) → пагинация → заголовки групп "Март 2026 · N шт" (React.Fragment, gridColumn '1 / -1', groupKeyOf/groupTitleOf)
+
+**2026-07-31**
+- Массовая смена типа документа: POST /api/bulk-update-type + select "Сменить тип..." (Чек/Фактура) в панели массовых действий между "Сменить объект" и "Сменить валюту"
 
 **2026-07-23**
 - Добавлены провайдеры: OpenRouter, GitHub Models, Mistral, Kimi (Moonshot)

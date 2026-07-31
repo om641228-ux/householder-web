@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import './App.css';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 
-const API_URL = 'https://householder-api-production.up.railway.app'; 
+const API_URL = 'https://recept-web-back-production.up.railway.app';
 
 const OBJECTS = ['other', 'Duqe', 'Maria', 'Kit', 'Dubai', 'Tich'];
 const ITEMS_PER_PAGE_OPTIONS = [10, 20, 50, 'all'];
@@ -988,6 +988,19 @@ function App() {
     } catch (e) { console.error(e); }
   };
 
+  const bulkChangeType = async (newType) => {
+    if (selectedReceiptIds.size === 0) return;
+    try {
+      const res = await fetch(`${API_URL}/api/bulk-update-type?token=${token}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: Array.from(selectedReceiptIds), document_type: newType })
+      });
+      if (res.ok) { setSelectedReceiptIds(new Set()); loadReceipts(); }
+      else alert('Ошибка смены типа');
+    } catch (e) { console.error(e); }
+  };
+
   const bulkChangeCurrency = async (newCurrency) => {
     if (selectedReceiptIds.size === 0) return;
     try {
@@ -1725,6 +1738,11 @@ function App() {
               <select onChange={e => { if (e.target.value) bulkChangeObject(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
                 <option value="">Сменить объект...</option>
                 {OBJECTS.map(o => <option key={o} value={o}>{o}</option>)}
+              </select>
+              <select onChange={e => { if (e.target.value) bulkChangeType(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
+                <option value="">Сменить тип...</option>
+                <option value="receipt"> Чек</option>
+                <option value="invoice"> Фактура</option>
               </select>
               <select onChange={e => { if (e.target.value) bulkChangeCurrency(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
                 <option value="">Сменить валюту...</option>

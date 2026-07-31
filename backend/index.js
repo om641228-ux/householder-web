@@ -908,6 +908,21 @@ app.post('/api/bulk-update-currency', requireAuth, async (req, res) => {
   }
 });
 
+// ========== BULK UPDATE DOCUMENT TYPE ==========
+app.post('/api/bulk-update-type', requireAuth, async (req, res) => {
+  try {
+    const { ids, document_type } = req.body;
+    if (!['receipt', 'invoice'].includes(document_type)) {
+      return res.status(400).json({ error: 'document_type должен быть receipt или invoice' });
+    }
+    const { error } = await supabaseAdmin.from('receipts').update({ document_type }).in('id', ids);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ========== EXPORT EXCEL ==========
 app.post('/api/export-excel', requireAuth, async (req, res) => {
   try {
