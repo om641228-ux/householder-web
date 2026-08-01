@@ -329,7 +329,7 @@ async function recognizeWithOpenAICompat(imageBuffer, modelName, currency, docTy
       'Content-Type': 'application/json',
       ...cfg.extraHeaders
     },
-    timeout: 180000
+    timeout: 280000 // длинные чеки 100+ товаров: оригинал + перевод, thinking-модели медленные
   });
 
   const content = res.data?.choices?.[0]?.message?.content;
@@ -434,7 +434,7 @@ async function translateRawText(rawText) {
       }
       const r = await axios.post(`${cfg.baseURL}/chat/completions`, body, {
         headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', ...cfg.extraHeaders },
-        timeout: 90000
+        timeout: 180000 // перевод длинного текста (100+ строк)
       });
       const t = r.data.choices?.[0]?.message?.content;
       if (t && t.trim().length > 10) return t.trim();

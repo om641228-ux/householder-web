@@ -364,13 +364,13 @@ function App() {
   const uploadWithProgress = (url, formData, onUploadProgress) => new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', url);
-    xhr.timeout = 180000;
+    xhr.timeout = 300000; // 5 мин: длинные чеки (100+ товаров) — модель пишет оригинал + перевод
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onUploadProgress(e.loaded / e.total);
     };
     xhr.onload = () => resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, text: xhr.responseText });
     xhr.onerror = () => reject(new Error('Ошибка сети'));
-    xhr.ontimeout = () => reject(new Error('Превышено время ожидания (180 сек)'));
+    xhr.ontimeout = () => reject(new Error('Превышено время ожидания (300 сек)'));
     xhr.send(formData);
   });
   const [lastSavedReceipt, setLastSavedReceipt] = useState(null);
