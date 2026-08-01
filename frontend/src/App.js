@@ -5,6 +5,16 @@ import { Capacitor, registerPlugin } from '@capacitor/core';
 const API_URL = 'https://householder-api-production.up.railway.app';
 
 const OBJECTS = ['other', 'Duqe', 'Maria', 'Kit', 'Dubai', 'Tich'];
+// Типы домашних документов: чек, фактура, счёт/квитанция, страховка, банк, договор, прочее
+const DOC_TYPE_LABELS = {
+  receipt: '🧾 Чек',
+  invoice: '📄 Фактура',
+  bill: '🧮 Счёт',
+  insurance: '🛡️ Страховка',
+  bank: '🏦 Банк',
+  contract: '📑 Договор',
+  other: '📎 Другое'
+};
 const ITEMS_PER_PAGE_OPTIONS = [10, 20, 50, 'all'];
 const MAX_FILE_SIZE_MB = 2;
 const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
@@ -415,8 +425,8 @@ function App() {
   const [folderProgress, setFolderProgress] = useState({ active: false, current: 0, total: 0, success: 0, errors: 0, currentFile: '' });
   const [folderResults, setFolderResults] = useState([]);
 
-  const receiptCount = receipts.filter(r => r.document_type === 'receipt' || !r.document_type).length;
-  const invoiceCount = receipts.filter(r => r.document_type === 'invoice').length;
+  const receiptCount = receipts.filter(r => ['receipt', 'invoice'].includes(r.document_type || 'receipt')).length;
+  const invoiceCount = receipts.filter(r => !['receipt', 'invoice'].includes(r.document_type || 'receipt')).length;
 
   const checkServerHealth = useCallback(async () => {
     try {
@@ -1238,7 +1248,7 @@ function App() {
       String(r.id || ''), String(r.store_name_ru || r.store_name || 'Без названия'),
       String(r.raw_text || r.recognized_text || ''), String(r.raw_text_ru || ''),
       String(r.object || ''), String(r.currency || ''), String(r.owner_name || r.owner_id || ''),
-      String(r.document_type || ''), String(r.total_amount || ''), String(r.subtotal || ''),
+      String(r.document_type || ''), String(DOC_TYPE_LABELS[r.document_type] || ''), String(r.total_amount || ''), String(r.subtotal || ''),
       String(r.tax_amount || ''), String(r.tax_rate || ''), String(r.receipt_date || ''),
       String(r.receipt_time || ''), String(r.receipt_address || ''), String(r.phone || ''),
       String(r.card_last4 || ''), String(r.recognition_method || ''), String(r.warning || ''),
@@ -1395,7 +1405,7 @@ function App() {
           <nav className="tabs-inline">
             <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>Загрузка</button>
             <button className={activeTab === 'list' ? 'active' : ''} onClick={() => {setActiveTab('list'); loadReceipts();}}>
-              Чеки ({receiptCount}) · Фактуры ({invoiceCount})
+              Чеки/фактуры ({receiptCount}) · Прочие документы ({invoiceCount})
             </button>
           </nav>
         </div>
@@ -1405,11 +1415,11 @@ function App() {
         </div>
       </header>
 
-      {backendInfo && !String(backendInfo.version || '').includes('2026-08-01.5') && (
+      {backendInfo && !String(backendInfo.version || '').includes('2026-08-01.6') && (
         <div style={{ background: '#fdecea', border: '1px solid #e74c3c', color: '#c0392b', padding: '10px 16px', borderRadius: 8, margin: '10px 15px', fontSize: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <strong> Бэкенд устарел!</strong>
           <span>
-            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-01.5</code>.
+            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-01.6</code>.
             Задеплой свежий index.js (Railway → householder-api → Deploy latest commit), иначе перевод не заработает.
           </span>
           <button onClick={() => setBackendInfo(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', color: '#c0392b' }}>✕</button>
@@ -1565,7 +1575,7 @@ function App() {
                   <p><strong>Магазин:</strong> <HighlightText text={viewModal.store_name_ru || viewModal.store_name || '—'} query={searchQuery} /></p>
                   <p><strong>Дата:</strong> {formatDate(viewModal.receipt_date)} {viewModal.receipt_time}</p>
                   <p><strong>Итого:</strong> {formatAmount(viewModal.total_amount, viewModal.currency)}</p>
-                  <p><strong>Тип:</strong> {viewModal.document_type}</p>
+                  <p><strong>Тип:</strong> {DOC_TYPE_LABELS[viewModal.document_type] || viewModal.document_type || '🧾 Чек'}</p>
                   <p><strong>Объект:</strong> <HighlightText text={viewModal.object || '—'} query={searchQuery} /></p>
                   <p><strong>Метод:</strong> {viewModal.recognition_method || '—'}</p>
                   <p><strong>Добавил:</strong> <HighlightText text={formatOwnerName(viewModal)} query={searchQuery} /></p>
@@ -1666,8 +1676,7 @@ function App() {
                 <label>Тип:</label>
                 <select value={docType} onChange={e => setDocType(e.target.value)}>
                   <option value="auto">🤖 Авто (AI)</option>
-                  <option value="receipt">Чек</option>
-                  <option value="invoice">Фактура</option>
+                  {Object.entries(DOC_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                 </select>
               </div>
               <div className="control-group compact">
@@ -1743,7 +1752,7 @@ function App() {
             {lastSavedReceipt && !scanResultOpen && (
               <div className="result-panel">
                 <div className="result-panel-header">
-                  <h3>✅ {lastSavedReceipt.document_type === 'invoice' ? 'Фактура сохранена' : 'Чек сохранён'}</h3>
+                  <h3>✅ Сохранено: {DOC_TYPE_LABELS[lastSavedReceipt.document_type] || '🧾 Чек'}</h3>
                   <button className="close-btn" onClick={() => setLastSavedReceipt(null)}>✕ Закрыть</button>
                 </div>
                 <div className="result-panel-body">
@@ -1847,7 +1856,7 @@ function App() {
                   <span style={{ flex: 1 }}>{res.file}</span>
                   {res.status === 'success' && res.receipt && (
                     <span style={{ color: '#155724' }}>
-                      {res.receipt.document_type === 'invoice' ? '📄' : '🧾'} {res.receipt.store_name_ru || res.receipt.store_name || 'Чек'} — {formatAmount(res.receipt.total_amount, res.receipt.currency)}
+                      {(DOC_TYPE_LABELS[res.receipt.document_type] || '🧾 Чек').split(' ')[0]} {res.receipt.store_name_ru || res.receipt.store_name || 'Документ'} — {formatAmount(res.receipt.total_amount, res.receipt.currency)}
                     </span>
                   )}
                   {res.status === 'error' && (
@@ -1871,7 +1880,7 @@ function App() {
           <div className="filters" style={{ flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
             <ExcelFilter label="Год" options={availableYears.map(y => ({ value: y, label: String(y) }))} selected={filterYears} onChange={v => { setFilterYears(v); setCurrentPage(1); }} />
             <ExcelFilter label="Месяц" options={MONTH_NAMES.map((n, i) => ({ value: i + 1, label: n }))} selected={filterMonths} onChange={v => { setFilterMonths(v); setCurrentPage(1); }} />
-            <ExcelFilter label="Тип" options={[{ value: 'receipt', label: '🧾 Чеки' }, { value: 'invoice', label: '📄 Фактуры' }]} selected={filterTypes} onChange={v => { setFilterTypes(v); setCurrentPage(1); }} />
+            <ExcelFilter label="Тип" options={Object.entries(DOC_TYPE_LABELS).map(([v, l]) => ({ value: v, label: l }))} selected={filterTypes} onChange={v => { setFilterTypes(v); setCurrentPage(1); }} />
             <ExcelFilter label="Объект" options={OBJECTS.map(o => ({ value: o, label: o }))} selected={filterObjects} onChange={v => { setFilterObjects(v); setCurrentPage(1); }} />
             <ExcelFilter label="Разница Δ" options={[
               { value: 'none', label: '✅ Без разницы' },
@@ -1935,8 +1944,7 @@ function App() {
               </select>
               <select onChange={e => { if (e.target.value) bulkChangeType(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
                 <option value="">Сменить тип...</option>
-                <option value="receipt"> Чек</option>
-                <option value="invoice"> Фактура</option>
+                {Object.entries(DOC_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
               <select onChange={e => { if (e.target.value) bulkChangeCurrency(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
                 <option value="">Сменить валюту...</option>
@@ -2052,7 +2060,7 @@ function App() {
                         <h3 style={{ margin: 0, flex: 1, lineHeight: 1.3 }}>
                           <HighlightText text={receipt.store_name_ru || receipt.store_name || 'Без названия'} query={searchQuery} />
                         </h3>
-                        <span className="type-badge" style={{ flexShrink: 0 }}>{receipt.document_type}</span>
+                        <span className="type-badge" style={{ flexShrink: 0 }}>{DOC_TYPE_LABELS[receipt.document_type] || receipt.document_type || '🧾 Чек'}</span>
                         {dupAllIds.has(receipt.id) && (
                           dupCopyIds.has(receipt.id)
                             ? <span title="Дубликат: такой же магазин, дата и сумма" style={{ flexShrink: 0, background: '#e74c3c', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>КОПИЯ</span>

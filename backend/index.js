@@ -170,9 +170,15 @@ function buildReceiptPrompt(currency, docType) {
 10. Способ оплаты (payment_method) — если указан.
 11. Адрес магазина (country) — если указан.
 
-12. Тип документа (document_type) — ОБЯЗАТЕЛЬНО одно из двух значений:
+12. Тип документа (document_type) — ОБЯЗАТЕЛЬНО одно из значений:
+    - "receipt" — ЧЕК: обычный кассовый чек, ticket, recibo, sales receipt без юр. реквизитов, слип оплаты в магазине/ресторане.
     - "invoice" — ФАКТУРА: на документе есть FACTURA / INVOICE / счёт-фактура, номер фактуры, налоговый номер продавца (NIF/VAT/ИНН), юридические реквизиты. FACTURA SIMPLIFICADA — это тоже "invoice".
-    - "receipt" — ЧЕК: обычный кассовый чек, ticket, recibo, sales receipt без юр. реквизитов.
+    - "bill" — СЧЁТ/КВИТАНЦИЯ на оплату услуг: коммуналка (electricidad, agua, gas, basura), comunidad de propietarios, телефон/интернет, подписки, аренда. Заголовок "FACTURA" от провайдера услуг (Iberdrola, Endesa, Telefónica, Vodafone...) — если это периодический счёт за услуги, ставь "bill", а не "invoice".
+    - "insurance" — СТРАХОВКА: полис, póliza de seguro, страховая премия, recibo de seguro.
+    - "bank" — БАНКОВСКИЙ документ: выписка (extracto bancario), подтверждение перевода, SEPA-дебет, comisión bancaria.
+    - "contract" — ДОГОВОР: contrato (аренда, услуги, трудовой), соглашение, дополнение к договору.
+    - "other" — всё остальное, что не подходит под категории выше.
+    Если сомневаешься между "invoice" и "bill": разовая продажа товаров/работ от поставщика → "invoice"; периодический счёт за услуги (свет, вода, связь, comunidad) → "bill".
     ${docTypeHint}
 
 13. raw_text — ВЕСЬ текст с документа НА ЯЗЫКЕ ОРИГИНАЛА (испанский чек → на испанском, арабский → на арабском), СТРУКТУРИРОВАННЫЙ по модулям. Это НЕ JSON-массив и НЕ одна сплошная строка. Подписи и значения — как напечатано на документе, ничего не переводи.
@@ -569,7 +575,11 @@ function parseAIResponse(text) {
       currency: data.currency || 'AED',
       payment_method: data.payment_method || data.payment || null,
       country: data.country || data.address || null,
-      document_type: /invoice|factura|фактур/i.test(String(data.document_type || data.doc_type || data.type || '')) ? 'invoice' : 'receipt',
+      document_type: (() => {
+      const raw = String(data.document_type || data.doc_type || data.type || '').toLowerCase().trim();
+      if (['receipt', 'invoice', 'bill', 'insurance', 'bank', 'contract', 'other'].includes(raw)) return raw;
+      return /invoice|factura|фактур/i.test(raw) ? 'invoice' : 'receipt';
+    })(),
       items: normalizeItems(data.items || data.products || data.goods || []),
       raw_text: Array.isArray(data.raw_text)
         ? data.raw_text.map(x => String(x)).join('\n')
@@ -980,7 +990,7 @@ app.get('/api/diagnostics', async (req, res) => {
   try {
     const columns = await getTableColumns();
     res.json({
-      version: '2026-08-01.5 (long receipts: no items placeholder + 16k output)',
+      version: '2026-08-01.6 (document types: receipt/invoice/bill/insurance/bank/contract/other)',
       raw_text_ru_column: columns.includes('raw_text_ru'),
       fix_if_false: 'alter table receipts add column if not exists raw_text_ru text;',
       providers_configured: {
@@ -1110,8 +1120,9 @@ app.post('/api/bulk-update-currency', requireAuth, async (req, res) => {
 app.post('/api/bulk-update-type', requireAuth, async (req, res) => {
   try {
     const { ids, document_type } = req.body;
-    if (!['receipt', 'invoice'].includes(document_type)) {
-      return res.status(400).json({ error: 'document_type должен быть receipt или invoice' });
+    const ALLOWED_TYPES = ['receipt', 'invoice', 'bill', 'insurance', 'bank', 'contract', 'other'];
+    if (!ALLOWED_TYPES.includes(document_type)) {
+      return res.status(400).json({ error: `document_type должен быть одним из: ${ALLOWED_TYPES.join(', ')}` });
     }
     const { error } = await supabaseAdmin.from('receipts').update({ document_type }).in('id', ids);
     if (error) throw error;

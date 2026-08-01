@@ -102,7 +102,7 @@ Node.js >= 20.0.0. Supabase подключён с `realtime.transport: ws` (об
 | POST | `/api/bulk-delete` | Массовое удаление (admin) |
 | POST | `/api/bulk-update-object` | Массовая смена объекта |
 | POST | `/api/bulk-update-currency` | Массовая смена валюты |
-| POST | `/api/bulk-update-type` | Массовая смена типа (body: {ids, document_type: 'receipt'|'invoice'}) |
+| POST | `/api/bulk-update-type` | Массовая смена типа (body: {ids, document_type} — один из 7 типов, см. ниже) |
 | POST | `/api/upload-receipt` | Загрузка + распознавание (multipart/form-data: image/pdf, model, currency, docType, object, token) |
 | POST | `/api/reprocess-receipt` | Перераспознавание |
 | POST | `/api/translate-receipt` | Перевод raw_text существующего чека (без перераспознавания) |
@@ -133,7 +133,7 @@ CREATE TABLE receipts (
   image_url TEXT,            -- Supabase Storage public URL (jpg или pdf)
   raw_text TEXT,             -- распознанный текст, оригинал (модульная структура, см. п. 9)
   raw_text_ru TEXT,          -- ПЕРЕВОД raw_text на русский (та же структура) — ОБЯЗАТЕЛЬНАЯ колонка!
-  document_type TEXT DEFAULT 'receipt',   -- 'receipt' | 'invoice'
+  document_type TEXT DEFAULT 'receipt',   -- 'receipt'|'invoice'|'bill'|'insurance'|'bank'|'contract'|'other'
   object TEXT DEFAULT 'other',            -- 'other','Duqe','Maria','Kit','Dubai','Tich'
   recognition_method TEXT,   -- какая модель распознавала (+ fallback info)
   recognized_at TIMESTAMP,
@@ -222,7 +222,8 @@ Bucket: `receipt-images` (public, policies SELECT/INSERT/DELETE).
 
 - **Таблица выбора модели:** кнопка «Выбор модели» → `GET /api/check-models` (~30–40 сек); ✅ Активна / ❌ Не активна (причина под статусом) / ➖; активные сверху; 🔄 Обновить; GROQ_ALIASES_FRONT для подсветки
 - **Группировка карточек:** по годам и месяцам («Март 2026 · N шт»), сортировка дата desc по receipt_date||created_at; groupKeyOf/groupTitleOf, заголовок `gridColumn: '1 / -1'`
-- **Массовые действия** (панель при выборе): Удалить (admin), Экспорт (Все/Excel/Фото/Текст + Загрузить), Перераспознать, **Сменить объект...**, **Сменить тип...** (Чек/Фактура), **Сменить валюту...** (AED/EUR/USD/RUB), Сбросить
+- **Массовые действия** (панель при выборе): Удалить (admin), Экспорт (Все/Excel/Фото/Текст + Загрузить), Перераспознать, **Сменить объект...**, **Сменить тип...** (все 7 типов документов), **Сменить валюту...** (AED/EUR/USD/RUB), Сбросить
+- **Типы документов** (v6): receipt 🧾 Чек, invoice 📄 Фактура, bill 🧮 Счёт (коммуналка/comunidad/связь), insurance 🛡️ Страховка, bank 🏦 Банк, contract 📑 Договор, other 📎 Другое. Единая карта DOC_TYPE_LABELS в App.js — используется в селекторе загрузки, фильтре «Тип», массовой смене типа, бейдже карточки, модалке, поиске. AI определяет тип по правилам промпта (п.12): FACTURA от провайдера услуг (Iberdrola, Telefónica...) → bill, не invoice
 - **Чекбокс «Выбрать все на странице» — контролируемый:** checked по selectedReceiptIds, `indeterminate` при частичном выборе; после массовых операций галочка снимается автоматически
 - **Фильтры Excel-стиль** (ExcelFilter): Год, Месяц, Тип, Объект — поиск по значениям, чекбоксы, «Авто-применение», «Применить»/«Очистить»; dropdown 240px, maxWidth 92vw, автовыравнивание у правого края
 - Таймаут загрузки 180000 мс
@@ -253,7 +254,17 @@ Bucket: `receipt-images` (public, policies SELECT/INSERT/DELETE).
 
 ## 14. Changelog
 
-**2026-08-01 (текущая финальная версия, v5.2)**
+**2026-08-01 (текущая финальная версия, v6 — домашние документы, шаг 1)**
+- Типы документов расширены end-to-end: receipt 🧾 Чек, invoice 📄 Фактура, bill 🧮 Счёт/квитанция (коммуналка, comunidad, связь, подписки), insurance 🛡️ Страховка, bank 🏦 Банк (выписки, SEPA-дебет), contract 📑 Договор, other 📎 Другое
+- Бэкенд: промпт (правило 12) описывает все 7 типов + различие invoice/bill (счёт от провайдера услуг → bill); parseAIResponse принимает любой тип из whitelist (неизвестное → старая эвристика invoice/receipt); /api/bulk-update-type валидирует все 7
+- Фронт: DOC_TYPE_LABELS — единая карта типов; селектор типа при загрузке, фильтр «Тип», массовая «Сменить тип...», бейдж на карточке, «Тип» в модалке — все показывают читаемые названия; поиск находит по названию типа («страховка», «банк»); вкладка списка: «Чеки/фактуры (N) · Прочие документы (M)»
+- Версия бэкенда: 2026-08-01.6 (watchdog на фронте обновлён синхронно — обе строки!)
+- Roadmap эволюции в «домовладельца»: сроки действия страховок + напоминания, разделы/вкладки по типам, привязка документов к объектам уже есть
+
+**2026-08-01 (v5.3)**
+- Фильтр «Разница Δ» (ExcelFilter): корзины ✅ Без разницы (≤0.01) / Δ до 1 / Δ 1–5 / Δ 5–20 / Δ более 20 / — Нет сумм; diffOf/diffBucketOf — та же математика, что Δ на карточке (|total_amount − Σitems|)
+
+**2026-08-01 (v5.2)**
 - Фикс поиска: безымянные чеки ищутся по отображаемому «Без названия» (раньше fallback был только в рендере, в данных пусто — запрос «названия» давал 0 результатов); в поиск добавлен raw_text_ru (перевод тоже searchable)
 
 **2026-08-01 (v5.1)**
