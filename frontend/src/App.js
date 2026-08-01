@@ -722,6 +722,57 @@ function App() {
     clearScanState();
   };
 
+  // ========== АВТОДОЗАПРОС ПЕРЕВОДА ==========
+  // Если у чека есть оригинал, но нет перевода — фронт САМ запрашивает перевод
+  // у бэкенда отдельным текстовым запросом. Работает НЕЗАВИСИМО от модели,
+  // которая распознавала чек, и чинит старые записи при первом открытии.
+  const [translatingId, setTranslatingId] = useState(null);
+  const [translateError, setTranslateError] = useState(null);
+
+  const requestTranslation = async (receipt) => {
+    if (!receipt?.id || !receipt.raw_text) return null;
+    setTranslatingId(receipt.id);
+    setTranslateError(null);
+    try {
+      const res = await fetch(`${API_URL}/api/translate-receipt?token=${token}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ receiptId: receipt.id })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.raw_text_ru) {
+        setReceipts(prev => prev.map(r => r.id === receipt.id ? { ...r, raw_text_ru: data.raw_text_ru } : r));
+        setTranslatingId(null);
+        return data.raw_text_ru;
+      }
+      setTranslateError(data.error || `Ошибка перевода (HTTP ${res.status})`);
+    } catch (e) {
+      setTranslateError(e.message);
+    }
+    setTranslatingId(null);
+    return null;
+  };
+
+  // Автоперевод при открытии карточки чека без перевода
+  useEffect(() => {
+    if (viewModal && viewModal.id && viewModal.raw_text && !viewModal.raw_text_ru) {
+      requestTranslation(viewModal).then(ru => {
+        if (ru) setViewModal(prev => (prev && prev.id === viewModal.id ? { ...prev, raw_text_ru: ru } : prev));
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewModal?.id]);
+
+  // Автоперевод сразу после загрузки чека, если бэкенд не вернул raw_text_ru
+  useEffect(() => {
+    if (lastSavedReceipt && lastSavedReceipt.id && lastSavedReceipt.raw_text && !lastSavedReceipt.raw_text_ru) {
+      requestTranslation(lastSavedReceipt).then(ru => {
+        if (ru) setLastSavedReceipt(prev => (prev && prev.id === lastSavedReceipt.id ? { ...prev, raw_text_ru: ru } : prev));
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastSavedReceipt?.id]);
+
   const rescanScan = async () => {
     const r = lastSavedReceipt;
     setScanResultOpen(false);
@@ -1511,12 +1562,24 @@ function App() {
                     <pre className="raw-text" style={{ whiteSpace: 'pre-wrap' }}><HighlightText text={formatRawText(viewModal.raw_text)} query={searchQuery} /></pre>
                   </div>
                 )}
-                {viewModal.raw_text_ru && (
+                {viewModal.raw_text_ru ? (
                   <div className="info-block">
                     <h3>Перевод на русский</h3>
                     <pre className="raw-text" style={{ whiteSpace: 'pre-wrap', background: '#f0f7ff' }}><HighlightText text={formatRawText(viewModal.raw_text_ru)} query={searchQuery} /></pre>
                   </div>
-                )}
+                ) : viewModal.raw_text ? (
+                  <div className="info-block">
+                    <h3>Перевод на русский</h3>
+                    {translatingId === viewModal.id ? (
+                      <p style={{ color: '#7f8c8d' }}>⏳ Перевожу автоматически...</p>
+                    ) : (
+                      <p style={{ color: '#c0392b', fontSize: 13 }}>
+                        {translateError || 'Перевод недоступен.'}{' '}
+                        <button onClick={async () => { const ru = await requestTranslation(viewModal); if (ru) setViewModal(prev => prev ? { ...prev, raw_text_ru: ru } : prev); }} style={{ padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}>Повторить</button>
+                      </p>
+                    )}
+                  </div>
+                ) : null}
               </div>
             </div>
             <div className="modal-footer">
@@ -1678,12 +1741,14 @@ function App() {
                     <pre style={{ whiteSpace: 'pre-wrap' }}>{formatRawText(lastSavedReceipt.raw_text)}</pre>
                   </details>
                 )}
-                {lastSavedReceipt.raw_text_ru && (
+                {lastSavedReceipt.raw_text_ru ? (
                   <details className="result-raw-text" open>
                     <summary>Перевод на русский</summary>
                     <pre style={{ whiteSpace: 'pre-wrap', background: '#f0f7ff' }}>{formatRawText(lastSavedReceipt.raw_text_ru)}</pre>
                   </details>
-                )}
+                ) : lastSavedReceipt.raw_text && translatingId === lastSavedReceipt.id ? (
+                  <p style={{ color: '#7f8c8d', fontSize: 13 }}>⏳ Перевожу автоматически...</p>
+                ) : null}
               </div>
             )}
           </div>
@@ -2031,12 +2096,14 @@ function App() {
                     <pre style={{ fontSize: 12, whiteSpace: 'pre-wrap', background: 'rgba(0,0,0,0.35)', padding: 12, borderRadius: 10, maxHeight: 220, overflow: 'auto' }}>{formatRawText(lastSavedReceipt.raw_text)}</pre>
                   </div>
                 )}
-                {lastSavedReceipt.raw_text_ru && (
+                {lastSavedReceipt.raw_text_ru ? (
                   <div style={{ marginTop: 12 }}>
                     <div style={{ fontWeight: 600, marginBottom: 6 }}>Перевод на русский:</div>
                     <pre style={{ fontSize: 12, whiteSpace: 'pre-wrap', background: 'rgba(30,80,160,0.35)', padding: 12, borderRadius: 10, maxHeight: 220, overflow: 'auto' }}>{formatRawText(lastSavedReceipt.raw_text_ru)}</pre>
                   </div>
-                )}
+                ) : lastSavedReceipt.raw_text && translatingId === lastSavedReceipt.id ? (
+                  <p style={{ fontSize: 13, opacity: 0.8 }}>⏳ Перевожу автоматически...</p>
+                ) : null}
               </div>
             )}
           </div>

@@ -951,7 +951,7 @@ app.get('/api/diagnostics', async (req, res) => {
   try {
     const columns = await getTableColumns();
     res.json({
-      version: '2026-08-01.2 (ensureRawTextRu + translate-receipt)',
+      version: '2026-08-01.3 (ensureRawTextRu + translate-receipt returns text)',
       raw_text_ru_column: columns.includes('raw_text_ru'),
       fix_if_false: 'alter table receipts add column if not exists raw_text_ru text;',
       providers_configured: {
@@ -996,7 +996,7 @@ app.post('/api/translate-receipt', requireAuth, async (req, res) => {
       .eq('id', receiptId);
     if (error) throw error;
 
-    res.json({ success: true, id: receiptId });
+    res.json({ success: true, id: receiptId, raw_text_ru: ru });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
