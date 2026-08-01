@@ -390,6 +390,7 @@ function App() {
   const [filterMonths, setFilterMonths] = useState([]);
   const [filterTypes, setFilterTypes] = useState([]);
   const [filterObjects, setFilterObjects] = useState([]);
+  const [filterDiffs, setFilterDiffs] = useState([]); // фильтр по разнице Δ (итог чека vs сумма товаров)
   const [searchQuery, setSearchQuery] = useState('');
   const [itemsPerPage, setItemsPerPage] = useState(20);
   const [currentPage, setCurrentPage] = useState(1);
@@ -1201,9 +1202,27 @@ function App() {
     return isNaN(d.getTime()) ? null : d.getFullYear();
   }).filter(Boolean))].sort((a, b) => b - a);
 
+  // Разница Δ: |итог чека − сумма товаров| — та же логика, что на карточке
+  const diffOf = (r) => {
+    const total = parseFloat(r.total_amount) || 0;
+    const itemsTotal = calculateItemsTotal(r.items);
+    if (!(total > 0) && !(itemsTotal > 0)) return null; // нет данных — на карточке «—»
+    return Math.abs(total - itemsTotal);
+  };
+  const diffBucketOf = (r) => {
+    const d = diffOf(r);
+    if (d === null) return 'empty';
+    if (d <= 0.01) return 'none';
+    if (d <= 1) return 'small';
+    if (d <= 5) return 'medium';
+    if (d <= 20) return 'large';
+    return 'huge';
+  };
+
   const filteredReceipts = receipts.filter(r => {
     if (filterTypes.length && !filterTypes.includes(r.document_type || 'receipt')) return false;
     if (filterObjects.length && !filterObjects.includes(r.object || 'other')) return false;
+    if (filterDiffs.length && !filterDiffs.includes(diffBucketOf(r))) return false;
     if (filterYears.length || filterMonths.length) {
       const d = new Date(r.receipt_date || r.created_at);
       if (!isNaN(d.getTime())) {
@@ -1854,6 +1873,14 @@ function App() {
             <ExcelFilter label="Месяц" options={MONTH_NAMES.map((n, i) => ({ value: i + 1, label: n }))} selected={filterMonths} onChange={v => { setFilterMonths(v); setCurrentPage(1); }} />
             <ExcelFilter label="Тип" options={[{ value: 'receipt', label: '🧾 Чеки' }, { value: 'invoice', label: '📄 Фактуры' }]} selected={filterTypes} onChange={v => { setFilterTypes(v); setCurrentPage(1); }} />
             <ExcelFilter label="Объект" options={OBJECTS.map(o => ({ value: o, label: o }))} selected={filterObjects} onChange={v => { setFilterObjects(v); setCurrentPage(1); }} />
+            <ExcelFilter label="Разница Δ" options={[
+              { value: 'none', label: '✅ Без разницы' },
+              { value: 'small', label: 'Δ до 1' },
+              { value: 'medium', label: 'Δ 1–5' },
+              { value: 'large', label: 'Δ 5–20' },
+              { value: 'huge', label: 'Δ более 20' },
+              { value: 'empty', label: '— Нет сумм' }
+            ]} selected={filterDiffs} onChange={v => { setFilterDiffs(v); setCurrentPage(1); }} />
             <input type="text" placeholder="🔍 Поиск..." value={searchQuery} onChange={e => {setSearchQuery(e.target.value); setCurrentPage(1);}}
               style={{ flex: '1 1 140px', maxWidth: 200, padding: '6px 10px', fontSize: 13, borderRadius: 6, border: '1px solid #ccc' }} />
             <select value={itemsPerPage} onChange={e => {setItemsPerPage(e.target.value === 'all' ? 'all' : parseInt(e.target.value)); setCurrentPage(1);}}
