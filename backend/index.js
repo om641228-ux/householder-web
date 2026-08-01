@@ -160,7 +160,7 @@ function buildReceiptPrompt(currency, docType) {
 ВАЖНЫЕ ПРАВИЛА:
 1. Извлеки ВЕСЬ текст с чека полностью — каждую строку, каждую цифру.
 2. Найди магазин (store_name), дату (receipt_date в формате YYYY-MM-DD), время (receipt_time), итоговую сумму (total_amount).
-3. Найди ВСЕ товары — каждый товар это объект с: name (оригинальное название), name_ru (перевод на русский), quantity (количество), price (цена за единицу), total (общая сумма за товар).
+3. Найди ВСЕ товары — каждый товар это объект с: name (оригинальное название), name_ru (перевод на русский), quantity (количество), price (цена за единицу), total (общая сумма за товар). Товаров может быть 100+ — выведи КАЖДЫЙ, без пропусков и без сокращений списка.
 4. ${currencyHint}
 5. Если не уверен в значении — используй null, НЕ используй "Unknown" или 0 без причины.
 6. Дата: если на чеке "20/03/2026" → "2026-03-20". Если "20.03.2026" → "2026-03-20".
@@ -175,7 +175,9 @@ function buildReceiptPrompt(currency, docType) {
     - "receipt" — ЧЕК: обычный кассовый чек, ticket, recibo, sales receipt без юр. реквизитов.
     ${docTypeHint}
 
-13. raw_text — ВЕСЬ текст с документа НА ЯЗЫКЕ ОРИГИНАЛА (испанский чек → на испанском, арабский → на арабском), СТРУКТУРИРОВАННЫЙ по модулям. Это НЕ JSON-массив и НЕ одна сплошная строка. Подписи и значения — как напечатано на документе, ничего не переводи. Формат raw_text строго такой:
+13. raw_text — ВЕСЬ текст с документа НА ЯЗЫКЕ ОРИГИНАЛА (испанский чек → на испанском, арабский → на арабском), СТРУКТУРИРОВАННЫЙ по модулям. Это НЕ JSON-массив и НЕ одна сплошная строка. Подписи и значения — как напечатано на документе, ничего не переводи.
+    МОДУЛЬ ТОВАРЫ: перечисли КАЖДУЮ товарную строку с чека, даже если их 100+. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО заменять список товаров сводками вида "(109 artículos)", "extracto", "..." или "и т.д." — такой ответ НЕВАЛИДЕН.
+    Формат raw_text строго такой:
 
 ══════ МАГАЗИН ══════
 Nombre: <как на документе>
@@ -251,11 +253,11 @@ const GEMINI_FALLBACK_CANDIDATES = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gem
 
 async function recognizeWithGemini(imageBuffer, modelName, currency, docType, mimeType = 'image/jpeg') {
   if (!genAI) throw new Error('Gemini API key not configured');
-  // maxOutputTokens задан явно: raw_text (оригинал) + raw_text_ru (перевод) — длинный вывод,
-  // а у 2.5 thinking-токены тоже идут в этот лимит. Без запаса ответ обрезается и перевод теряется.
+  // maxOutputTokens задан явно: raw_text (оригинал) + raw_text_ru (перевод) — длинный вывод
+  // (длинные чеки на 100+ товаров!), а у 2.5 thinking-токены тоже идут в этот лимит.
   const model = genAI.getGenerativeModel({
     model: modelName || DEFAULT_GEMINI_MODEL,
-    generationConfig: { maxOutputTokens: 8192, temperature: 0.1 }
+    generationConfig: { maxOutputTokens: 16384, temperature: 0.1 }
   });
   const prompt = buildReceiptPrompt(currency, docType);
   
@@ -303,9 +305,10 @@ async function recognizeWithOpenAICompat(imageBuffer, modelName, currency, docTy
         ]
       }
     ],
-    max_tokens: 8192, // запас: оригинал + полный перевод raw_text
+    max_tokens: 16384, // запас: длинные чеки 100+ товаров — оригинал + полный перевод
     temperature: 0.1
   };
+  if (providerKey === 'mistral') body.max_tokens = 8192; // предел вывода у mistral-small
 
   // Kimi (Moonshot): температура жёстко зафиксирована — передача значения = ошибка 400.
   // Думающим моделям нужен большой лимит: reasoning_content + content ≤ max_tokens.
@@ -386,7 +389,7 @@ async function translateRawText(rawText) {
     try {
       const m = genAI.getGenerativeModel({
         model: 'gemini-2.5-flash',
-        generationConfig: { maxOutputTokens: 8192, temperature: 0.1 }
+        generationConfig: { maxOutputTokens: 16384, temperature: 0.1 }
       });
       const r = await m.generateContent(prompt);
       const t = r.response.text();
@@ -416,7 +419,7 @@ async function translateRawText(rawText) {
       const body = {
         model: cfg.defaultModel,
         messages: [{ role: 'user', content: prompt }],
-        max_tokens: 8192,
+        max_tokens: key === 'mistral' ? 8192 : 16384, // длинные чеки: перевод 100+ строк
         temperature: 0.1
       };
       if (key === 'kimi') {
@@ -520,6 +523,28 @@ async function recognizeWithOCRSpace(imageBuffer, engine, currency, docType, mim
   return data;
 }
 
+// ЗАЩИТА ОТ ЗАГЛУШЕК: длинные чеки (100+ товаров) модели «сжимают» модуль ТОВАРЫ
+// до строки вида "(109 artículos — extracto...)". Если так — пересобираем модуль
+// из распознанного массива items, который парсится отдельно.
+function rebuildItemsModule(text, items, useRu) {
+  if (!text || !Array.isArray(items) || items.length === 0) return text;
+  const moduleRegex = /(══════\s*ТОВАРЫ\s*══════\s*\n)([\s\S]*?)(?=\n\s*══════|$)/;
+  const m = String(text).match(moduleRegex);
+  if (!m) return text;
+  const body = (m[2] || '').trim();
+  const hasNumbered = /^\s*\d+[.)]\s/m.test(body);
+  const looksPlaceholder = /art[ií]culos|extracto|resumen|arriba|и т\.д|\.\.\./i.test(body);
+  if (hasNumbered && !looksPlaceholder) return text; // список на месте — не трогаем
+  const lines = items.map((it, i) => {
+    const name = useRu ? (it.name_ru || it.name) : (it.name || it.name_ru);
+    const qty = it.quantity ?? 1;
+    const price = it.price ?? it.total ?? '';
+    const total = it.total ?? '';
+    return `${i + 1}. ${name} — ${qty} × ${price} = ${total}`;
+  });
+  return String(text).replace(moduleRegex, `$1${lines.join('\n')}\n`);
+}
+
 function parseAIResponse(text) {
   let jsonStr = text;
   
@@ -553,7 +578,11 @@ function parseAIResponse(text) {
         ? data.raw_text_ru.map(x => String(x)).join('\n')
         : (data.raw_text_ru || data.raw_text_translation || null)
     };
-    
+
+    // Если модель «сжала» модуль ТОВАРЫ до заглушки "(109 artículos...)" — пересобираем из items
+    result.raw_text = rebuildItemsModule(result.raw_text, result.items, false);
+    if (result.raw_text_ru) result.raw_text_ru = rebuildItemsModule(result.raw_text_ru, result.items, true);
+
     return result;
   } catch (e) {
     console.error('JSON parse error:', e, 'Text:', text.substring(0, 500));
@@ -951,7 +980,7 @@ app.get('/api/diagnostics', async (req, res) => {
   try {
     const columns = await getTableColumns();
     res.json({
-      version: '2026-08-01.4 (translate always returns text + saved flag)',
+      version: '2026-08-01.5 (long receipts: no items placeholder + 16k output)',
       raw_text_ru_column: columns.includes('raw_text_ru'),
       fix_if_false: 'alter table receipts add column if not exists raw_text_ru text;',
       providers_configured: {
