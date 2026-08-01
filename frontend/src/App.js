@@ -760,7 +760,6 @@ function App() {
         if (ru) setViewModal(prev => (prev && prev.id === viewModal.id ? { ...prev, raw_text_ru: ru } : prev));
       });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewModal?.id]);
 
   // Автоперевод сразу после загрузки чека, если бэкенд не вернул raw_text_ru
@@ -770,7 +769,6 @@ function App() {
         if (ru) setLastSavedReceipt(prev => (prev && prev.id === lastSavedReceipt.id ? { ...prev, raw_text_ru: ru } : prev));
       });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastSavedReceipt?.id]);
 
   const rescanScan = async () => {
