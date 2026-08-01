@@ -728,6 +728,17 @@ function App() {
   // которая распознавала чек, и чинит старые записи при первом открытии.
   const [translatingId, setTranslatingId] = useState(null);
   const [translateError, setTranslateError] = useState(null);
+  // Версия бэкенда по /api/diagnostics (для предупреждения об устаревшем бэкенде)
+  const [backendInfo, setBackendInfo] = useState(null);
+
+  // Контроль версии бэкенда: если Railway не задеплоил свежий index.js — покажем баннер
+  useEffect(() => {
+    if (!token) return;
+    fetch(`${API_URL}/api/diagnostics`)
+      .then(r => (r.ok ? r.json() : { error: `HTTP ${r.status}` }))
+      .then(data => setBackendInfo(data))
+      .catch(() => setBackendInfo({ error: 'недоступен' }));
+  }, [token]);
 
   const requestTranslation = async (receipt) => {
     if (!receipt?.id || !receipt.raw_text) return null;
@@ -1372,6 +1383,17 @@ function App() {
           <button className="logout-btn" onClick={logout}>Выйти</button>
         </div>
       </header>
+
+      {backendInfo && !String(backendInfo.version || '').includes('2026-08-01.4') && (
+        <div style={{ background: '#fdecea', border: '1px solid #e74c3c', color: '#c0392b', padding: '10px 16px', borderRadius: 8, margin: '10px 15px', fontSize: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <strong> Бэкенд устарел!</strong>
+          <span>
+            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-01.4</code>.
+            Задеплой свежий index.js (Railway → householder-api → Deploy latest commit), иначе перевод не заработает.
+          </span>
+          <button onClick={() => setBackendInfo(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', color: '#c0392b' }}>✕</button>
+        </div>
+      )}
 
       {/* Model Selection Modal */}
       {modelModalOpen && (
