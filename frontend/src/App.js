@@ -1215,7 +1215,9 @@ function App() {
     const q = searchQuery.toLowerCase().trim();
     if (!q) return true;
     const searchFields = [
-      String(r.id || ''), String(r.store_name_ru || r.store_name || ''), String(r.raw_text || r.recognized_text || ''),
+      // 'Без названия' — тот же fallback, что и на карточке: поиск "названия" находит безымянные чеки
+      String(r.id || ''), String(r.store_name_ru || r.store_name || 'Без названия'),
+      String(r.raw_text || r.recognized_text || ''), String(r.raw_text_ru || ''),
       String(r.object || ''), String(r.currency || ''), String(r.owner_name || r.owner_id || ''),
       String(r.document_type || ''), String(r.total_amount || ''), String(r.subtotal || ''),
       String(r.tax_amount || ''), String(r.tax_rate || ''), String(r.receipt_date || ''),
