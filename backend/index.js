@@ -364,6 +364,97 @@ async function recognizeWithFallback(imageBuffer, currency, docType, mimeType = 
   throw new Error(errors.join(' | ') || 'Нет доступных провайдеров распознавания');
 }
 
+// ========== ГАРАНТИЯ ПЕРЕВОДА raw_text_ru ==========
+// Модели (особенно kimi-k3) могут опустить raw_text_ru, несмотря на обязательность в промпте.
+// Если перевода нет — делаем отдельный ДЕШЁВЫЙ текстовый запрос (без картинки) на перевод.
+function buildTranslatePrompt(rawText) {
+  return `Переведи текст чека на русский язык. ПРАВИЛА:
+- Сохрани структуру и порядок строк ОДИН В ОДИН. Заголовки вида ══════ ИМЯ ══════ оставь без изменений (они уже на русском)
+- Переведи все названия, подписи и примечания; числа, даты, артикулы, реквизиты, номера карт и суммы НЕ меняй
+- Верни ТОЛЬКО переведённый текст, без пояснений и markdown
+
+ТЕКСТ:
+${rawText}`;
+}
+
+async function translateRawText(rawText) {
+  const prompt = buildTranslatePrompt(rawText);
+  const errors = [];
+
+  // 1) Gemini — дешёвый и быстрый текстовый запрос
+  if (genAI) {
+    try {
+      const m = genAI.getGenerativeModel({
+        model: 'gemini-2.5-flash',
+        generationConfig: { maxOutputTokens: 8192, temperature: 0.1 }
+      });
+      const r = await m.generateContent(prompt);
+      const t = r.response.text();
+      if (t && t.trim().length > 10) return t.trim();
+    } catch (e) { errors.push(`gemini: ${e.message}`); }
+  }
+
+  // 2) Groq — быстрая текстовая модель
+  if (groq) {
+    try {
+      const r = await groq.chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 8192,
+        temperature: 0.1
+      });
+      const t = r.choices[0].message.content;
+      if (t && t.trim().length > 10) return t.trim();
+    } catch (e) { errors.push(`groq: ${e.message}`); }
+  }
+
+  // 3) OpenAI-совместимые провайдеры (текстовые запросы)
+  for (const key of ['openrouter', 'github', 'mistral', 'kimi']) {
+    const cfg = OPENAI_COMPAT_PROVIDERS[key];
+    if (!cfg || !cfg.apiKey) continue;
+    try {
+      const body = {
+        model: cfg.defaultModel,
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 8192,
+        temperature: 0.1
+      };
+      if (key === 'kimi') {
+        delete body.temperature;
+        if (/kimi-k3/i.test(cfg.defaultModel)) {
+          delete body.max_tokens;
+          body.max_completion_tokens = 16384;
+          body.reasoning_effort = 'low';
+        } else {
+          body.max_tokens = 16384;
+        }
+      }
+      const r = await axios.post(`${cfg.baseURL}/chat/completions`, body, {
+        headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', ...cfg.extraHeaders },
+        timeout: 90000
+      });
+      const t = r.data.choices?.[0]?.message?.content;
+      if (t && t.trim().length > 10) return t.trim();
+    } catch (e) { errors.push(`${key}: ${e.message}`); }
+  }
+
+  console.warn('translateRawText: все провайдеры не смогли перевести:', errors.join(' | '));
+  return null;
+}
+
+// Если у результата распознавания нет перевода — дозапрашиваем его отдельно
+async function ensureRawTextRu(data) {
+  if (!data || !data.raw_text || data.raw_text_ru) return data;
+  if (/^Recognition failed/i.test(String(data.raw_text))) return data;
+  try {
+    const ru = await translateRawText(data.raw_text);
+    if (ru) data.raw_text_ru = ru;
+  } catch (e) {
+    console.warn('ensureRawTextRu failed:', e.message);
+  }
+  return data;
+}
+
 // Алиасы: короткие имена фронта → реальные ID моделей в Groq API
 const GROQ_ALIASES = {
   'llama-4-scout': 'meta-llama/llama-4-scout-17b-16e-instruct',
@@ -625,6 +716,10 @@ async function getTableColumns() {
 }
 
 function filterRecordByColumns(record, columns) {
+  // Громкое предупреждение, если перевод есть, но колонки raw_text_ru нет в БД — иначе теряется молча
+  if (record.raw_text_ru && !columns.includes('raw_text_ru')) {
+    console.warn('ВНИМАНИЕ: колонка raw_text_ru отсутствует в таблице receipts — перевод НЕ сохранён! Выполните: alter table receipts add column if not exists raw_text_ru text;');
+  }
   const filtered = {};
   for (const [key, value] of Object.entries(record)) {
     if (columns.includes(key)) {
@@ -748,6 +843,9 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
       }
     }
     
+    // Гарантия перевода: если модель опустила raw_text_ru — дозапрашиваем перевод отдельно
+    receiptData = await ensureRawTextRu(receiptData);
+
     // При docType='auto' берём тип, определённый AI по содержимому документа
     receiptData.docType = docType === 'auto' ? (receiptData.document_type || 'receipt') : docType;
     receiptData.object = object;
@@ -806,7 +904,10 @@ app.post('/api/reprocess-receipt', requireAuth, async (req, res) => {
       const auto = await recognizeWithFallback(buffer, currency, docType, mimeType);
       receiptData = auto.data;
     }
-    
+
+    // Гарантия перевода: если модель опустила raw_text_ru — дозапрашиваем перевод отдельно
+    receiptData = await ensureRawTextRu(receiptData);
+
     const columns = await getTableColumns();
     const updateRecord = {
       store_name: receiptData.store_name,

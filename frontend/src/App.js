@@ -393,6 +393,9 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [itemsPerPage, setItemsPerPage] = useState(20);
   const [currentPage, setCurrentPage] = useState(1);
+  // Сортировка списка: 'receipt' — по дате чека, 'recognized' — по дате распознавания
+  const [sortMode, setSortMode] = useState('receipt');
+  const [sortDir, setSortDir] = useState('desc');
 
   const [selectedReceiptIds, setSelectedReceiptIds] = useState(new Set());
   const [viewModal, setViewModal] = useState(null);
@@ -1138,11 +1141,17 @@ function App() {
     return allText.toLowerCase().includes(q);
   });
 
+  // Дата для сортировки/группировки в зависимости от режима:
+  // 'receipt' — дата с чека (receipt_date), 'recognized' — дата распознавания (recognized_at)
+  const sortDateOf = (r) => sortMode === 'recognized'
+    ? (r.recognized_at || r.created_at)
+    : (r.receipt_date || r.created_at);
+
   // Сортировка: новые сверху (год → месяц → день)
   const sortedReceipts = [...filteredReceipts].sort((a, b) => {
-    const da = new Date(a.receipt_date || a.created_at || 0).getTime() || 0;
-    const db = new Date(b.receipt_date || b.created_at || 0).getTime() || 0;
-    return db - da;
+    const da = new Date(sortDateOf(a) || 0).getTime() || 0;
+    const db = new Date(sortDateOf(b) || 0).getTime() || 0;
+    return sortDir === 'asc' ? da - db : db - da;
   });
 
   const totalPages = itemsPerPage === 'all' ? 1 : Math.ceil(sortedReceipts.length / itemsPerPage);
@@ -1150,13 +1159,13 @@ function App() {
     ? sortedReceipts
     : sortedReceipts.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
-  // Ключ группы "год-месяц" для заголовков в списке карточек
+  // Ключ группы "год-месяц" для заголовков в списке карточек (по активному режиму сортировки)
   const groupKeyOf = (r) => {
-    const d = new Date(r.receipt_date || r.created_at);
+    const d = new Date(sortDateOf(r));
     return isNaN(d.getTime()) ? 'nodate' : `${d.getFullYear()}-${d.getMonth()}`;
   };
   const groupTitleOf = (r) => {
-    const d = new Date(r.receipt_date || r.created_at);
+    const d = new Date(sortDateOf(r));
     return isNaN(d.getTime()) ? 'Без даты' : `${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`;
   };
 
@@ -1755,7 +1764,7 @@ function App() {
             </div>
           )}
 
-          <div style={{ marginBottom: 10 }}>
+          <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
             <label style={{ cursor: 'pointer', fontSize: 14 }}>
               <input
                 type="checkbox"
@@ -1772,6 +1781,31 @@ function App() {
               />
               Выбрать все на странице
             </label>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13, color: '#7f8c8d' }}>Сортировка:</span>
+              <button
+                onClick={() => { if (sortMode === 'receipt') setSortDir(d => d === 'desc' ? 'asc' : 'desc'); else { setSortMode('receipt'); setSortDir('desc'); } setCurrentPage(1); }}
+                style={{
+                  padding: '4px 10px', fontSize: 13, borderRadius: 6, cursor: 'pointer',
+                  border: sortMode === 'receipt' ? '1px solid #3498db' : '1px solid #ccc',
+                  background: sortMode === 'receipt' ? '#eaf3fb' : '#fff',
+                  color: sortMode === 'receipt' ? '#2980b9' : '#555', fontWeight: sortMode === 'receipt' ? 600 : 400
+                }}
+              >
+                По дате чека {sortMode === 'receipt' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
+              </button>
+              <button
+                onClick={() => { if (sortMode === 'recognized') setSortDir(d => d === 'desc' ? 'asc' : 'desc'); else { setSortMode('recognized'); setSortDir('desc'); } setCurrentPage(1); }}
+                style={{
+                  padding: '4px 10px', fontSize: 13, borderRadius: 6, cursor: 'pointer',
+                  border: sortMode === 'recognized' ? '1px solid #3498db' : '1px solid #ccc',
+                  background: sortMode === 'recognized' ? '#eaf3fb' : '#fff',
+                  color: sortMode === 'recognized' ? '#2980b9' : '#555', fontWeight: sortMode === 'recognized' ? 600 : 400
+                }}
+              >
+                По дате распознавания {sortMode === 'recognized' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
+              </button>
+            </div>
           </div>
 
           {loading ? (
