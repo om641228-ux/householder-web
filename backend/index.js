@@ -944,6 +944,64 @@ app.post('/api/reprocess-receipt', requireAuth, async (req, res) => {
   }
 });
 
+// ========== DIAGNOSTICS ==========
+// Открой в браузере: https://householder-api-production.up.railway.app/api/diagnostics
+// Сразу видно: какая версия кода задеплоена, есть ли колонка raw_text_ru, какие ключи настроены
+app.get('/api/diagnostics', async (req, res) => {
+  try {
+    const columns = await getTableColumns();
+    res.json({
+      version: '2026-08-01.2 (ensureRawTextRu + translate-receipt)',
+      raw_text_ru_column: columns.includes('raw_text_ru'),
+      fix_if_false: 'alter table receipts add column if not exists raw_text_ru text;',
+      providers_configured: {
+        gemini: !!process.env.GEMINI_API_KEY,
+        groq: !!process.env.GROQ_API_KEY,
+        ocrspace: !!process.env.OCRSPACE_API_KEY,
+        openrouter: !!process.env.OPENROUTER_API_KEY,
+        github: !!(process.env.GITHUB_TOKEN || process.env.GITHUB_API_KEY),
+        mistral: !!process.env.MISTRAL_API_KEY,
+        kimi: !!(process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY)
+      }
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ========== TRANSLATE EXISTING RECEIPT (без перераспознавания) ==========
+app.post('/api/translate-receipt', requireAuth, async (req, res) => {
+  try {
+    const { receiptId } = req.body;
+    const { data: receipt } = await supabaseAdmin
+      .from('receipts')
+      .select('id, raw_text, raw_text_ru')
+      .eq('id', receiptId)
+      .single();
+
+    if (!receipt) return res.status(404).json({ error: 'Receipt not found' });
+    if (!receipt.raw_text) return res.status(400).json({ error: 'У чека нет распознанного текста' });
+
+    const columns = await getTableColumns();
+    if (!columns.includes('raw_text_ru')) {
+      return res.status(500).json({ error: 'В таблице receipts нет колонки raw_text_ru. Выполните в Supabase: alter table receipts add column if not exists raw_text_ru text;' });
+    }
+
+    const ru = await translateRawText(receipt.raw_text);
+    if (!ru) return res.status(502).json({ error: 'Не удалось перевести: все провайдеры недоступны' });
+
+    const { error } = await supabaseAdmin
+      .from('receipts')
+      .update({ raw_text_ru: ru })
+      .eq('id', receiptId);
+    if (error) throw error;
+
+    res.json({ success: true, id: receiptId });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ========== LIST RECEIPTS ==========
 app.get('/api/receipts', requireAuth, async (req, res) => {
   try {

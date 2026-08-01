@@ -2,7 +2,7 @@
 
 Полный контекст проекта для AI-ассистента. Загрузите этот файл в новый чат вместе с `App.js` и `index.js` — ассистент сразу поймёт архитектуру, историю и текущее состояние.
 
-**Дата обновления: 2026-07-31**
+**Дата обновления: 2026-08-01**
 **ВАЖНО: работа ведётся ТОЛЬКО над проектом householder-web. Проект recept-web — отдельный, его файлы и сервисы не трогать!**
 
 ---
@@ -105,7 +105,9 @@ Node.js >= 20.0.0. Supabase подключён с `realtime.transport: ws` (об
 | POST | `/api/bulk-update-type` | Массовая смена типа (body: {ids, document_type: 'receipt'|'invoice'}) |
 | POST | `/api/upload-receipt` | Загрузка + распознавание (multipart/form-data: image/pdf, model, currency, docType, object, token) |
 | POST | `/api/reprocess-receipt` | Перераспознавание |
+| POST | `/api/translate-receipt` | Перевод raw_text существующего чека (без перераспознавания) |
 | POST | `/api/export-excel` | Экспорт Excel (.xlsx) |
+| GET | `/api/diagnostics` | Диагностика без токена: версия, колонка raw_text_ru, настроенные ключи |
 
 ### Models
 | Method | Path | Описание |
@@ -229,7 +231,7 @@ Bucket: `receipt-images` (public, policies SELECT/INSERT/DELETE).
 
 | Проблема | Решение |
 |---|---|
-| Нет перевода raw_text_ru | Бэкенд старый → деплой актуального index.js; колонка `raw_text_ru` в БД; старые чеки — «Перераспознать» |
+| Нет перевода raw_text_ru | 1) В БД выполнить `alter table receipts add column if not exists raw_text_ru text;` (без колонки filterRecordByColumns МОЛЧА выбрасывает перевод!) 2) Деплой актуального index.js (ensureRawTextRu дозапрашивает перевод) 3) Старые чеки — «Перераспознать» |
 | 502 Bad Gateway / CORS | auth in-memory (без fs), Railway-safe |
 | `Invalid key` при upload в Storage | sanitizeFilename (Ñ, кириллица, пробелы) |
 | Kimi падает на распознавании, но активен в пинге | НЕ передавать temperature; большой лимит токенов |
@@ -250,7 +252,19 @@ Bucket: `receipt-images` (public, policies SELECT/INSERT/DELETE).
 
 ## 14. Changelog
 
-**2026-07-31 (текущая финальная версия)**
+**2026-08-01 (текущая финальная версия, v2)**
+- GET /api/diagnostics — открывается в браузере без токена: версия кода, наличие колонки raw_text_ru (+SQL-фикс), какие AI-ключи настроены
+- POST /api/translate-receipt — перевод raw_text → raw_text_ru для СУЩЕСТВУЮЩЕГО чека без перераспознавания (дешёвый текстовый запрос)
+- Кнопка « Перевести» в панели массовых действий (bulkTranslate) — переводит выбранные чеки
+- Поиск и удаление дубликатов: группировка по ключу магазин+дата+сумма; самый ранний по created_at = ОРИГИНАЛ (зелёный бейдж), остальные = КОПИЯ (красный бейдж, видны на карточках всегда); кнопка « Дубликаты (N)» в строке фильтров — режим показа только дубликатов; инфо-панель «Выбрать все копии» → массовое удаление существующей кнопкой
+- Гарантия перевода raw_text_ru (ensureRawTextRu), предупреждение об отсутствии колонки, сортировка «По дате чека»/«По дате распознавания» — см. ниже
+
+**2026-08-01 (v1)**
+- Гарантия перевода raw_text_ru: если модель опустила поле (kimi-k3 игнорирует обязательность промпта), бэкенд дозапрашивает перевод ОТДЕЛЬНЫМ текстовым запросом (ensureRawTextRu → translateRawText: Gemini 2.5-flash → Groq llama-3.3-70b → OpenRouter/GitHub/Mistral/Kimi). Подключено в upload-receipt и reprocess-receipt
+- Предупреждение в логе, если колонка raw_text_ru отсутствует в БД (filterRecordByColumns раньше молча выбрасывал перевод!)
+- Сортировка списка чеков: состояния sortMode ('receipt'|'recognized') + sortDir; кнопки «По дате чека» и «По дате распознавания» в строке рядом с «Выбрать все на странице»; повторный клик по активной кнопке меняет направление (↑/↓); группировка по месяцам следует за выбранным режимом (sortDateOf: receipt_date||created_at / recognized_at||created_at)
+
+**2026-07-31**
 - Проект householder-web выделен как самостоятельный: свои Railway-сервисы (householder-api, householder-web), своя БД Supabase; API_URL фронта → householder-api
 - Перевод распознанного текста (raw_text_ru): обязательное поле промпта («ответ без raw_text_ru невалиден»); лимиты вывода 4096 → 8192 (Gemini maxOutputTokens 8192 + temperature 0.1 явно; OpenAI-compat и Groq max_tokens 8192); фронт отображает перевод в 3 местах
 - Массовая смена типа: POST /api/bulk-update-type + select «Сменить тип...»

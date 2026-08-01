@@ -396,6 +396,8 @@ function App() {
   // Сортировка списка: 'receipt' — по дате чека, 'recognized' — по дате распознавания
   const [sortMode, setSortMode] = useState('receipt');
   const [sortDir, setSortDir] = useState('desc');
+  // Режим поиска дубликатов
+  const [showDuplicates, setShowDuplicates] = useState(false);
 
   const [selectedReceiptIds, setSelectedReceiptIds] = useState(new Set());
   const [viewModal, setViewModal] = useState(null);
@@ -1035,6 +1037,28 @@ function App() {
     setLoading(false);
   };
 
+  // Массовый перевод распознанного текста БЕЗ перераспознавания (дешевле и быстрее)
+  const bulkTranslate = async () => {
+    const ids = Array.from(selectedReceiptIds);
+    setLoading(true);
+    let ok = 0, failed = 0, lastError = '';
+    for (const id of ids) {
+      try {
+        const res = await fetch(`${API_URL}/api/translate-receipt?token=${token}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ receiptId: id })
+        });
+        if (res.ok) ok++;
+        else { failed++; const d = await res.json().catch(() => ({})); lastError = d.error || `HTTP ${res.status}`; }
+      } catch (e) { failed++; lastError = e.message; }
+    }
+    setLoading(false);
+    setSelectedReceiptIds(new Set());
+    loadReceipts();
+    if (failed > 0) alert(`Переведено: ${ok}, ошибок: ${failed}\n${lastError}`);
+  };
+
   const toggleSelect = (id) => {
     setSelectedReceiptIds(prev => {
       const next = new Set(prev);
@@ -1141,6 +1165,29 @@ function App() {
     return allText.toLowerCase().includes(q);
   });
 
+  // Поиск дубликатов: одинаковые магазин + дата чека + итоговая сумма.
+  // В группе самый ранний по created_at — ОРИГИНАЛ, остальные — КОПИИ.
+  const dupMap = new Map();
+  receipts.forEach(r => {
+    const key = `${String(r.store_name || '').toLowerCase().trim()}|${r.receipt_date || ''}|${parseFloat(r.total_amount) || 0}`;
+    if (!dupMap.has(key)) dupMap.set(key, []);
+    dupMap.get(key).push(r);
+  });
+  const dupGroups = [];
+  dupMap.forEach(g => {
+    if (g.length > 1) {
+      g.sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
+      dupGroups.push(g);
+    }
+  });
+  const dupAllIds = new Set(dupGroups.flat().map(r => r.id));           // все участники групп дубликатов
+  const dupCopyIds = new Set(dupGroups.flatMap(g => g.slice(1)).map(r => r.id)); // копии (все, кроме оригинала)
+
+  // В режиме дубликатов показываем только чеки из групп дубликатов
+  const visibleReceipts = showDuplicates
+    ? filteredReceipts.filter(r => dupAllIds.has(r.id))
+    : filteredReceipts;
+
   // Дата для сортировки/группировки в зависимости от режима:
   // 'receipt' — дата с чека (receipt_date), 'recognized' — дата распознавания (recognized_at)
   const sortDateOf = (r) => sortMode === 'recognized'
@@ -1148,7 +1195,7 @@ function App() {
     : (r.receipt_date || r.created_at);
 
   // Сортировка: новые сверху (год → месяц → день)
-  const sortedReceipts = [...filteredReceipts].sort((a, b) => {
+  const sortedReceipts = [...visibleReceipts].sort((a, b) => {
     const da = new Date(sortDateOf(a) || 0).getTime() || 0;
     const db = new Date(sortDateOf(b) || 0).getTime() || 0;
     return sortDir === 'asc' ? da - db : db - da;
@@ -1717,6 +1764,18 @@ function App() {
             </select>
             <button onClick={() => exportExcel()} style={{ padding: '6px 12px', fontSize: 13 }}>📊 Excel (все)</button>
             <button onClick={() => loadReceipts()} style={{ padding: '6px 12px', fontSize: 13 }}>🔄 Обновить</button>
+            <button
+              onClick={() => { setShowDuplicates(v => !v); setCurrentPage(1); setSelectedReceiptIds(new Set()); }}
+              style={{
+                padding: '6px 12px', fontSize: 13, cursor: 'pointer',
+                border: showDuplicates ? '1px solid #e74c3c' : '1px solid #ccc',
+                background: showDuplicates ? '#fdecea' : '#fff',
+                color: showDuplicates ? '#c0392b' : 'inherit',
+                fontWeight: showDuplicates ? 600 : 400, borderRadius: 6
+              }}
+            >
+              🔍 Дубликаты{dupCopyIds.size > 0 ? ` (${dupCopyIds.size})` : ''}
+            </button>
           </div>
 
           {selectedReceiptIds.size > 0 && (
@@ -1744,6 +1803,7 @@ function App() {
                 </button>
               </div>
               <button onClick={() => bulkReprocess()} style={{ background: '#9b59b6', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}> Перераспознать</button>
+              <button onClick={() => bulkTranslate()} style={{ background: '#16a085', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}> Перевести</button>
               <select onChange={e => { if (e.target.value) bulkChangeObject(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
                 <option value="">Сменить объект...</option>
                 {OBJECTS.map(o => <option key={o} value={o}>{o}</option>)}
@@ -1808,6 +1868,29 @@ function App() {
             </div>
           </div>
 
+          {showDuplicates && (
+            <div style={{ background: '#fdecea', border: '1px solid #f5b7b1', padding: '10px 15px', borderRadius: 8, marginBottom: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 14 }}>
+              <span>
+                Найдено групп дубликатов: <strong>{dupGroups.length}</strong>, лишних копий: <strong>{dupCopyIds.size}</strong>
+                <span style={{ color: '#7f8c8d' }}> — оригиналы помечены зелёным, копии красным</span>
+              </span>
+              {dupCopyIds.size > 0 && (
+                <button
+                  onClick={() => setSelectedReceiptIds(new Set(dupCopyIds))}
+                  style={{ background: '#e74c3c', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}
+                >
+                  Выбрать все копии
+                </button>
+              )}
+              <button
+                onClick={() => { setShowDuplicates(false); setCurrentPage(1); }}
+                style={{ background: '#95a5a6', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}
+              >
+                Показать все
+              </button>
+            </div>
+          )}
+
           {loading ? (
             <div className="loading-center"><div className="spinner"></div><p>Загрузка чеков...</p></div>
           ) : paginatedReceipts.length === 0 ? (
@@ -1845,6 +1928,11 @@ function App() {
                           <HighlightText text={receipt.store_name_ru || receipt.store_name || 'Без названия'} query={searchQuery} />
                         </h3>
                         <span className="type-badge" style={{ flexShrink: 0 }}>{receipt.document_type}</span>
+                        {dupAllIds.has(receipt.id) && (
+                          dupCopyIds.has(receipt.id)
+                            ? <span title="Дубликат: такой же магазин, дата и сумма" style={{ flexShrink: 0, background: '#e74c3c', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>КОПИЯ</span>
+                            : <span title="Оригинал (самый ранний из группы дубликатов)" style={{ flexShrink: 0, background: '#27ae60', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>ОРИГИНАЛ</span>
+                        )}
                       </div>
                       <p className="date">{formatDate(receipt.receipt_date)} {receipt.receipt_time}</p>
                       <p className="amount" style={{ color: hasDiff ? '#e67e22' : '#27ae60' }}>
