@@ -416,7 +416,7 @@ function App() {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
-      const res = await fetch(`${API_URL}/health`, { 
+      const res = await fetch(`${API_URL}/health`, {
         method: 'GET',
         signal: controller.signal,
         mode: 'cors'
@@ -562,11 +562,11 @@ function App() {
         let items = r.items;
         if (typeof items === 'string') { try { items = JSON.parse(items); } catch (e) { items = []; } }
         if (!Array.isArray(items)) items = [];
-        return { 
-          ...r, 
-          image_url: fixImageUrl(r.photo_url || r.image_url), 
-          items: items, 
-          raw_text: r.raw_text || r.recognized_text || '' 
+        return {
+          ...r,
+          image_url: fixImageUrl(r.photo_url || r.image_url),
+          items: items,
+          raw_text: r.raw_text || r.recognized_text || ''
         };
       });
       setReceipts(processed);
@@ -1202,10 +1202,10 @@ function App() {
       <div className="App">
         <div className="login-box">
           <h1>Receipt Manager</h1>
-          <div style={{ 
-            padding: '8px 12px', 
-            borderRadius: 6, 
-            marginBottom: 12, 
+          <div style={{
+            padding: '8px 12px',
+            borderRadius: 6,
+            marginBottom: 12,
             fontSize: 13,
             background: serverStatus === 'ok' ? '#d4edda' : serverStatus === 'error' ? '#f8d7da' : '#fff3cd',
             color: serverStatus === 'ok' ? '#155724' : serverStatus === 'error' ? '#721c24' : '#856404',
