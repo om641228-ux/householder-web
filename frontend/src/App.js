@@ -739,9 +739,15 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ receiptId: receipt.id })
       });
+      if (res.status === 404) {
+        setTranslateError('Бэкенд старой версии — нет endpoint перевода. Задеплой свежий index.js на householder-api!');
+        setTranslatingId(null);
+        return null;
+      }
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.raw_text_ru) {
         setReceipts(prev => prev.map(r => r.id === receipt.id ? { ...r, raw_text_ru: data.raw_text_ru } : r));
+        if (data.saved === false) setTranslateError(data.warning || 'Перевод не сохранён в базу (нет колонки raw_text_ru)');
         setTranslatingId(null);
         return data.raw_text_ru;
       }
@@ -1746,6 +1752,11 @@ function App() {
                   </details>
                 ) : lastSavedReceipt.raw_text && translatingId === lastSavedReceipt.id ? (
                   <p style={{ color: '#7f8c8d', fontSize: 13 }}>⏳ Перевожу автоматически...</p>
+                ) : lastSavedReceipt.raw_text && translateError ? (
+                  <p style={{ color: '#c0392b', fontSize: 13 }}>
+                    {translateError}{' '}
+                    <button onClick={async () => { const ru = await requestTranslation(lastSavedReceipt); if (ru) setLastSavedReceipt(prev => prev ? { ...prev, raw_text_ru: ru } : prev); }} style={{ padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}>Повторить</button>
+                  </p>
                 ) : null}
               </div>
             )}
@@ -2101,6 +2112,11 @@ function App() {
                   </div>
                 ) : lastSavedReceipt.raw_text && translatingId === lastSavedReceipt.id ? (
                   <p style={{ fontSize: 13, opacity: 0.8 }}>⏳ Перевожу автоматически...</p>
+                ) : lastSavedReceipt.raw_text && translateError ? (
+                  <p style={{ fontSize: 13, color: '#ff8a80' }}>
+                    {translateError}{' '}
+                    <button onClick={async () => { const ru = await requestTranslation(lastSavedReceipt); if (ru) setLastSavedReceipt(prev => prev ? { ...prev, raw_text_ru: ru } : prev); }} style={{ padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}>Повторить</button>
+                  </p>
                 ) : null}
               </div>
             )}

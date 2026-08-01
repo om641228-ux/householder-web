@@ -951,7 +951,7 @@ app.get('/api/diagnostics', async (req, res) => {
   try {
     const columns = await getTableColumns();
     res.json({
-      version: '2026-08-01.3 (ensureRawTextRu + translate-receipt returns text)',
+      version: '2026-08-01.4 (translate always returns text + saved flag)',
       raw_text_ru_column: columns.includes('raw_text_ru'),
       fix_if_false: 'alter table receipts add column if not exists raw_text_ru text;',
       providers_configured: {
@@ -982,13 +982,17 @@ app.post('/api/translate-receipt', requireAuth, async (req, res) => {
     if (!receipt) return res.status(404).json({ error: 'Receipt not found' });
     if (!receipt.raw_text) return res.status(400).json({ error: 'У чека нет распознанного текста' });
 
+    const ru = await translateRawText(receipt.raw_text);
+    if (!ru) return res.status(502).json({ error: 'Не удалось перевести: все провайдеры недоступны (проверьте ключи/баланс)' });
+
+    // Перевод возвращаем ВСЕГДА. Сохраняем, только если колонка существует —
+    // иначе честно говорим saved:false, чтобы фронт показал предупреждение
     const columns = await getTableColumns();
     if (!columns.includes('raw_text_ru')) {
-      return res.status(500).json({ error: 'В таблице receipts нет колонки raw_text_ru. Выполните в Supabase: alter table receipts add column if not exists raw_text_ru text;' });
+      console.warn('ВНИМАНИЕ: колонка raw_text_ru отсутствует — перевод НЕ сохранён! alter table receipts add column if not exists raw_text_ru text;');
+      return res.json({ success: true, id: receiptId, raw_text_ru: ru, saved: false,
+        warning: 'Перевод показан, но НЕ сохранён в базу: нет колонки raw_text_ru. Выполните в Supabase: alter table receipts add column if not exists raw_text_ru text;' });
     }
-
-    const ru = await translateRawText(receipt.raw_text);
-    if (!ru) return res.status(502).json({ error: 'Не удалось перевести: все провайдеры недоступны' });
 
     const { error } = await supabaseAdmin
       .from('receipts')
@@ -996,7 +1000,7 @@ app.post('/api/translate-receipt', requireAuth, async (req, res) => {
       .eq('id', receiptId);
     if (error) throw error;
 
-    res.json({ success: true, id: receiptId, raw_text_ru: ru });
+    res.json({ success: true, id: receiptId, raw_text_ru: ru, saved: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
