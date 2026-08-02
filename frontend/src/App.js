@@ -2280,21 +2280,27 @@ function App() {
                     <div className="receipt-card">
                       <div className="receipt-header" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, paddingTop: 2 }}>
                         <input type="checkbox" checked={selectedReceiptIds.has(receipt.id)} onChange={() => toggleSelect(receipt.id)} style={{ width: 20, height: 20, cursor: 'pointer', flexShrink: 0, marginTop: 2 }} />
-                        <h3 style={{ margin: 0, flex: 1, lineHeight: 1.3 }}>
-                          <HighlightText text={receipt.store_name || receipt.store_name_ru || 'Без названия'} query={searchQuery} />
-                        </h3>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <h3 style={{ margin: 0, lineHeight: 1.3, wordBreak: 'break-word' }}>
+                            <HighlightText text={receipt.store_name || receipt.store_name_ru || 'Без названия'} query={searchQuery} />
+                          </h3>
+                          {(dupAllIds.has(receipt.id) || expiryInfo(receipt) || (Array.isArray(receipt.page_urls) && receipt.page_urls.length > 1)) && (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 5 }}>
+                              {dupAllIds.has(receipt.id) && (
+                                dupCopyIds.has(receipt.id)
+                                  ? <span title="Дубликат: такой же магазин, дата и сумма" style={{ background: '#e74c3c', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>КОПИЯ</span>
+                                  : <span title="Оригинал (самый ранний из группы дубликатов)" style={{ background: '#27ae60', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>ОРИГИНАЛ</span>
+                              )}
+                              {expiryInfo(receipt) && (
+                                <span title={`Срок действия до ${formatDate(receipt.valid_to)}`} style={{ background: expiryInfo(receipt).color, color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>{expiryInfo(receipt).text}</span>
+                              )}
+                              {Array.isArray(receipt.page_urls) && receipt.page_urls.length > 1 && (
+                                <span title={`Документ из ${receipt.page_urls.length} страниц — все страницы сохранены, смотрите в карточке`} style={{ background: '#8e44ad', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>📑 {receipt.page_urls.length} стр.</span>
+                              )}
+                            </div>
+                          )}
+                        </div>
                         <span className="type-badge" style={{ flexShrink: 0 }}>{DOC_TYPE_LABELS[receipt.document_type] || receipt.document_type || '🧾 Чек'}</span>
-                        {dupAllIds.has(receipt.id) && (
-                          dupCopyIds.has(receipt.id)
-                            ? <span title="Дубликат: такой же магазин, дата и сумма" style={{ flexShrink: 0, background: '#e74c3c', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>КОПИЯ</span>
-                            : <span title="Оригинал (самый ранний из группы дубликатов)" style={{ flexShrink: 0, background: '#27ae60', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>ОРИГИНАЛ</span>
-                        )}
-                        {expiryInfo(receipt) && (
-                          <span title={`Срок действия до ${formatDate(receipt.valid_to)}`} style={{ flexShrink: 0, background: expiryInfo(receipt).color, color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>{expiryInfo(receipt).text}</span>
-                        )}
-                        {Array.isArray(receipt.page_urls) && receipt.page_urls.length > 1 && (
-                          <span title={`Документ из ${receipt.page_urls.length} страниц — все страницы сохранены, смотрите в карточке`} style={{ flexShrink: 0, background: '#8e44ad', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>📑 {receipt.page_urls.length} стр.</span>
-                        )}
                       </div>
                       <p className="date">{formatDate(receipt.receipt_date)} {receipt.receipt_time}</p>
                       <p className="amount" style={{ color: hasDiff ? '#e67e22' : '#27ae60' }}>
