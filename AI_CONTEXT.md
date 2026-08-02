@@ -98,6 +98,7 @@ Node.js >= 20.0.0. Supabase подключён с `realtime.transport: ws` (об
 | Method | Path | Описание |
 |---|---|---|
 | GET | `/api/receipts` | Список чеков (admin — все, user — свои по owner_id) |
+| PUT | `/api/receipts/:id` | Редактирование полей документа (whitelist: store_name*, даты, суммы, currency, object, document_type, subtype, provider, valid_from/valid_to, related_id, meta, object_id) |
 | DELETE | `/api/receipts/:id` | Удаление (admin) |
 | POST | `/api/bulk-delete` | Массовое удаление (admin) |
 | POST | `/api/bulk-update-object` | Массовая смена объекта |
@@ -107,7 +108,13 @@ Node.js >= 20.0.0. Supabase подключён с `realtime.transport: ws` (об
 | POST | `/api/reprocess-receipt` | Перераспознавание |
 | POST | `/api/translate-receipt` | Перевод raw_text существующего чека (без перераспознавания) |
 | POST | `/api/export-excel` | Экспорт Excel (.xlsx) |
-| GET | `/api/diagnostics` | Диагностика без токена: версия, колонка raw_text_ru, настроенные ключи |
+| GET | `/api/diagnostics` | Диагностика без токена: версия, колонка raw_text_ru, колонки v7, настроенные ключи |
+
+### Objects (дома / недвижимость, v7)
+| Method | Path | Описание |
+|---|---|---|
+| GET | `/api/objects` | Список объектов. Если таблицы objects ещё нет — fallback на distinct receipts.object + флаг migration_needed |
+| POST | `/api/objects` | Добавить объект (body: {name, address?, notes?}) |
 
 ### Models
 | Method | Path | Описание |
@@ -134,12 +141,23 @@ CREATE TABLE receipts (
   raw_text TEXT,             -- распознанный текст, оригинал (модульная структура, см. п. 9)
   raw_text_ru TEXT,          -- ПЕРЕВОД raw_text на русский (та же структура) — ОБЯЗАТЕЛЬНАЯ колонка!
   document_type TEXT DEFAULT 'receipt',   -- 'receipt'|'invoice'|'bill'|'insurance'|'bank'|'contract'|'other'
-  object TEXT DEFAULT 'other',            -- 'other','Duqe','Maria','Kit','Dubai','Tich'
+  object TEXT DEFAULT 'other',            -- имя объекта (fallback-ссылка на objects.name)
+  -- колонки v7 (миграция supabase-migration-v7.sql):
+  subtype TEXT,              -- electricity|water|gas|internet|phone|comunidad|rent|waste|insurance_home|insurance_car|insurance_health|tax|other
+  provider TEXT,             -- компания-поставщик/эмитент (Iberdrola, Movistar, Mapfre, банк...)
+  valid_from DATE, valid_to DATE,  -- срок действия (полис/договор) или период счёта; valid_to → бейдж «истекает»
+  meta JSONB DEFAULT '{}',   -- номер полиса, лицевой счёт, IBAN и прочее типовое
+  related_id BIGINT REFERENCES receipts(id),  -- связь документ→документ (платёж → полис, счёт → договор)
+  object_id BIGINT REFERENCES objects(id),    -- FK на объект (имя в object остаётся fallback)
   recognition_method TEXT,   -- какая модель распознавала (+ fallback info)
   recognized_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT NOW(),
   owner_id TEXT, owner_name TEXT
 );
+
+-- таблица объектов (v7): id, name UNIQUE, address, notes, created_at
+-- сидится из distinct receipts.object; object_id бэкфиллится по имени
+CREATE TABLE objects (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, name TEXT NOT NULL UNIQUE, address TEXT, notes TEXT, created_at TIMESTAMPTZ DEFAULT NOW());
 ```
 Bucket: `receipt-images` (public, policies SELECT/INSERT/DELETE).
 **Если колонки `raw_text_ru` нет** (setup.sql выполнялся давно): `alter table receipts add column if not exists raw_text_ru text;` — без неё сохранение чеков сломается.
@@ -254,7 +272,13 @@ Bucket: `receipt-images` (public, policies SELECT/INSERT/DELETE).
 
 ## 14. Changelog
 
-**2026-08-01 (текущая финальная версия, v6 — домашние документы, шаг 1)**
+**2026-08-01 (текущая финальная версия, v7 — домашние документы, шаг 2: объекты и метаданные)**
+- Модель данных: ОДНА таблица receipts (все документы) + таблица objects (дома: name UNIQUE, address, notes) + гибкие колонки вместо таблицы-под-тип: subtype, provider, valid_from, valid_to, meta JSONB, related_id (связь документ→документ), object_id (FK). Миграция — supabase-migration-v7.sql: сидит objects из distinct receipts.object и бэкфиллит object_id по имени
+- Бэкенд: GET /api/objects (fallback на distinct receipts.object + флаг migration_needed, если миграция не выполнена — НЕ ломается), POST /api/objects; PUT /api/receipts/:id — редактирование полей по whitelist; parseAIResponse извлекает subtype (whitelist из 13 значений)/provider/valid_from/valid_to (промпт правило 15); saveReceiptToDB и reprocess-receipt сохраняют новые поля; diagnostics показывает v7_columns
+- Фронт: объекты загружаются из /api/objects (запасной список DEFAULT_OBJECTS при ошибке); SUBTYPE_LABELS (⚡ электричество, 💧 вода, 🌐 интернет и т.д.); expiryInfo — бейджи «⚠️ Истекает через N дн.» (≤30 дней, оранжевый) и «⛔ Истёк» (красный) на карточке и в модалке; модалка показывает Подтип/Поставщик/Действует; поиск по provider и подтипу
+- Версия бэкенда: 2026-08-01.7 (watchdog обновлён синхронно)
+
+**2026-08-01 (v6 — домашние документы, шаг 1)**
 - Типы документов расширены end-to-end: receipt 🧾 Чек, invoice 📄 Фактура, bill 🧮 Счёт/квитанция (коммуналка, comunidad, связь, подписки), insurance 🛡️ Страховка, bank 🏦 Банк (выписки, SEPA-дебет), contract 📑 Договор, other 📎 Другое
 - Бэкенд: промпт (правило 12) описывает все 7 типов + различие invoice/bill (счёт от провайдера услуг → bill); parseAIResponse принимает любой тип из whitelist (неизвестное → старая эвристика invoice/receipt); /api/bulk-update-type валидирует все 7
 - Фронт: DOC_TYPE_LABELS — единая карта типов; селектор типа при загрузке, фильтр «Тип», массовая «Сменить тип...», бейдж на карточке, «Тип» в модалке — все показывают читаемые названия; поиск находит по названию типа («страховка», «банк»); вкладка списка: «Чеки/фактуры (N) · Прочие документы (M)»

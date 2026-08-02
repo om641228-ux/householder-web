@@ -215,6 +215,10 @@ Cambio: <как на документе>
 <все остальные строки с документа на языке оригинала, не вошедшие в модули выше: реклама, примечания, реквизиты, футеры — каждая с новой строки>
 
 14. raw_text_ru — ОБЯЗАТЕЛЬНОЕ ПОЛЕ: ПОЛНЫЙ ПЕРЕВОД raw_text на русский язык с той же модульной структурой и порядком строк. Все названия, подписи и примечания переведи; числа, даты, артикулы и реквизиты оставь без изменений. Заголовки модулей те же: ══════ МАГАЗИН ══════, ══════ ДОКУМЕНТ ══════, ══════ ТОВАРЫ ══════, ══════ СУММЫ ══════, ══════ ОПЛАТА ══════, ══════ ПРОЧИЙ ТЕКСТ ══════. Ответ БЕЗ поля raw_text_ru считается НЕВАЛИДНЫМ.
+15. Для документов типа bill / insurance / bank / contract дополнительно извлеки:
+    - subtype — подтип услуги/документа, ОДНО из значений: electricity (luz/electricidad), water (agua), gas, internet, phone (teléfono/móvil), comunidad, rent (alquiler), waste (basura), insurance_home, insurance_car, insurance_health, tax (impuestos/tasas), other. Для receipt/invoice — null.
+    - provider — компания-поставщик или эмитент документа (Iberdrola, Endesa, Movistar, Mapfre, название банка...).
+    - valid_from / valid_to — период действия полиса/договора или период счёта в формате YYYY-MM-DD, если указаны на документе; иначе null.
 
 ПРАВИЛА ДЛЯ raw_text:
 - Модули идут строго в этом порядке, заголовок модуля — отдельная строка "══════ ИМЯ ══════"
@@ -238,6 +242,10 @@ Cambio: <как на документе>
   "payment_method": null,
   "country": "Spain",
   "document_type": "invoice",
+  "subtype": null,
+  "provider": null,
+  "valid_from": null,
+  "valid_to": null,
   "items": [
     {
       "name": "BROTHER MFD LASER MONO",
@@ -580,6 +588,14 @@ function parseAIResponse(text) {
       if (['receipt', 'invoice', 'bill', 'insurance', 'bank', 'contract', 'other'].includes(raw)) return raw;
       return /invoice|factura|фактур/i.test(raw) ? 'invoice' : 'receipt';
     })(),
+      subtype: (() => {
+        const raw = String(data.subtype || data.service_type || '').toLowerCase().trim();
+        const SUBTYPES = ['electricity', 'water', 'gas', 'internet', 'phone', 'comunidad', 'rent', 'waste', 'insurance_home', 'insurance_car', 'insurance_health', 'tax', 'other'];
+        return SUBTYPES.includes(raw) ? raw : null;
+      })(),
+      provider: data.provider || data.supplier || data.issuer || null,
+      valid_from: normalizeDate(data.valid_from || data.start_date || data.period_from),
+      valid_to: normalizeDate(data.valid_to || data.expiry_date || data.end_date || data.period_to || data.due_date),
       items: normalizeItems(data.items || data.products || data.goods || []),
       raw_text: Array.isArray(data.raw_text)
         ? data.raw_text.map(x => String(x)).join('\n')
@@ -737,7 +753,9 @@ async function getTableColumns() {
       knownColumns = freshData && freshData.length > 0 ? Object.keys(freshData[0]) : [
         'id', 'store_name', 'store_name_ru', 'receipt_date', 'receipt_time',
         'total_amount', 'subtotal', 'tax_amount', 'tax_rate', 'currency',
+        'country', 'payment_method',
         'items', 'image_url', 'raw_text', 'raw_text_ru', 'document_type', 'object',
+        'subtype', 'provider', 'valid_from', 'valid_to', 'meta', 'related_id', 'object_id',
         'recognition_method', 'recognized_at', 'created_at', 'owner_id', 'owner_name'
       ];
     }
@@ -746,7 +764,9 @@ async function getTableColumns() {
     knownColumns = [
       'id', 'store_name', 'store_name_ru', 'receipt_date', 'receipt_time',
       'total_amount', 'subtotal', 'tax_amount', 'tax_rate', 'currency',
+      'country', 'payment_method',
       'items', 'image_url', 'raw_text', 'raw_text_ru', 'document_type', 'object',
+      'subtype', 'provider', 'valid_from', 'valid_to', 'meta', 'related_id', 'object_id',
       'recognition_method', 'recognized_at', 'created_at', 'owner_id', 'owner_name'
     ];
   }
@@ -790,6 +810,10 @@ async function saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod) {
     raw_text: receiptData.raw_text,
     raw_text_ru: receiptData.raw_text_ru || null,
     document_type: receiptData.docType || 'receipt',
+    subtype: receiptData.subtype || null,
+    provider: receiptData.provider || null,
+    valid_from: receiptData.valid_from || null,
+    valid_to: receiptData.valid_to || null,
     object: receiptData.object || 'other',
     recognition_method: recognitionMethod,
     recognized_at: new Date().toISOString(),
@@ -964,6 +988,10 @@ app.post('/api/reprocess-receipt', requireAuth, async (req, res) => {
       raw_text: receiptData.raw_text,
       raw_text_ru: receiptData.raw_text_ru || null,
       document_type: docType === 'auto' ? (receiptData.document_type || 'receipt') : docType,
+      subtype: receiptData.subtype || null,
+      provider: receiptData.provider || null,
+      valid_from: receiptData.valid_from || null,
+      valid_to: receiptData.valid_to || null,
       recognition_method: model,
       recognized_at: new Date().toISOString()
     };
@@ -990,9 +1018,11 @@ app.get('/api/diagnostics', async (req, res) => {
   try {
     const columns = await getTableColumns();
     res.json({
-      version: '2026-08-01.6 (document types: receipt/invoice/bill/insurance/bank/contract/other)',
+      version: '2026-08-01.7 (objects table + subtype/provider/valid_to + PUT /api/receipts/:id)',
       raw_text_ru_column: columns.includes('raw_text_ru'),
       fix_if_false: 'alter table receipts add column if not exists raw_text_ru text;',
+      v7_columns: ['subtype', 'provider', 'valid_from', 'valid_to', 'meta', 'related_id', 'object_id'].every(c => columns.includes(c)),
+      fix_v7_if_false: 'Выполни supabase-migration-v7.sql в Supabase SQL Editor',
       providers_configured: {
         gemini: !!process.env.GEMINI_API_KEY,
         groq: !!process.env.GROQ_API_KEY,
@@ -1074,6 +1104,74 @@ app.delete('/api/receipts/:id', requireAuth, async (req, res) => {
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// ========== UPDATE RECEIPT (редактирование полей документа) ==========
+app.put('/api/receipts/:id', requireAuth, async (req, res) => {
+  try {
+    const EDITABLE = ['store_name', 'store_name_ru', 'receipt_date', 'receipt_time',
+      'total_amount', 'subtotal', 'tax_amount', 'currency', 'country', 'payment_method',
+      'object', 'document_type', 'subtype', 'provider', 'valid_from', 'valid_to',
+      'related_id', 'meta', 'object_id'];
+    const updates = {};
+    for (const k of EDITABLE) {
+      if (req.body && Object.prototype.hasOwnProperty.call(req.body, k)) updates[k] = req.body[k];
+    }
+    if (!Object.keys(updates).length) return res.status(400).json({ error: 'Нет полей для обновления' });
+    const columns = await getTableColumns();
+    const { data, error } = await supabaseAdmin
+      .from('receipts')
+      .update(filterRecordByColumns(updates, columns))
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ receipt: data });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ========== OBJECTS (дома / недвижимость) ==========
+// GET — список объектов; если таблицы objects ещё нет (миграция v7 не выполнена) — fallback на distinct receipts.object
+app.get('/api/objects', requireAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('objects').select('*').order('name');
+    if (error) throw error;
+    res.json({ objects: data, source: 'table' });
+  } catch (e) {
+    try {
+      const { data } = await supabaseAdmin.from('receipts').select('object');
+      const names = [...new Set((data || []).map(r => r.object).filter(Boolean))].sort();
+      res.json({
+        objects: names.map(name => ({ id: null, name })),
+        source: 'receipts',
+        migration_needed: 'Выполни supabase-migration-v7.sql — тогда появятся адреса, заметки и привязка object_id'
+      });
+    } catch (e2) {
+      res.status(500).json({ error: e2.message });
+    }
+  }
+});
+
+// POST — добавить объект (дом)
+app.post('/api/objects', requireAuth, async (req, res) => {
+  try {
+    const { name, address, notes } = req.body || {};
+    if (!name || !String(name).trim()) return res.status(400).json({ error: 'Поле name обязательно' });
+    const { data, error } = await supabaseAdmin
+      .from('objects')
+      .insert([{ name: String(name).trim(), address: address || null, notes: notes || null }])
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ object: data });
+  } catch (e) {
+    res.status(500).json({
+      error: e.message,
+      hint: 'Если ошибка про отсутствие таблицы — выполни supabase-migration-v7.sql в Supabase'
+    });
   }
 });
 

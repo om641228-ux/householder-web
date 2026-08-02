@@ -4,7 +4,33 @@ import { Capacitor, registerPlugin } from '@capacitor/core';
 
 const API_URL = 'https://householder-api-production.up.railway.app';
 
-const OBJECTS = ['other', 'Duqe', 'Maria', 'Kit', 'Dubai', 'Tich'];
+// Запасной список объектов на случай недоступности API (основной источник — GET /api/objects)
+const DEFAULT_OBJECTS = ['other', 'Duqe', 'Maria', 'Kit', 'Dubai', 'Tich'];
+// Подтипы услуг/документов (счета, страховки, договоры)
+const SUBTYPE_LABELS = {
+  electricity: '⚡ Электричество',
+  water: '💧 Вода',
+  gas: '🔥 Газ',
+  internet: '🌐 Интернет',
+  phone: '📱 Связь',
+  comunidad: '🏢 Комунидад',
+  rent: '🏠 Аренда',
+  waste: '🗑️ Мусор',
+  insurance_home: '🏠 Страховка дома',
+  insurance_car: '🚗 Страховка авто',
+  insurance_health: '➕ Страховка здоровья',
+  tax: '💰 Налог',
+  other: '📎 Прочее'
+};
+// Срок действия документа: null — нет даты/всё хорошо; иначе бейдж предупреждения
+function expiryInfo(r) {
+  if (!r || !r.valid_to) return null;
+  const days = Math.ceil((new Date(r.valid_to).getTime() - Date.now()) / 86400000);
+  if (isNaN(days)) return null;
+  if (days < 0) return { text: '⛔ Истёк', color: '#c0392b' };
+  if (days <= 30) return { text: `⚠️ Истекает через ${days} дн.`, color: '#e67e22' };
+  return null;
+}
 // Типы домашних документов: чек, фактура, счёт/квитанция, страховка, банк, договор, прочее
 const DOC_TYPE_LABELS = {
   receipt: '🧾 Чек',
@@ -751,6 +777,19 @@ function App() {
       .catch(() => setBackendInfo({ error: 'недоступен' }));
   }, [token]);
 
+  // Объекты (дома) — из API; при ошибке/старом бэкенде остаётся запасной список
+  const [objectsList, setObjectsList] = useState(DEFAULT_OBJECTS);
+  useEffect(() => {
+    if (!token) return;
+    fetch(`${API_URL}/api/objects`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => {
+        const names = (data?.objects || []).map(o => o.name).filter(Boolean);
+        if (names.length) setObjectsList(names);
+      })
+      .catch(() => {});
+  }, [token]);
+
   const requestTranslation = async (receipt) => {
     if (!receipt?.id || !receipt.raw_text) return null;
     setTranslatingId(receipt.id);
@@ -1254,6 +1293,8 @@ function App() {
       String(r.card_last4 || ''), String(r.recognition_method || ''), String(r.warning || ''),
       String(r.notes || ''), String(r.payment_method || ''), String(r.discount_amount || ''),
       String(r.loyalty_card || ''),
+      String(r.provider || ''), String(r.subtype || ''), String(SUBTYPE_LABELS[r.subtype] || ''),
+      String(r.valid_from || ''), String(r.valid_to || ''),
     ];
     const itemsText = (r.items || []).map(i =>
       `${i.name || ''} ${i.name_ru || ''} ${i.price || ''} ${i.quantity || ''} ${i.total || ''} ${i.category || ''} ${i.sku || ''}`
@@ -1415,11 +1456,11 @@ function App() {
         </div>
       </header>
 
-      {backendInfo && !String(backendInfo.version || '').includes('2026-08-01.6') && (
+      {backendInfo && !String(backendInfo.version || '').includes('2026-08-01.7') && (
         <div style={{ background: '#fdecea', border: '1px solid #e74c3c', color: '#c0392b', padding: '10px 16px', borderRadius: 8, margin: '10px 15px', fontSize: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <strong> Бэкенд устарел!</strong>
           <span>
-            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-01.6</code>.
+            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-01.7</code>.
             Задеплой свежий index.js (Railway → householder-api → Deploy latest commit), иначе перевод не заработает.
           </span>
           <button onClick={() => setBackendInfo(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', color: '#c0392b' }}>✕</button>
@@ -1577,6 +1618,13 @@ function App() {
                   <p><strong>Итого:</strong> {formatAmount(viewModal.total_amount, viewModal.currency)}</p>
                   <p><strong>Тип:</strong> {DOC_TYPE_LABELS[viewModal.document_type] || viewModal.document_type || '🧾 Чек'}</p>
                   <p><strong>Объект:</strong> <HighlightText text={viewModal.object || '—'} query={searchQuery} /></p>
+                  {viewModal.subtype && <p><strong>Подтип:</strong> {SUBTYPE_LABELS[viewModal.subtype] || viewModal.subtype}</p>}
+                  {viewModal.provider && <p><strong>Поставщик:</strong> <HighlightText text={viewModal.provider} query={searchQuery} /></p>}
+                  {(viewModal.valid_from || viewModal.valid_to) && (
+                    <p><strong>Действует:</strong> {viewModal.valid_from ? formatDate(viewModal.valid_from) : '—'} → {viewModal.valid_to ? formatDate(viewModal.valid_to) : '—'}
+                      {expiryInfo(viewModal) && <span style={{ marginLeft: 8, color: expiryInfo(viewModal).color, fontWeight: 600 }}>{expiryInfo(viewModal).text}</span>}
+                    </p>
+                  )}
                   <p><strong>Метод:</strong> {viewModal.recognition_method || '—'}</p>
                   <p><strong>Добавил:</strong> <HighlightText text={formatOwnerName(viewModal)} query={searchQuery} /></p>
                   {viewModal.subtotal && <p><strong>Подытог:</strong> {viewModal.subtotal}</p>}
@@ -1682,7 +1730,7 @@ function App() {
               <div className="control-group compact">
                 <label>Объект:</label>
                 <select value={object} onChange={e => setObject(e.target.value)}>
-                  {OBJECTS.map(o => <option key={o} value={o}>{o}</option>)}
+                  {objectsList.map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
               </div>
             </div>
@@ -1881,7 +1929,7 @@ function App() {
             <ExcelFilter label="Год" options={availableYears.map(y => ({ value: y, label: String(y) }))} selected={filterYears} onChange={v => { setFilterYears(v); setCurrentPage(1); }} />
             <ExcelFilter label="Месяц" options={MONTH_NAMES.map((n, i) => ({ value: i + 1, label: n }))} selected={filterMonths} onChange={v => { setFilterMonths(v); setCurrentPage(1); }} />
             <ExcelFilter label="Тип" options={Object.entries(DOC_TYPE_LABELS).map(([v, l]) => ({ value: v, label: l }))} selected={filterTypes} onChange={v => { setFilterTypes(v); setCurrentPage(1); }} />
-            <ExcelFilter label="Объект" options={OBJECTS.map(o => ({ value: o, label: o }))} selected={filterObjects} onChange={v => { setFilterObjects(v); setCurrentPage(1); }} />
+            <ExcelFilter label="Объект" options={objectsList.map(o => ({ value: o, label: o }))} selected={filterObjects} onChange={v => { setFilterObjects(v); setCurrentPage(1); }} />
             <ExcelFilter label="Разница Δ" options={[
               { value: 'none', label: '✅ Без разницы' },
               { value: 'small', label: 'Δ до 1' },
@@ -1940,7 +1988,7 @@ function App() {
               <button onClick={() => bulkTranslate()} style={{ background: '#16a085', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}> Перевести</button>
               <select onChange={e => { if (e.target.value) bulkChangeObject(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
                 <option value="">Сменить объект...</option>
-                {OBJECTS.map(o => <option key={o} value={o}>{o}</option>)}
+                {objectsList.map(o => <option key={o} value={o}>{o}</option>)}
               </select>
               <select onChange={e => { if (e.target.value) bulkChangeType(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
                 <option value="">Сменить тип...</option>
@@ -2066,6 +2114,9 @@ function App() {
                             ? <span title="Дубликат: такой же магазин, дата и сумма" style={{ flexShrink: 0, background: '#e74c3c', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>КОПИЯ</span>
                             : <span title="Оригинал (самый ранний из группы дубликатов)" style={{ flexShrink: 0, background: '#27ae60', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>ОРИГИНАЛ</span>
                         )}
+                        {expiryInfo(receipt) && (
+                          <span title={`Срок действия до ${formatDate(receipt.valid_to)}`} style={{ flexShrink: 0, background: expiryInfo(receipt).color, color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>{expiryInfo(receipt).text}</span>
+                        )}
                       </div>
                       <p className="date">{formatDate(receipt.receipt_date)} {receipt.receipt_time}</p>
                       <p className="amount" style={{ color: hasDiff ? '#e67e22' : '#27ae60' }}>
@@ -2076,6 +2127,7 @@ function App() {
                       {receipt.object && (
                         <p style={{ fontSize: 12, color: '#7f8c8d', margin: '4px 0' }}>
                           <HighlightText text={receipt.object} query={searchQuery} />
+                          {receipt.subtype && <span style={{ marginLeft: 6, color: '#95a5a6' }}>{SUBTYPE_LABELS[receipt.subtype] || receipt.subtype}</span>}
                         </p>
                       )}
                       <p style={{ fontSize: 12, color: '#3498db', margin: '4px 0', fontWeight: 500 }}>
