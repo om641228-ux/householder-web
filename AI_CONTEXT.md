@@ -106,6 +106,7 @@ Node.js >= 20.0.0. Supabase подключён с `realtime.transport: ws` (об
 | POST | `/api/bulk-update-type` | Массовая смена типа (body: {ids, document_type} — один из 7 типов, см. ниже) |
 | POST | `/api/bulk-update-subtype` | Массовая смена подтипа (body: {ids, subtype} — одно из 13 значений SUBTYPE_LABELS) |
 | POST | `/api/upload-receipt` | Загрузка + распознавание (multipart/form-data: image/pdf, model, currency, docType, object, token) |
+| POST | `/api/upload-document-pages` | Несколько файлов как СТРАНИЦЫ ОДНОГО документа (multipart: pages[] до 60 шт, изображения и/или 1-страничные PDF; собирается постраничным конвейером, обложка — первая страница) |
 | POST | `/api/reprocess-receipt` | Перераспознавание |
 | POST | `/api/translate-receipt` | Перевод raw_text существующего чека (без перераспознавания) |
 | POST | `/api/export-excel` | Экспорт Excel (.xlsx) |
@@ -279,7 +280,14 @@ Bucket: `receipt-images` (public, policies SELECT/INSERT/DELETE).
 
 ## 14. Changelog
 
-**2026-08-02 (текущая финальная версия, v10 — многостраничные документы: распознавание и вывод ПО СТРАНИЦАМ)**
+**2026-08-02 (текущая финальная версия, v11 — HOTFIX «не распознает N-1 страниц»: многофайловая загрузка как страницы + защиты)**
+- КОРЕНЬ БАГА: recognizeAndSave отправлял ТОЛЬКО selectedFiles[currentFileIndex] — при выборе 7 файлов-страниц распознавалась одна. Плюс PDF, отправленный vision-модели без поддержки PDF (Kimi/Groq/OpenRouter/Mistral), читался как «картинка» → первая страница
+- Несколько выбранных файлов = СТРАНИЦЫ ОДНОГО документа: recognizeDocumentPages отправляет все файлы в новый POST /api/upload-document-pages (upload.array('pages', 60)); бэкенд собирает их тем же постраничным конвейером (assembleDocumentFromPages — вынесен из recognizeLongPdfByPages, работает и с изображениями, и с 1-страничными PDF); обложка документа — первая страница. Кнопка: «Распознать N страниц как один документ» + синяя подсказка под превью
+- Защита от молчаливой деградации pdf-lib: getPdfPageCount при отсутствии пакета считает страницы regex по «/Type /Page»; если PDF многостраничный, а pdf-lib НЕ установлен — upload/reprocess возвращают 500 с ЯВНОЙ инструкцией (вместо тихого неверного результата); /api/diagnostics показывает pdf_lib: true/false + fix
+- PDF + модель без поддержки PDF (Kimi/Groq/OpenRouter/GitHub/Mistral): автоматически переключается на fallback-цепочку (Gemini читает PDF), recognition_method = «kimi-k3 (pdf → gemini-…)» — и в upload, и в reprocess
+- Версия бэкенда: 2026-08-02.11 (watchdog обновлён синхронно)
+
+**2026-08-02 (v10 — многостраничные документы: распознавание и вывод ПО СТРАНИЦАМ)**
 - Постраничный режим для договоров/эскритур/выписок/полисов: PDF длиннее 2 страниц (LONG_PDF_PAGE_THRESHOLD) обрабатывается иначе — pdf-lib разбивает документ на 1-страничные PDF; каждая страница распознаётся Gemini vision отдельным запросом (дословный текст оригинала, без JSON); raw_text собирается модулями `══════ СТРАНИЦА N из M ══════`; перевод — тоже ПО СТРАНИЦАМ (translateRawText на каждую), raw_text_ru с теми же модулями; параллельность 3 (runWithConcurrency — RPM-лимиты); страница с ошибкой не роняет документ — встаёт плашка «(ошибка распознавания страницы)»
 - JSON-сводка полей (название, дата, сумма сделки, тип, адрес, № протокола/договора, объект по адресу) — отдельным текстовым запросом callTextChain (Gemini → Groq → OpenRouter/GitHub/Mistral/Kimi) по началу (12k) + концу (5k) документа, через buildDocumentSummaryPrompt; результат прогоняется через обычный parseAIResponse
 - Режим работает и в upload-receipt, и в reprocess-receipt; recognition_method = `page-by-page Np (gemini vision)`
