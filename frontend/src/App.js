@@ -444,6 +444,10 @@ function App() {
   const [viewModal, setViewModal] = useState(null);
   const [fullscreenImage, setFullscreenImage] = useState(null);
   const [fsZoom, setFsZoom] = useState(false); // второй клик по фото в полноэкранном режиме — натуральный размер
+  const [modalPageIdx, setModalPageIdx] = useState(0); // выбранная страница в галерее документа (модалка)
+
+  // При открытии другого чека галерея страниц начинается с первой
+  useEffect(() => { setModalPageIdx(0); }, [viewModal?.id]);
 
   // Закрытие полноэкранного просмотра по Escape
   useEffect(() => {
@@ -1545,11 +1549,11 @@ function App() {
         </div>
       </header>
 
-      {backendInfo && !String(backendInfo.version || '').includes('2026-08-02.12') && (
+      {backendInfo && !String(backendInfo.version || '').includes('2026-08-02.13') && (
         <div style={{ background: '#fdecea', border: '1px solid #e74c3c', color: '#c0392b', padding: '10px 16px', borderRadius: 8, margin: '10px 15px', fontSize: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <strong> Бэкенд устарел!</strong>
           <span>
-            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-02.12</code>.
+            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-02.13</code>.
             Задеплой свежий index.js (Railway → householder-api → Deploy latest commit), иначе перевод не заработает.
           </span>
           <button onClick={() => setBackendInfo(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', color: '#c0392b' }}>✕</button>
@@ -1686,18 +1690,62 @@ function App() {
             </div>
             <div className="modal-body">
               <div className="modal-image-section">
-                {(viewModal.photo_url || viewModal.image_url) ? (
-                  isPdfUrl(viewModal.photo_url || viewModal.image_url)
-                    ? <div className="no-image">📄 PDF-документ</div>
-                    : <img
-                        src={fixImageUrl(viewModal.photo_url || viewModal.image_url)}
-                        alt="Чек"
-                        className="modal-image"
-                        onClick={() => setFullscreenImage(fixImageUrl(viewModal.photo_url || viewModal.image_url))}
-                        style={{ cursor: 'zoom-in' }}
-                        title="Нажмите — открыть на весь экран"
-                      />
-                ) : <div className="no-image">Нет фото</div>}
+                {(() => {
+                  // Если у документа сохранены все страницы (v13) — показываем галерею страниц
+                  const pages = Array.isArray(viewModal.page_urls) ? viewModal.page_urls.filter(Boolean) : [];
+                  if (pages.length) {
+                    const idx = Math.min(modalPageIdx, pages.length - 1);
+                    const curUrl = fixImageUrl(pages[idx]);
+                    return (
+                      <>
+                        {isPdfUrl(pages[idx]) ? (
+                          <a href={curUrl} target="_blank" rel="noreferrer" className="no-image"
+                            style={{ display: 'block', textDecoration: 'none', color: '#2980b9', fontWeight: 600 }}>
+                            📄 Страница {idx + 1} — PDF, открыть в новой вкладке ↗
+                          </a>
+                        ) : (
+                          <img
+                            src={curUrl}
+                            alt={`Страница ${idx + 1}`}
+                            className="modal-image"
+                            onClick={() => setFullscreenImage(curUrl)}
+                            style={{ cursor: 'zoom-in' }}
+                            title="Нажмите — открыть на весь экран"
+                          />
+                        )}
+                        {pages.length > 1 && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, justifyContent: 'center' }}>
+                            {pages.map((p, i) => (
+                              isPdfUrl(p) ? (
+                                <button key={i} onClick={() => setModalPageIdx(i)} title={`Страница ${i + 1} (PDF)`}
+                                  style={{ minWidth: 40, height: 52, padding: '0 6px', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600, border: i === idx ? '2px solid #2980b9' : '1px solid #ccd6dd', background: i === idx ? '#eaf3fb' : '#fff', color: '#2c3e50' }}>
+                                  📄 {i + 1}
+                                </button>
+                              ) : (
+                                <img key={i} src={fixImageUrl(p)} alt={`стр. ${i + 1}`} onClick={() => setModalPageIdx(i)}
+                                  style={{ width: 52, height: 52, objectFit: 'cover', borderRadius: 6, cursor: 'pointer', border: i === idx ? '2px solid #2980b9' : '1px solid #ccd6dd' }} />
+                              )
+                            ))}
+                          </div>
+                        )}
+                        <div style={{ fontSize: 12, color: '#95a5a6', marginTop: 4 }}>📑 Страница {idx + 1} из {pages.length}</div>
+                      </>
+                    );
+                  }
+                  // Обычный однофайловый чек — как раньше
+                  return (viewModal.photo_url || viewModal.image_url) ? (
+                    isPdfUrl(viewModal.photo_url || viewModal.image_url)
+                      ? <div className="no-image">📄 PDF-документ</div>
+                      : <img
+                          src={fixImageUrl(viewModal.photo_url || viewModal.image_url)}
+                          alt="Чек"
+                          className="modal-image"
+                          onClick={() => setFullscreenImage(fixImageUrl(viewModal.photo_url || viewModal.image_url))}
+                          style={{ cursor: 'zoom-in' }}
+                          title="Нажмите — открыть на весь экран"
+                        />
+                  ) : <div className="no-image">Нет фото</div>;
+                })()}
               </div>
               <div className="modal-info">
                 <div className="info-block">
@@ -2243,6 +2291,9 @@ function App() {
                         )}
                         {expiryInfo(receipt) && (
                           <span title={`Срок действия до ${formatDate(receipt.valid_to)}`} style={{ flexShrink: 0, background: expiryInfo(receipt).color, color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>{expiryInfo(receipt).text}</span>
+                        )}
+                        {Array.isArray(receipt.page_urls) && receipt.page_urls.length > 1 && (
+                          <span title={`Документ из ${receipt.page_urls.length} страниц — все страницы сохранены, смотрите в карточке`} style={{ flexShrink: 0, background: '#8e44ad', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>📑 {receipt.page_urls.length} стр.</span>
                         )}
                       </div>
                       <p className="date">{formatDate(receipt.receipt_date)} {receipt.receipt_time}</p>

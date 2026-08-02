@@ -691,11 +691,17 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
 }
 
 // Общая сборка многостраничного документа из буферов страниц (PDF-страницы или изображения):
-// каждая страница — отдельный vision-запрос, затем общая финализация
-async function assembleDocumentFromPages(pageBuffers, mimeTypes, currency, docType) {
+// каждая страница — отдельный vision-запрос, затем общая финализация.
+// Если передан userId — все страницы также сохраняются в Storage (page_urls).
+async function assembleDocumentFromPages(pageBuffers, mimeTypes, currency, docType, userId = null) {
   console.log(`Постраничный режим: документ ${pageBuffers.length} стр.`);
   const pageTexts = await runWithConcurrency(pageBuffers, (buf, i) => extractPageTextWithGemini(buf, mimeTypes[i] || 'application/pdf', i + 1, pageBuffers.length), 3);
-  return finalizeDocumentFromPageTexts(pageTexts, currency, docType);
+  const data = await finalizeDocumentFromPageTexts(pageTexts, currency, docType);
+  if (userId) {
+    data.page_urls = await uploadPagesToStorage(pageBuffers, mimeTypes, userId);
+    console.log(`Страницы сохранены в Storage: ${data.page_urls.length}/${pageBuffers.length}`);
+  }
+  return data;
 }
 
 // Текст ДИАПАЗОНА страниц из целого PDF (режим без pdf-lib: Gemini видит весь документ,
@@ -750,8 +756,9 @@ async function recognizeLongPdfByPageRanges(pdfBuffer, pageCount, currency, docT
   return finalizeDocumentFromPageTexts(pageTexts, currency, docType);
 }
 
-// Постраничный режим для целого PDF: разбиваем на 1-страничные и отдаём сборщику
-async function recognizeLongPdfByPages(pdfBuffer, currency, docType) {
+// Постраничный режим для целого PDF: разбиваем на 1-страничные и отдаём сборщику.
+// userId — чтобы сохранить каждую страницу в Storage (page_urls)
+async function recognizeLongPdfByPages(pdfBuffer, currency, docType, userId = null) {
   const { PDFDocument } = require('pdf-lib');
   const src = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
   const pageCount = src.getPageCount();
@@ -763,7 +770,7 @@ async function recognizeLongPdfByPages(pdfBuffer, currency, docType) {
     sub.addPage(page);
     pageBuffers.push(Buffer.from(await sub.save()));
   }
-  return assembleDocumentFromPages(pageBuffers, pageBuffers.map(() => 'application/pdf'), currency, docType);
+  return assembleDocumentFromPages(pageBuffers, pageBuffers.map(() => 'application/pdf'), currency, docType, userId);
 }
 
 // Если у результата распознавания нет перевода — дозапрашиваем его отдельно
@@ -1039,6 +1046,22 @@ async function uploadToStorage(buffer, filename, userId, contentType = 'image/jp
   return urlData.publicUrl;
 }
 
+// Загрузка ВСЕХ страниц документа в Storage (3 параллельно).
+// Ошибка одной страницы не роняет весь процесс — она просто пропускается.
+async function uploadPagesToStorage(pageBuffers, mimeTypes, userId, label = 'doc') {
+  const uploaded = await runWithConcurrency(pageBuffers, async (buf, i) => {
+    try {
+      const isPdf = (mimeTypes[i] || '') === 'application/pdf';
+      const name = `${label}_p${String(i + 1).padStart(2, '0')}.${isPdf ? 'pdf' : 'jpg'}`;
+      return await uploadToStorage(buf, name, userId, isPdf ? 'application/pdf' : 'image/jpeg');
+    } catch (e) {
+      console.error(`Страница ${i + 1}: ошибка загрузки в Storage:`, e.message);
+      return null;
+    }
+  }, 3);
+  return uploaded.filter(Boolean);
+}
+
 // ========== UNIVERSAL SAVE — фильтрует только существующие колонки ==========
 let knownColumns = null;
 
@@ -1081,7 +1104,7 @@ async function getTableColumns() {
         'id', 'store_name', 'store_name_ru', 'receipt_date', 'receipt_time',
         'total_amount', 'subtotal', 'tax_amount', 'tax_rate', 'currency',
         'country', 'payment_method',
-        'items', 'image_url', 'raw_text', 'raw_text_ru', 'document_type', 'object',
+        'items', 'image_url', 'page_urls', 'raw_text', 'raw_text_ru', 'document_type', 'object',
         'subtype', 'provider', 'valid_from', 'valid_to', 'meta', 'related_id', 'object_id',
         'invoice_number', 'contract_number', 'supply_address', 'cups', 'meter_number',
         'consumption', 'consumption_unit',
@@ -1094,7 +1117,7 @@ async function getTableColumns() {
       'id', 'store_name', 'store_name_ru', 'receipt_date', 'receipt_time',
       'total_amount', 'subtotal', 'tax_amount', 'tax_rate', 'currency',
       'country', 'payment_method',
-      'items', 'image_url', 'raw_text', 'raw_text_ru', 'document_type', 'object',
+      'items', 'image_url', 'page_urls', 'raw_text', 'raw_text_ru', 'document_type', 'object',
       'subtype', 'provider', 'valid_from', 'valid_to', 'meta', 'related_id', 'object_id',
       'invoice_number', 'contract_number', 'supply_address', 'cups', 'meter_number',
       'consumption', 'consumption_unit',
@@ -1138,6 +1161,7 @@ async function saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod) {
     payment_method: receiptData.payment_method,
     items: receiptData.items,
     image_url: imageUrl,
+    page_urls: Array.isArray(receiptData.page_urls) && receiptData.page_urls.length ? receiptData.page_urls : null,
     raw_text: receiptData.raw_text,
     raw_text_ru: receiptData.raw_text_ru || null,
     document_type: receiptData.docType || 'receipt',
@@ -1203,8 +1227,8 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     try {
       if (pdfPageCount > LONG_PDF_PAGE_THRESHOLD) {
         if (hasPdfLib()) {
-          // Основной путь: разрезаем PDF и распознаём каждую страницу отдельно
-          receiptData = await recognizeLongPdfByPages(processedBuffer, currency, docType);
+          // Основной путь: разрезаем PDF и распознаём каждую страницу отдельно (+ страницы в Storage)
+          receiptData = await recognizeLongPdfByPages(processedBuffer, currency, docType, user.id);
           recognitionMethod = `page-by-page ${pdfPageCount}p (gemini vision)`;
         } else {
           // Без pdf-lib: Gemini читает целый PDF, текст запрашиваем диапазонами по 5 страниц
@@ -1319,14 +1343,16 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
       mimeTypes.push(isPdf ? 'application/pdf' : 'image/jpeg');
     }
 
-    // Обложка документа — первая страница (как фото чека)
-    const imageUrl = await uploadToStorage(pageBuffers[0], files[0].originalname, user.id, mimeTypes[0]);
-
-    const receiptData = await assembleDocumentFromPages(pageBuffers, mimeTypes, currency, docType);
+    // Распознаём страницы и сохраняем КАЖДУЮ в Storage (page_urls)
+    const receiptData = await assembleDocumentFromPages(pageBuffers, mimeTypes, currency, docType, user.id);
     const recognitionMethod = `page-by-page ${files.length}f (gemini vision)`;
     receiptData.docType = docType === 'auto' ? (receiptData.document_type || 'contract') : docType;
     receiptData.object = (object && object !== 'other') ? object : (receiptData.object || 'other');
     if (subtypeOverride) receiptData.subtype = subtypeOverride;
+
+    // Обложка документа — первая страница (уже загружена вместе со всеми; повторно не грузим)
+    const pageUrls = Array.isArray(receiptData.page_urls) ? receiptData.page_urls : [];
+    const imageUrl = pageUrls[0] || await uploadToStorage(pageBuffers[0], files[0].originalname, user.id, mimeTypes[0]);
 
     const saved = await saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod);
     res.json({ success: true, id: saved.id, ...saved, image_url: imageUrl });
@@ -1364,7 +1390,7 @@ app.post('/api/reprocess-receipt', requireAuth, async (req, res) => {
     let pageModeMethod = null;
     if (pdfPageCount > LONG_PDF_PAGE_THRESHOLD) {
       if (hasPdfLib()) {
-        receiptData = await recognizeLongPdfByPages(buffer, currency, docType);
+        receiptData = await recognizeLongPdfByPages(buffer, currency, docType, req.user?.id);
         pageModeMethod = `page-by-page ${pdfPageCount}p (gemini vision)`;
       } else {
         receiptData = await recognizeLongPdfByPageRanges(buffer, pdfPageCount, currency, docType);
@@ -1428,6 +1454,8 @@ app.post('/api/reprocess-receipt', requireAuth, async (req, res) => {
     };
     // Объект по адресу поставки (правило 17): обновляем только если AI смог определить
     if (receiptData.object) updateRecord.object = receiptData.object;
+    // Страницы документа в Storage: обновляем, только если постраничный режим их сохранил
+    if (Array.isArray(receiptData.page_urls) && receiptData.page_urls.length) updateRecord.page_urls = receiptData.page_urls;
     const filteredUpdate = filterRecordByColumns(updateRecord, columns);
     
     const { data, error } = await supabaseAdmin
@@ -1451,9 +1479,11 @@ app.get('/api/diagnostics', async (req, res) => {
   try {
     const columns = await getTableColumns();
     res.json({
-      version: '2026-08-02.12 (page mode works WITHOUT pdf-lib: gemini page ranges + gemini page count)',
+      version: '2026-08-02.13 (page_urls: все страницы документа сохраняются в Storage и показываются в карточке)',
       raw_text_ru_column: columns.includes('raw_text_ru'),
       fix_if_false: 'alter table receipts add column if not exists raw_text_ru text;',
+      v13_page_urls_column: columns.includes('page_urls'),
+      fix_v13_if_false: 'alter table receipts add column if not exists page_urls jsonb;',
       v7_columns: ['subtype', 'provider', 'valid_from', 'valid_to', 'meta', 'related_id', 'object_id'].every(c => columns.includes(c)),
       fix_v7_if_false: 'Выполни supabase-migration-v7.sql в Supabase SQL Editor',
       v9_columns: ['invoice_number', 'contract_number', 'supply_address', 'cups', 'meter_number', 'consumption', 'consumption_unit'].every(c => columns.includes(c)),
@@ -1552,7 +1582,7 @@ app.put('/api/receipts/:id', requireAuth, async (req, res) => {
       'object', 'document_type', 'subtype', 'provider', 'valid_from', 'valid_to',
       'invoice_number', 'contract_number', 'supply_address', 'cups', 'meter_number',
       'consumption', 'consumption_unit',
-      'related_id', 'meta', 'object_id'];
+      'related_id', 'meta', 'object_id', 'page_urls'];
     const updates = {};
     for (const k of EDITABLE) {
       if (req.body && Object.prototype.hasOwnProperty.call(req.body, k)) updates[k] = req.body[k];
