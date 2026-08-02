@@ -445,9 +445,12 @@ function App() {
   const [fullscreenImage, setFullscreenImage] = useState(null);
   const [fsZoom, setFsZoom] = useState(false); // второй клик по фото в полноэкранном режиме — натуральный размер
   const [modalPageIdx, setModalPageIdx] = useState(0); // выбранная страница в галерее документа (модалка)
+  const [editMode, setEditMode] = useState(false);     // ручное редактирование полей в карточке
+  const [editForm, setEditForm] = useState({});
+  const [savingEdit, setSavingEdit] = useState(false);
 
-  // При открытии другого чека галерея страниц начинается с первой
-  useEffect(() => { setModalPageIdx(0); }, [viewModal?.id]);
+  // При открытии другого чека галерея начинается с первой страницы, режим редактирования сбрасывается
+  useEffect(() => { setModalPageIdx(0); setEditMode(false); }, [viewModal?.id]);
 
   // Закрытие полноэкранного просмотра по Escape
   useEffect(() => {
@@ -1181,6 +1184,64 @@ function App() {
     } catch (e) { console.error(e); }
   };
 
+  // Заполнить форму редактирования текущими значениями чека и включить режим
+  const startEdit = () => {
+    if (!viewModal) return;
+    setEditForm({
+      store_name: viewModal.store_name || '',
+      store_name_ru: viewModal.store_name_ru || '',
+      receipt_date: viewModal.receipt_date || '',
+      receipt_time: viewModal.receipt_time || '',
+      total_amount: viewModal.total_amount ?? '',
+      currency: viewModal.currency || '',
+      document_type: viewModal.document_type || 'receipt',
+      subtype: viewModal.subtype || '',
+      provider: viewModal.provider || '',
+      object: viewModal.object || 'other',
+      supply_address: viewModal.supply_address || '',
+      invoice_number: viewModal.invoice_number || '',
+      contract_number: viewModal.contract_number || '',
+      cups: viewModal.cups || '',
+      meter_number: viewModal.meter_number || '',
+      consumption: viewModal.consumption ?? '',
+      consumption_unit: viewModal.consumption_unit || '',
+      valid_from: viewModal.valid_from || '',
+      valid_to: viewModal.valid_to || ''
+    });
+    setEditMode(true);
+  };
+
+  // Сохранить правки: PUT /api/receipts/:id (пустые строки → null, суммы → числа)
+  const saveEdit = async () => {
+    if (!viewModal) return;
+    setSavingEdit(true);
+    try {
+      const payload = {};
+      for (const [k, v] of Object.entries(editForm)) {
+        if (v === '' || v === undefined) { payload[k] = null; continue; }
+        if (k === 'total_amount' || k === 'consumption') {
+          const n = parseFloat(String(v).replace(',', '.'));
+          payload[k] = Number.isFinite(n) ? n : null;
+        } else payload[k] = v;
+      }
+      const res = await fetch(`${API_URL}/api/receipts/${viewModal.id}?token=${token}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { alert(data.error || 'Ошибка сохранения'); return; }
+      const updated = data.receipt || { ...viewModal, ...payload };
+      setReceipts(prev => prev.map(r => (r.id === updated.id ? { ...r, ...updated } : r)));
+      setViewModal(prev => (prev ? { ...prev, ...updated } : prev));
+      setEditMode(false);
+    } catch (e) {
+      alert('Ошибка сохранения: ' + e.message);
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   const bulkChangeSubtype = async (newSubtype) => {
     if (selectedReceiptIds.size === 0) return;
     try {
@@ -1748,6 +1809,64 @@ function App() {
                 })()}
               </div>
               <div className="modal-info">
+                {editMode && (
+                  <div className="info-block" style={{ background: '#fdf6ec', border: '1px solid #f0e0c0' }}>
+                    <h3>✏️ Редактирование</h3>
+                    {(() => {
+                      const ls = { display: 'flex', flexDirection: 'column', fontSize: 11, color: '#7f8c8d', gap: 3 };
+                      const is = { padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6, fontSize: 14 };
+                      const F = (key, label, type = 'text') => (
+                        <label key={key} style={ls}>{label}
+                          <input type={type} style={is} value={editForm[key] ?? ''} onChange={e => setEditForm(f => ({ ...f, [key]: e.target.value }))} />
+                        </label>
+                      );
+                      return (
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 8 }}>
+                          {F('store_name', 'Название (оригинал)')}
+                          {F('store_name_ru', 'Название (рус)')}
+                          <label style={ls}>Тип документа
+                            <select style={is} value={editForm.document_type || 'receipt'} onChange={e => setEditForm(f => ({ ...f, document_type: e.target.value }))}>
+                              {Object.entries(DOC_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                            </select>
+                          </label>
+                          <label style={ls}>Объект
+                            <select style={is} value={editForm.object || 'other'} onChange={e => setEditForm(f => ({ ...f, object: e.target.value }))}>
+                              {objectsList.map(o => <option key={o} value={o}>{o}</option>)}
+                            </select>
+                          </label>
+                          <label style={ls}>Подтип
+                            <select style={is} value={editForm.subtype || ''} onChange={e => setEditForm(f => ({ ...f, subtype: e.target.value }))}>
+                              <option value="">— нет —</option>
+                              {Object.entries(SUBTYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                            </select>
+                          </label>
+                          {F('provider', 'Поставщик / эмитент')}
+                          {F('receipt_date', 'Дата', 'date')}
+                          {F('receipt_time', 'Время', 'time')}
+                          {F('total_amount', 'Итого (сумма)')}
+                          {F('currency', 'Валюта (EUR, USD…)')}
+                          {F('valid_from', 'Действует с / период с', 'date')}
+                          {F('valid_to', 'Действует до / период по', 'date')}
+                          {F('supply_address', 'Адрес поставки')}
+                          {F('invoice_number', '№ фактуры')}
+                          {F('contract_number', '№ договора')}
+                          {F('cups', 'CUPS')}
+                          {F('meter_number', '№ счётчика')}
+                          {F('consumption', 'Потребление')}
+                          <label style={ls}>Ед. потребления
+                            <select style={is} value={editForm.consumption_unit || ''} onChange={e => setEditForm(f => ({ ...f, consumption_unit: e.target.value }))}>
+                              <option value="">—</option>
+                              <option value="kWh">kWh</option>
+                              <option value="m3">m³</option>
+                            </select>
+                          </label>
+                        </div>
+                      );
+                    })()}
+                    <p style={{ fontSize: 12, color: '#95a5a6', margin: '8px 0 0' }}>Пустое поле = очистить значение. Текст документа, страницы и товары не меняются.</p>
+                  </div>
+                )}
+                {!editMode && (
                 <div className="info-block">
                   <h3>Основная информация</h3>
                   <p><strong>Магазин:</strong> <HighlightText text={viewModal.store_name || viewModal.store_name_ru || '—'} query={searchQuery} /></p>
@@ -1790,6 +1909,7 @@ function App() {
                     return <p style={{ color: '#27ae60' }}> Сумма строк совпадает</p>;
                   })()}
                 </div>
+                )}
                 <div className="info-block">
                   <h3>Товары ({viewModal.items?.length || 0})</h3>
                   <table className="items-table">
@@ -1835,6 +1955,14 @@ function App() {
             </div>
             <div className="modal-footer">
               <button onClick={() => setViewModal(null)}>Закрыть</button>
+              {!editMode ? (
+                <button onClick={startEdit} style={{ background: '#f39c12' }}>✏️ Редактировать</button>
+              ) : (
+                <>
+                  <button onClick={() => setEditMode(false)} disabled={savingEdit} style={{ background: '#95a5a6' }}>Отмена</button>
+                  <button onClick={saveEdit} disabled={savingEdit} style={{ background: '#27ae60' }}>{savingEdit ? '⏳ Сохраняю...' : '💾 Сохранить'}</button>
+                </>
+              )}
               {user?.role === 'admin' && (
                 <button className="danger" onClick={() => deleteReceipt(viewModal.id)}> Удалить</button>
               )}
