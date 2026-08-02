@@ -694,7 +694,68 @@ function App() {
     }
   };
 
+  // Несколько выбранных файлов = страницы ОДНОГО документа (договор, эскритура, отчёт):
+  // отправляем все в /api/upload-document-pages, бэкенд собирает их в один документ
+  const recognizeDocumentPages = async (files) => {
+    setRecognizing(true);
+    setLastSavedReceipt(null);
+    try {
+      const formData = new FormData();
+      for (const f of files) {
+        let fileToUpload = f;
+        if (!isPdfFile(f) && f.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+          fileToUpload = await compressImageFile(f);
+        }
+        formData.append('pages', fileToUpload);
+      }
+      formData.append('model', selectedModel);
+      formData.append('currency', currency);
+      formData.append('docType', docType);
+      formData.append('subtype', subtype);
+      formData.append('object', object);
+      formData.append('token', token);
+
+      setUploadProgress(0);
+      setProgressStage('upload');
+      let creepTimer = null;
+      const res = await uploadWithProgress(`${API_URL}/api/upload-document-pages?token=${token}`, formData, (ratio) => {
+        setUploadProgress(Math.round(ratio * 40));
+        if (ratio >= 1 && !creepTimer) {
+          setProgressStage('recognize');
+          let p = 40;
+          creepTimer = setInterval(() => {
+            p = Math.min(92, p + Math.max(0.4, (92 - p) * 0.05));
+            setUploadProgress(Math.round(p));
+          }, 500);
+        }
+      });
+      if (creepTimer) clearInterval(creepTimer);
+      setUploadProgress(100);
+
+      const text = res.text;
+      let data;
+      try { data = JSON.parse(text); } catch { throw new Error(`Сервер вернул ${res.status}: ${text.slice(0, 200)}`); }
+      if (!res.ok) throw new Error(data.error || data.message || `Ошибка сервера: ${res.status}`);
+      if (!data.success && !data.id) throw new Error(data.error || 'Сохранение не удалось');
+
+      const receiptData = data.data || data;
+      if (receiptData.image_url) receiptData.image_url = fixImageUrl(receiptData.image_url);
+      setLastSavedReceipt(receiptData);
+      loadReceipts();
+    } catch (e) {
+      console.error('Ошибка:', e);
+      alert('Ошибка: ' + e.message);
+    }
+    setRecognizing(false);
+    setProgressStage(null);
+    setUploadProgress(0);
+  };
+
   const recognizeAndSave = async (fileArg) => {
+    // Без явного файла и при выбранных нескольких — это страницы одного документа
+    if (!(fileArg instanceof File) && selectedFiles.length > 1) {
+      return recognizeDocumentPages(selectedFiles);
+    }
     const file = (fileArg instanceof File) ? fileArg : selectedFiles[currentFileIndex];
     if (!file) return;
     setRecognizing(true);
@@ -1484,11 +1545,11 @@ function App() {
         </div>
       </header>
 
-      {backendInfo && !String(backendInfo.version || '').includes('2026-08-02.10') && (
+      {backendInfo && !String(backendInfo.version || '').includes('2026-08-02.12') && (
         <div style={{ background: '#fdecea', border: '1px solid #e74c3c', color: '#c0392b', padding: '10px 16px', borderRadius: 8, margin: '10px 15px', fontSize: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <strong> Бэкенд устарел!</strong>
           <span>
-            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-02.10</code>.
+            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-02.12</code>.
             Задеплой свежий index.js (Railway → householder-api → Deploy latest commit), иначе перевод не заработает.
           </span>
           <button onClick={() => setBackendInfo(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', color: '#c0392b' }}>✕</button>
@@ -1806,6 +1867,8 @@ function App() {
                 </>
               ) : recognizing ? (
                 '⏳ Идёт загрузка папки…'
+              ) : selectedFiles.length > 1 ? (
+                `📄 Распознать ${selectedFiles.length} страниц как один документ`
               ) : 'Распознать и сохранить'}
             </button>
           </div>
@@ -1836,6 +1899,11 @@ function App() {
                       <p style={{ fontSize: 12, color: '#7f8c8d', marginTop: 5 }}>
                         Размер: {(selectedFiles[currentFileIndex].size / 1024 / 1024).toFixed(2)} MB
                         {selectedFiles[currentFileIndex].size > MAX_FILE_SIZE_MB * 1024 * 1024 && ' (будет сжато)'}
+                      </p>
+                    )}
+                    {selectedFiles.length > 1 && (
+                      <p style={{ fontSize: 12, color: '#2980b9', marginTop: 4, fontWeight: 600 }}>
+                        {selectedFiles.length} файлов → распознаются как СТРАНИЦЫ ОДНОГО документа
                       </p>
                     )}
                   </div>

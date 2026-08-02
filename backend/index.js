@@ -509,20 +509,45 @@ async function translateRawText(rawText) {
 
 const LONG_PDF_PAGE_THRESHOLD = 2;
 
+// pdf-lib установлен? (без него постраничный режим для PDF недоступен)
+function hasPdfLib() {
+  try { require.resolve('pdf-lib'); return true; } catch { return false; }
+}
+
+// Количество страниц PDF: pdf-lib → regex по меткам → 0 (неизвестно, тогда спросим Gemini)
 async function getPdfPageCount(pdfBuffer) {
   try {
     const { PDFDocument } = require('pdf-lib');
     const doc = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
     return doc.getPageCount();
   } catch (e) {
-    console.warn('getPdfPageCount: не удалось посчитать страницы (установи pdf-lib):', e.message);
-    return 1;
+    const matches = String(pdfBuffer.toString('latin1')).match(/\/Type\s*\/Page(?![sS\/\w])/g);
+    const count = matches ? matches.length : 0;
+    console.warn(`getPdfPageCount: pdf-lib недоступен (${e.message}), regex-оценка: ${count}`);
+    return count; // 0 = не удалось определить
   }
 }
 
-// Текст одной страницы через Gemini vision (1-страничный PDF)
-async function extractPageTextWithGemini(pagePdfBuffer, pageNum, totalPages) {
-  if (!genAI) throw new Error('Постраничное распознавание требует GEMINI_API_KEY (vision по PDF-страницам)');
+// Последний резерв подсчёта страниц: спрашиваем Gemini (он видит весь PDF)
+async function getPdfPageCountViaGemini(pdfBuffer) {
+  if (!genAI) return 0;
+  try {
+    const m = genAI.getGenerativeModel({ model: DEFAULT_GEMINI_MODEL, generationConfig: { maxOutputTokens: 64, temperature: 0 } });
+    const r = await m.generateContent([
+      { inlineData: { data: pdfBuffer.toString('base64'), mimeType: 'application/pdf' } },
+      'Сколько страниц в этом PDF-документе? Ответь ТОЛЬКО числом, без единого слова.'
+    ]);
+    const n = parseInt(String(r.response.text() || '').replace(/\D/g, ''), 10);
+    return isNaN(n) ? 0 : n;
+  } catch (e) {
+    console.warn('getPdfPageCountViaGemini failed:', e.message);
+    return 0;
+  }
+}
+
+// Текст одной страницы через Gemini vision (1-страничный PDF или изображение страницы)
+async function extractPageTextWithGemini(pageBuffer, mimeType, pageNum, totalPages) {
+  if (!genAI) throw new Error('Постраничное распознавание требует GEMINI_API_KEY (vision по страницам)');
   const model = genAI.getGenerativeModel({
     model: DEFAULT_GEMINI_MODEL,
     generationConfig: { maxOutputTokens: 8192, temperature: 0.1 }
@@ -532,7 +557,7 @@ async function extractPageTextWithGemini(pagePdfBuffer, pageNum, totalPages) {
 Не добавляй ничего от себя: ни JSON, ни markdown, ни комментарии, ни сводки — только текст страницы.
 Если на странице нет текста (чистое фото/пустая) — верни одну строку: (страница без текста)`;
   const result = await model.generateContent([
-    { inlineData: { data: pagePdfBuffer.toString('base64'), mimeType: 'application/pdf' } },
+    { inlineData: { data: pageBuffer.toString('base64'), mimeType: mimeType || 'application/pdf' } },
     prompt
   ]);
   const t = (result.response.text() || '').trim();
@@ -635,34 +660,19 @@ function buildDocumentSummaryPrompt(textSample) {
 ${textSample}`;
 }
 
-// Главная функция постраничного режима: текст по страницам + перевод по страницам + JSON-сводка
-async function recognizeLongPdfByPages(pdfBuffer, currency, docType) {
-  const { PDFDocument } = require('pdf-lib');
-  const src = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
-  const pageCount = src.getPageCount();
-  console.log(`Постраничный режим: документ ${pageCount} стр.`);
-
-  // 1) Разбиваем PDF на 1-страничные документы
-  const pageBuffers = [];
-  for (let i = 0; i < pageCount; i++) {
-    const sub = await PDFDocument.create();
-    const [page] = await sub.copyPages(src, [i]);
-    sub.addPage(page);
-    pageBuffers.push(Buffer.from(await sub.save()));
-  }
-
-  // 2) Текст каждой страницы — Gemini vision (3 параллельно)
-  const pageTexts = await runWithConcurrency(pageBuffers, (buf, i) => extractPageTextWithGemini(buf, i + 1, pageCount), 3);
+// Сборка документа из готовых текстов страниц: перевод по страницам + модули + JSON-сводка
+async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
+  const pageCount = pageTexts.length;
   const raw_text = pageTexts.map((t, i) => `══════ СТРАНИЦА ${i + 1} из ${pageCount} ══════\n${t}`).join('\n\n');
 
-  // 3) Перевод каждой страницы — текстовая цепочка (3 параллельно)
+  // Перевод каждой страницы — текстовая цепочка (3 параллельно)
   const ruTexts = await runWithConcurrency(pageTexts, async (t) => {
-    if (/^\((ошибка|страница без текста)/.test(t)) return t;
+    if (/^\((ошибка|страница без текста|страница не распознана)/.test(t)) return t;
     return (await translateRawText(t)) || '(перевод недоступен)';
   }, 3);
   const raw_text_ru = ruTexts.map((t, i) => `══════ СТРАНИЦА ${i + 1} из ${pageCount} ══════\n${t}`).join('\n\n');
 
-  // 4) JSON-сводка полей (начало + конец документа)
+  // JSON-сводка полей (начало + конец документа)
   const sample = `${raw_text.slice(0, 12000)}\n\n…(середина документа опущена)…\n\n${raw_text.slice(-5000)}`;
   let data;
   try {
@@ -678,6 +688,82 @@ async function recognizeLongPdfByPages(pdfBuffer, currency, docType) {
   if (docType && docType !== 'auto') data.document_type = docType;
   else if (!data.store_name && !data.receipt_date) data.document_type = 'contract';
   return data;
+}
+
+// Общая сборка многостраничного документа из буферов страниц (PDF-страницы или изображения):
+// каждая страница — отдельный vision-запрос, затем общая финализация
+async function assembleDocumentFromPages(pageBuffers, mimeTypes, currency, docType) {
+  console.log(`Постраничный режим: документ ${pageBuffers.length} стр.`);
+  const pageTexts = await runWithConcurrency(pageBuffers, (buf, i) => extractPageTextWithGemini(buf, mimeTypes[i] || 'application/pdf', i + 1, pageBuffers.length), 3);
+  return finalizeDocumentFromPageTexts(pageTexts, currency, docType);
+}
+
+// Текст ДИАПАЗОНА страниц из целого PDF (режим без pdf-lib: Gemini видит весь документ,
+// мы просим страницы N–M; каждая страница в ответе — с заголовком ═══ Страница K ═══)
+async function extractPageRangeTextWithGemini(pdfBuffer, fromPage, toPage, totalPages) {
+  if (!genAI) throw new Error('Постраничное распознавание требует GEMINI_API_KEY');
+  const model = genAI.getGenerativeModel({
+    model: DEFAULT_GEMINI_MODEL,
+    generationConfig: { maxOutputTokens: 16384, temperature: 0.1 }
+  });
+  const prompt = `Это отсканированный документ из ${totalPages} страниц.
+Извлеки ДОСЛОВНО весь текст СТРАНИЦ С ${fromPage} ПО ${toPage} включительно, на языке оригинала (НЕ переводи), сохраняя порядок строк.
+Каждую страницу начинай со строки-заголовка СТРОГО вида: ═══ Страница K ═══   (K — номер страницы).
+Не добавляй JSON, markdown, комментарии или сводки — только текст страниц.
+Если какая-то страница без текста (фото/пустая) — под её заголовком напиши: (страница без текста)`;
+  const result = await model.generateContent([
+    { inlineData: { data: pdfBuffer.toString('base64'), mimeType: 'application/pdf' } },
+    prompt
+  ]);
+  return (result.response.text() || '').trim();
+}
+
+// Разбор ответов диапазонов на отдельные страницы по заголовкам ═══ Страница K ═══
+function splitRangeTextsToPages(rangeTexts, pageCount) {
+  const pages = new Array(pageCount).fill(null);
+  for (const text of rangeTexts) {
+    if (!text) continue;
+    const re = /═══\s*Страница\s+(\d+)\s*═══/gi;
+    const marks = [];
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      marks.push({ page: parseInt(m[1], 10), bodyStart: re.lastIndex, markStart: m.index });
+    }
+    for (let i = 0; i < marks.length; i++) {
+      const p = marks[i].page;
+      const bodyEnd = i + 1 < marks.length ? marks[i + 1].markStart : text.length;
+      const body = text.slice(marks[i].bodyStart, bodyEnd).trim();
+      if (p >= 1 && p <= pageCount && !pages[p - 1] && body) pages[p - 1] = body;
+    }
+  }
+  return pages.map(t => t || '(страница не распознана)');
+}
+
+// Постраничный режим БЕЗ pdf-lib: целый PDF → текст диапазонами по 5 страниц
+async function recognizeLongPdfByPageRanges(pdfBuffer, pageCount, currency, docType) {
+  console.log(`Постраничный режим без pdf-lib: ${pageCount} стр., диапазоны по 5`);
+  const RANGE = 5;
+  const ranges = [];
+  for (let from = 1; from <= pageCount; from += RANGE) ranges.push([from, Math.min(pageCount, from + RANGE - 1)]);
+  const rangeTexts = await runWithConcurrency(ranges, (r) => extractPageRangeTextWithGemini(pdfBuffer, r[0], r[1], pageCount), 2);
+  const pageTexts = splitRangeTextsToPages(rangeTexts, pageCount);
+  return finalizeDocumentFromPageTexts(pageTexts, currency, docType);
+}
+
+// Постраничный режим для целого PDF: разбиваем на 1-страничные и отдаём сборщику
+async function recognizeLongPdfByPages(pdfBuffer, currency, docType) {
+  const { PDFDocument } = require('pdf-lib');
+  const src = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
+  const pageCount = src.getPageCount();
+
+  const pageBuffers = [];
+  for (let i = 0; i < pageCount; i++) {
+    const sub = await PDFDocument.create();
+    const [page] = await sub.copyPages(src, [i]);
+    sub.addPage(page);
+    pageBuffers.push(Buffer.from(await sub.save()));
+  }
+  return assembleDocumentFromPages(pageBuffers, pageBuffers.map(() => 'application/pdf'), currency, docType);
 }
 
 // Если у результата распознавания нет перевода — дозапрашиваем его отдельно
@@ -1111,12 +1197,25 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     let recognizeErrorMsg = null;
 
     // Многостраничный PDF (договор/эскритура/выписка/полис) — режим «по страницам»
-    const pdfPageCount = isPdf ? await getPdfPageCount(processedBuffer) : 0;
+    let pdfPageCount = isPdf ? await getPdfPageCount(processedBuffer) : 0;
+    if (isPdf && !pdfPageCount) pdfPageCount = await getPdfPageCountViaGemini(processedBuffer);
 
     try {
       if (pdfPageCount > LONG_PDF_PAGE_THRESHOLD) {
-        receiptData = await recognizeLongPdfByPages(processedBuffer, currency, docType);
-        recognitionMethod = `page-by-page ${pdfPageCount}p (gemini vision)`;
+        if (hasPdfLib()) {
+          // Основной путь: разрезаем PDF и распознаём каждую страницу отдельно
+          receiptData = await recognizeLongPdfByPages(processedBuffer, currency, docType);
+          recognitionMethod = `page-by-page ${pdfPageCount}p (gemini vision)`;
+        } else {
+          // Без pdf-lib: Gemini читает целый PDF, текст запрашиваем диапазонами по 5 страниц
+          receiptData = await recognizeLongPdfByPageRanges(processedBuffer, pdfPageCount, currency, docType);
+          recognitionMethod = `page-by-page ${pdfPageCount}p ranges (gemini, pdf-lib отсутствует)`;
+        }
+      } else if (isPdf && !model.startsWith('gemini') && !model.startsWith('ocrspace')) {
+        // Vision-модели Groq/OpenRouter/GitHub/Mistral/Kimi НЕ читают PDF — используем цепочку с Gemini
+        const auto = await recognizeWithFallback(processedBuffer, currency, docType, mimeType);
+        receiptData = auto.data;
+        recognitionMethod = `${model} (pdf → ${auto.model})`;
       } else if (model.startsWith('gemini')) {
         receiptData = await recognizeWithGemini(processedBuffer, model, currency, docType, mimeType);
       } else if (model.startsWith('groq')) {
@@ -1193,6 +1292,50 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
   }
 });
 
+// ========== UPLOAD DOCUMENT PAGES (несколько файлов = страницы ОДНОГО документа) ==========
+// Фронт отправляет все выбранные файлы как 'pages' — они собираются в один документ
+// с модулями ══════ СТРАНИЦА N ══════ (тот же конвейер, что у длинных PDF)
+app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, res) => {
+  try {
+    const token = req.query.token || req.body.token;
+    const user = tokens.get(token);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ error: 'No page files provided' });
+
+    const currency = req.body.currency || 'auto';
+    const docType = req.body.docType || 'auto';
+    const object = req.body.object || 'other';
+    const subtypeOverride = req.body.subtype && req.body.subtype !== 'auto' ? req.body.subtype : null;
+    if (!genAI) return res.status(500).json({ error: 'Постраничное распознавание требует GEMINI_API_KEY на бэкенде' });
+
+    // Подготовка страниц: изображения сжимаем как обычно, PDF-страницы — как есть
+    const pageBuffers = [];
+    const mimeTypes = [];
+    for (const f of files) {
+      const isPdf = f.mimetype === 'application/pdf' || /\.pdf$/i.test(f.originalname || '');
+      pageBuffers.push(isPdf ? f.buffer : await processImage(f.buffer));
+      mimeTypes.push(isPdf ? 'application/pdf' : 'image/jpeg');
+    }
+
+    // Обложка документа — первая страница (как фото чека)
+    const imageUrl = await uploadToStorage(pageBuffers[0], files[0].originalname, user.id, mimeTypes[0]);
+
+    const receiptData = await assembleDocumentFromPages(pageBuffers, mimeTypes, currency, docType);
+    const recognitionMethod = `page-by-page ${files.length}f (gemini vision)`;
+    receiptData.docType = docType === 'auto' ? (receiptData.document_type || 'contract') : docType;
+    receiptData.object = (object && object !== 'other') ? object : (receiptData.object || 'other');
+    if (subtypeOverride) receiptData.subtype = subtypeOverride;
+
+    const saved = await saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod);
+    res.json({ success: true, id: saved.id, ...saved, image_url: imageUrl });
+  } catch (e) {
+    console.error('upload-document-pages error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ========== REPROCESS ==========
 app.post('/api/reprocess-receipt', requireAuth, async (req, res) => {
   try {
@@ -1213,13 +1356,25 @@ app.post('/api/reprocess-receipt', requireAuth, async (req, res) => {
     const docType = req.body.docType || 'auto';
     
     // Многостраничный PDF (договор/эскритура/выписка/полис) — режим «по страницам»
-    const pdfPageCount = mimeType === 'application/pdf' ? await getPdfPageCount(buffer) : 0;
+    const isPdfDoc = mimeType === 'application/pdf';
+    let pdfPageCount = isPdfDoc ? await getPdfPageCount(buffer) : 0;
+    if (isPdfDoc && !pdfPageCount) pdfPageCount = await getPdfPageCountViaGemini(buffer);
 
     let receiptData;
     let pageModeMethod = null;
     if (pdfPageCount > LONG_PDF_PAGE_THRESHOLD) {
-      receiptData = await recognizeLongPdfByPages(buffer, currency, docType);
-      pageModeMethod = `page-by-page ${pdfPageCount}p (gemini vision)`;
+      if (hasPdfLib()) {
+        receiptData = await recognizeLongPdfByPages(buffer, currency, docType);
+        pageModeMethod = `page-by-page ${pdfPageCount}p (gemini vision)`;
+      } else {
+        receiptData = await recognizeLongPdfByPageRanges(buffer, pdfPageCount, currency, docType);
+        pageModeMethod = `page-by-page ${pdfPageCount}p ranges (gemini, pdf-lib отсутствует)`;
+      }
+    } else if (isPdfDoc && !model.startsWith('gemini') && !model.startsWith('ocrspace')) {
+      // Vision-модели Groq/OpenRouter/GitHub/Mistral/Kimi НЕ читают PDF — цепочка с Gemini
+      const auto = await recognizeWithFallback(buffer, currency, docType, mimeType);
+      receiptData = auto.data;
+      pageModeMethod = `${model} (pdf → ${auto.model})`;
     } else if (model.startsWith('gemini')) {
       receiptData = await recognizeWithGemini(buffer, model, currency, docType, mimeType);
     } else if (model.startsWith('groq')) {
@@ -1296,13 +1451,15 @@ app.get('/api/diagnostics', async (req, res) => {
   try {
     const columns = await getTableColumns();
     res.json({
-      version: '2026-08-02.10 (long docs: page-by-page PDF recognition + per-page output)',
+      version: '2026-08-02.12 (page mode works WITHOUT pdf-lib: gemini page ranges + gemini page count)',
       raw_text_ru_column: columns.includes('raw_text_ru'),
       fix_if_false: 'alter table receipts add column if not exists raw_text_ru text;',
       v7_columns: ['subtype', 'provider', 'valid_from', 'valid_to', 'meta', 'related_id', 'object_id'].every(c => columns.includes(c)),
       fix_v7_if_false: 'Выполни supabase-migration-v7.sql в Supabase SQL Editor',
       v9_columns: ['invoice_number', 'contract_number', 'supply_address', 'cups', 'meter_number', 'consumption', 'consumption_unit'].every(c => columns.includes(c)),
       fix_v9_if_false: 'Выполни supabase-migration-v9.sql в Supabase SQL Editor',
+      pdf_lib: hasPdfLib(),
+      fix_pdf_lib_if_false: 'Добавь "pdf-lib": "^1.17.1" в dependencies backend/package.json и задеплой',
       providers_configured: {
         gemini: !!process.env.GEMINI_API_KEY,
         groq: !!process.env.GROQ_API_KEY,
