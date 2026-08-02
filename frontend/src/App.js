@@ -1745,11 +1745,11 @@ function App() {
       {viewModal && (
         <div className="modal-overlay" onClick={() => setViewModal(null)}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
-            <div className="modal-header">
+            <div className="modal-header" style={{ flexShrink: 0 }}>
               <h2> Чек #{viewModal.id}</h2>
               <button className="modal-close" onClick={() => setViewModal(null)}>✕</button>
             </div>
-            <div className="modal-body">
+            <div className="modal-body" style={{ minHeight: 0 }}>
               <div className="modal-image-section">
                 {(() => {
                   // Если у документа сохранены все страницы (v13) — показываем галерею страниц
@@ -1953,16 +1953,14 @@ function App() {
                 ) : null}
               </div>
             </div>
-            <div className="modal-footer">
+            <div className="modal-footer" style={{ flexShrink: 0 }}>
               <button onClick={() => setViewModal(null)}>Закрыть</button>
-              {!editMode ? (
-                <button onClick={startEdit} style={{ background: '#f39c12' }}>✏️ Редактировать</button>
-              ) : (
-                <>
-                  <button onClick={() => setEditMode(false)} disabled={savingEdit} style={{ background: '#95a5a6' }}>Отмена</button>
-                  <button onClick={saveEdit} disabled={savingEdit} style={{ background: '#27ae60' }}>{savingEdit ? '⏳ Сохраняю...' : '💾 Сохранить'}</button>
-                </>
-              )}
+              {/* Кнопки редактирования НЕ монтируем/размонтируем, а прячем через display:
+                  иначе Safari (backdrop-filter на overlay) оставляет «призрак» удалённой
+                  оранжевой кнопки — линию через футер */}
+              <button onClick={startEdit} style={{ background: '#f39c12', display: editMode ? 'none' : undefined }}>✏️ Редактировать</button>
+              <button onClick={() => setEditMode(false)} disabled={savingEdit} style={{ background: '#95a5a6', display: editMode ? undefined : 'none' }}>Отмена</button>
+              <button onClick={saveEdit} disabled={savingEdit} style={{ background: '#27ae60', display: editMode ? undefined : 'none' }}>{savingEdit ? '⏳ Сохраняю...' : '💾 Сохранить'}</button>
               {user?.role === 'admin' && (
                 <button className="danger" onClick={() => deleteReceipt(viewModal.id)}> Удалить</button>
               )}
