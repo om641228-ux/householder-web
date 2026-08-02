@@ -219,6 +219,21 @@ Cambio: <как на документе>
     - subtype — подтип услуги/документа, ОДНО из значений: electricity (luz/electricidad), water (agua), gas, internet, phone (teléfono/móvil), comunidad, rent (alquiler), waste (basura/recogida de residuos), insurance_home, insurance_car, insurance_health, tax (impuestos/tasas), other. Для receipt — null. ВАЖНО: если документ определён как invoice, но это фактура за услуги (свет, вода, интернет, мусор, связь, comunidad) — subtype заполни ОБЯЗАТЕЛЬНО.
     - provider — компания-поставщик или эмитент документа (Iberdrola, Endesa, Movistar, Mapfre, название банка...).
     - valid_from / valid_to — период действия полиса/договора или период счёта в формате YYYY-MM-DD, если указаны на документе; иначе null.
+16. Коммунальные счета за воду/электричество (bill или invoice от коммунального провайдера) — дополнительно извлеки:
+    - invoice_number — номер фактуры/документа (Número de factura, Nº FACTURA, DOCUMENTO).
+    - contract_number — номер договора/контракта (Número de contrato, DATOS DEL CONTRATO Nº).
+    - supply_address — адрес поставки КАК НАПЕЧАТАНО на документе (Dirección de suministro, DIRECCION).
+    - cups — код CUPS точки поставки (только электричество, формат ES0031...); если нет — null.
+    - meter_number — номер счётчика (NÚMERO CONTADOR); если нет — null.
+    - consumption — потребление за период, ЧИСЛО (для света — кВт·ч, для воды — м³); если несколько строк потребления — сумма.
+    - consumption_unit — "kWh" для электричества, "m3" для воды.
+17. Объект недвижимости (object) — ОПРЕДЕЛИ ПО АДРЕСУ ПОСТАВКИ (supply_address) или адресу в документе:
+    - адрес содержит "Reykjavik" → "Duqe"
+    - адрес содержит "Callao" → "Maria"
+    - адрес содержит "Alcojora" → "Kit"
+    - адрес не подходит ни под одно правило (или это обычный чек из магазина) → null
+18. Поставщики и подтип услуги: AQUALIA / ENTEMANSER / муниципальная вода (Servicio Municipal de Suministro de Agua) → subtype "water"; IBERDROLA / ENDESA / PODO / GEO Alternativa → subtype "electricity".
+    store_name — ВСЕГДА оригинальное название компании/магазина КАК НАПЕЧАТАНО на документе (Iberdrola, Aqualia, PODO, Mercadona), БЕЗ перевода; перевод — только в store_name_ru.
 
 ПРАВИЛА ДЛЯ raw_text:
 - Модули идут строго в этом порядке, заголовок модуля — отдельная строка "══════ ИМЯ ══════"
@@ -246,6 +261,14 @@ Cambio: <как на документе>
   "provider": null,
   "valid_from": null,
   "valid_to": null,
+  "invoice_number": null,
+  "contract_number": null,
+  "supply_address": null,
+  "cups": null,
+  "meter_number": null,
+  "consumption": null,
+  "consumption_unit": null,
+  "object": null,
   "items": [
     {
       "name": "BROTHER MFD LASER MONO",
@@ -263,6 +286,24 @@ Cambio: <как на документе>
 // ========== AI RECOGNITION ==========
 // gemini-1.5-flash снят с поддержки на новых ключах (404) — используем 2.5
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+
+// Карта «адрес поставки → объект недвижимости» (см. AI_CONTEXT п. 9):
+// Reykjavik 7 → Duqe, Callao 1 → Maria, Alcojora → Kit
+const OBJECT_ADDRESS_MAP = [
+  { match: /reykjavik/i, object: 'Duqe' },
+  { match: /callao/i, object: 'Maria' },
+  { match: /alcojora/i, object: 'Kit' }
+];
+
+// Детерминированная страховка: находим объект по адресу, даже если модель проигнорировала правило 17 промпта
+function detectObjectByAddress(...texts) {
+  const haystack = texts.filter(Boolean).join('\n');
+  if (!haystack) return null;
+  for (const { match, object } of OBJECT_ADDRESS_MAP) {
+    if (match.test(haystack)) return object;
+  }
+  return null;
+}
 const GEMINI_FALLBACK_CANDIDATES = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'];
 
 async function recognizeWithGemini(imageBuffer, modelName, currency, docType, mimeType = 'image/jpeg') {
@@ -596,6 +637,26 @@ function parseAIResponse(text) {
       provider: data.provider || data.supplier || data.issuer || null,
       valid_from: normalizeDate(data.valid_from || data.start_date || data.period_from),
       valid_to: normalizeDate(data.valid_to || data.expiry_date || data.end_date || data.period_to || data.due_date),
+      // Поля коммунальных счетов (вода/свет) — правило 16 промпта
+      invoice_number: data.invoice_number || data.factura_number || data.document_number || null,
+      contract_number: data.contract_number || data.contract || data.contrato || null,
+      supply_address: data.supply_address || data.direccion_suministro || data.service_address || null,
+      cups: data.cups || null,
+      meter_number: data.meter_number || data.contador || null,
+      consumption: parseAmount(data.consumption ?? data.consumo),
+      consumption_unit: (() => {
+        const u = String(data.consumption_unit || data.unit || '').toLowerCase().trim().replace('³', '3').replace(/квт[·.]?ч/, 'kwh');
+        if (['kwh', 'kw/h', 'квтч'].includes(u)) return 'kWh';
+        if (['m3', 'м3', 'cubic'].includes(u)) return 'm3';
+        return null;
+      })(),
+      // Объект по адресу (правило 17): AI + детерминированная страховка по карте адресов
+      object: (() => {
+        const aiObject = data.object ? String(data.object).trim() : null;
+        const validObjects = OBJECT_ADDRESS_MAP.map(o => o.object);
+        if (aiObject && validObjects.includes(aiObject)) return aiObject;
+        return detectObjectByAddress(data.supply_address || '', data.raw_text || '');
+      })(),
       items: normalizeItems(data.items || data.products || data.goods || []),
       raw_text: Array.isArray(data.raw_text)
         ? data.raw_text.map(x => String(x)).join('\n')
@@ -756,6 +817,8 @@ async function getTableColumns() {
         'country', 'payment_method',
         'items', 'image_url', 'raw_text', 'raw_text_ru', 'document_type', 'object',
         'subtype', 'provider', 'valid_from', 'valid_to', 'meta', 'related_id', 'object_id',
+        'invoice_number', 'contract_number', 'supply_address', 'cups', 'meter_number',
+        'consumption', 'consumption_unit',
         'recognition_method', 'recognized_at', 'created_at', 'owner_id', 'owner_name'
       ];
     }
@@ -767,6 +830,8 @@ async function getTableColumns() {
       'country', 'payment_method',
       'items', 'image_url', 'raw_text', 'raw_text_ru', 'document_type', 'object',
       'subtype', 'provider', 'valid_from', 'valid_to', 'meta', 'related_id', 'object_id',
+      'invoice_number', 'contract_number', 'supply_address', 'cups', 'meter_number',
+      'consumption', 'consumption_unit',
       'recognition_method', 'recognized_at', 'created_at', 'owner_id', 'owner_name'
     ];
   }
@@ -814,6 +879,13 @@ async function saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod) {
     provider: receiptData.provider || null,
     valid_from: receiptData.valid_from || null,
     valid_to: receiptData.valid_to || null,
+    invoice_number: receiptData.invoice_number || null,
+    contract_number: receiptData.contract_number || null,
+    supply_address: receiptData.supply_address || null,
+    cups: receiptData.cups || null,
+    meter_number: receiptData.meter_number || null,
+    consumption: receiptData.consumption ?? null,
+    consumption_unit: receiptData.consumption_unit || null,
     object: receiptData.object || 'other',
     recognition_method: recognitionMethod,
     recognized_at: new Date().toISOString(),
@@ -912,7 +984,8 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
 
     // При docType='auto' берём тип, определённый AI по содержимому документа
     receiptData.docType = docType === 'auto' ? (receiptData.document_type || 'receipt') : docType;
-    receiptData.object = object;
+    // Объект: если пользователь явно выбрал в форме — его выбор; иначе объект из AI (правило 17, адрес поставки)
+    receiptData.object = (object && object !== 'other') ? object : (receiptData.object || 'other');
     // Ручной выбор подтипа на форме загрузки перекрывает определённый AI
     if (subtypeOverride) receiptData.subtype = subtypeOverride;
 
@@ -995,9 +1068,18 @@ app.post('/api/reprocess-receipt', requireAuth, async (req, res) => {
       provider: receiptData.provider || null,
       valid_from: receiptData.valid_from || null,
       valid_to: receiptData.valid_to || null,
+      invoice_number: receiptData.invoice_number || null,
+      contract_number: receiptData.contract_number || null,
+      supply_address: receiptData.supply_address || null,
+      cups: receiptData.cups || null,
+      meter_number: receiptData.meter_number || null,
+      consumption: receiptData.consumption ?? null,
+      consumption_unit: receiptData.consumption_unit || null,
       recognition_method: model,
       recognized_at: new Date().toISOString()
     };
+    // Объект по адресу поставки (правило 17): обновляем только если AI смог определить
+    if (receiptData.object) updateRecord.object = receiptData.object;
     const filteredUpdate = filterRecordByColumns(updateRecord, columns);
     
     const { data, error } = await supabaseAdmin
@@ -1021,11 +1103,13 @@ app.get('/api/diagnostics', async (req, res) => {
   try {
     const columns = await getTableColumns();
     res.json({
-      version: '2026-08-01.8 (subtype entity: upload selector + filter + bulk; expiry badge only insurance/contract)',
+      version: '2026-08-02.9 (utility fields: invoice/contract/CUPS/meter/consumption + address-to-object)',
       raw_text_ru_column: columns.includes('raw_text_ru'),
       fix_if_false: 'alter table receipts add column if not exists raw_text_ru text;',
       v7_columns: ['subtype', 'provider', 'valid_from', 'valid_to', 'meta', 'related_id', 'object_id'].every(c => columns.includes(c)),
       fix_v7_if_false: 'Выполни supabase-migration-v7.sql в Supabase SQL Editor',
+      v9_columns: ['invoice_number', 'contract_number', 'supply_address', 'cups', 'meter_number', 'consumption', 'consumption_unit'].every(c => columns.includes(c)),
+      fix_v9_if_false: 'Выполни supabase-migration-v9.sql в Supabase SQL Editor',
       providers_configured: {
         gemini: !!process.env.GEMINI_API_KEY,
         groq: !!process.env.GROQ_API_KEY,
@@ -1116,6 +1200,8 @@ app.put('/api/receipts/:id', requireAuth, async (req, res) => {
     const EDITABLE = ['store_name', 'store_name_ru', 'receipt_date', 'receipt_time',
       'total_amount', 'subtotal', 'tax_amount', 'currency', 'country', 'payment_method',
       'object', 'document_type', 'subtype', 'provider', 'valid_from', 'valid_to',
+      'invoice_number', 'contract_number', 'supply_address', 'cups', 'meter_number',
+      'consumption', 'consumption_unit',
       'related_id', 'meta', 'object_id'];
     const updates = {};
     for (const k of EDITABLE) {

@@ -150,6 +150,12 @@ CREATE TABLE receipts (
   meta JSONB DEFAULT '{}',   -- номер полиса, лицевой счёт, IBAN и прочее типовое
   related_id BIGINT REFERENCES receipts(id),  -- связь документ→документ (платёж → полис, счёт → договор)
   object_id BIGINT REFERENCES objects(id),    -- FK на объект (имя в object остаётся fallback)
+  -- колонки v9 (миграция supabase-migration-v9.sql) — коммунальные счета вода/свет:
+  invoice_number TEXT, contract_number TEXT,  -- № фактуры, № договора/контракта
+  supply_address TEXT,         -- Dirección de suministro — основа авто-определения объекта
+  cups TEXT,                   -- CUPS (электричество, ES0031...)
+  meter_number TEXT,           -- NÚMERO CONTADOR (счётчик воды)
+  consumption NUMERIC, consumption_unit TEXT,  -- потребление + 'kWh'|'m3'
   recognition_method TEXT,   -- какая модель распознавала (+ fallback info)
   recognized_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT NOW(),
@@ -266,14 +272,21 @@ Bucket: `receipt-images` (public, policies SELECT/INSERT/DELETE).
 
 ## 13. Порядок деплоя
 
-1. **Supabase (householder):** выполнить `supabase/setup.sql` (таблица + raw_text_ru + bucket + policies)
+1. **Supabase (householder):** выполнить `supabase/setup.sql` (таблица + raw_text_ru + bucket + policies), затем `supabase-migration-v7.sql` (objects + subtype/provider/valid_*/meta/related_id/object_id), затем `supabase-migration-v9.sql` (поля коммунальных счетов)
 2. **Railway householder-api:** репо GitHub, Root Directory `backend`, Build `npm install`, Start `node index.js`, Variables (п. 4 — ключи Supabase ОТ ПРОЕКТА HOUSEHOLDER)
 3. **Railway householder-web:** репо GitHub, Root Directory `frontend`, Build `npm run build`, Start `npx serve -s build`; в App.js `API_URL = 'https://householder-api-production.up.railway.app'`
 4. Проверка: `https://householder-api-production.up.railway.app/api/check-models` → JSON со всеми провайдерами
 
 ## 14. Changelog
 
-**2026-08-02 (текущая финальная версия, v8 — подтип как сущность + зум изображений)**
+**2026-08-02 (текущая финальная версия, v9 — коммунальные счета: поля, авто-объект по адресу, оригинальные названия)**
+- Поля счетов за воду/свет (миграция supabase-migration-v9.sql): invoice_number (№ фактуры), contract_number (№ договора), supply_address (Dirección de suministro), cups (электричество), meter_number (счётчик воды), consumption + consumption_unit ('kWh'|'m3'). Промпт правило 16; parseAIResponse/save/reprocess/PUT whitelist прокидывают; модалка показывает блок (Адрес поставки, № фактуры, № договора, CUPS, № счётчика, Потребление); на карточке — адрес поставки и потребление рядом с объектом; всё searchable
+- Авто-объект по адресу поставки (промпт правило 17 + ДЕТЕРМИНИРОВАННАЯ страховка): OBJECT_ADDRESS_MAP в index.js — Reykjavik → Duqe, Callao → Maria, Alcojora → Kit. detectObjectByAddress(supply_address, raw_text) срабатывает даже если модель проигнорировала правило. Приоритет: явный выбор пользователя в форме (≠'other') > AI/карта > 'other'. Reprocess обновляет object только если определён
+- Провайдер→подтип (промпт правило 18): AQUALIA/ENTEMANSER/муниципальная вода → water; IBERDROLA/ENDESA/PODO → electricity
+- Оригинальное название в заголовке: карточка, модалка, панели результата показывают store_name (оригинал: Iberdrola, Aqualia, PODO), перевод store_name_ru — отдельной строкой «Название (рус)» в модалке; правило 18 требует store_name строго как напечатано
+- Версия бэкенда: 2026-08-02.9 (watchdog обновлён синхронно)
+
+**2026-08-02 (v8 — подтип как сущность + зум изображений)**
 - Подтип (subtype) стал полноценной сущностью: селектор «Подтип» на странице загрузки (🤖 Авто или вручную — ручной выбор перекрывает AI, formData.subtype → upload-receipt); фильтр «Подтип» (ExcelFilter, значение 'none' = без подтипа); массовое действие «Сменить подтип...» → POST /api/bulk-update-subtype
 - Промпт (правило 15): subtype ОБЯЗАТЕЛЕН и для invoice, если это фактура за услуги (свет/вода/интернет/мусор/связь/comunidad) — «подтип фактуры»; добавлен waste (basura/recogida de residuos)
 - ФИКС логики: бейдж «⚠️ Истекает / ⛔ Истёк» — ТОЛЬКО для insurance/contract; у bill/bank valid_to — это конец расчётного периода (в модалке для них подпись «Период» вместо «Действует»). Раньше оплаченный счёт Iberdrola 2024 ошибочно показывал «⛔ Истёк»

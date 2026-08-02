@@ -1308,7 +1308,7 @@ function App() {
     if (!q) return true;
     const searchFields = [
       // 'Без названия' — тот же fallback, что и на карточке: поиск "названия" находит безымянные чеки
-      String(r.id || ''), String(r.store_name_ru || r.store_name || 'Без названия'),
+      String(r.id || ''), String(r.store_name || r.store_name_ru || 'Без названия'), String(r.store_name_ru || ''),
       String(r.raw_text || r.recognized_text || ''), String(r.raw_text_ru || ''),
       String(r.object || ''), String(r.currency || ''), String(r.owner_name || r.owner_id || ''),
       String(r.document_type || ''), String(DOC_TYPE_LABELS[r.document_type] || ''), String(r.total_amount || ''), String(r.subtotal || ''),
@@ -1319,6 +1319,8 @@ function App() {
       String(r.loyalty_card || ''),
       String(r.provider || ''), String(r.subtype || ''), String(SUBTYPE_LABELS[r.subtype] || ''),
       String(r.valid_from || ''), String(r.valid_to || ''),
+      String(r.supply_address || ''), String(r.invoice_number || ''), String(r.contract_number || ''),
+      String(r.cups || ''), String(r.meter_number || ''),
     ];
     const itemsText = (r.items || []).map(i =>
       `${i.name || ''} ${i.name_ru || ''} ${i.price || ''} ${i.quantity || ''} ${i.total || ''} ${i.category || ''} ${i.sku || ''}`
@@ -1480,11 +1482,11 @@ function App() {
         </div>
       </header>
 
-      {backendInfo && !String(backendInfo.version || '').includes('2026-08-01.8') && (
+      {backendInfo && !String(backendInfo.version || '').includes('2026-08-02.9') && (
         <div style={{ background: '#fdecea', border: '1px solid #e74c3c', color: '#c0392b', padding: '10px 16px', borderRadius: 8, margin: '10px 15px', fontSize: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <strong> Бэкенд устарел!</strong>
           <span>
-            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-01.8</code>.
+            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-02.9</code>.
             Задеплой свежий index.js (Railway → householder-api → Deploy latest commit), иначе перевод не заработает.
           </span>
           <button onClick={() => setBackendInfo(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', color: '#c0392b' }}>✕</button>
@@ -1637,13 +1639,22 @@ function App() {
               <div className="modal-info">
                 <div className="info-block">
                   <h3>Основная информация</h3>
-                  <p><strong>Магазин:</strong> <HighlightText text={viewModal.store_name_ru || viewModal.store_name || '—'} query={searchQuery} /></p>
+                  <p><strong>Магазин:</strong> <HighlightText text={viewModal.store_name || viewModal.store_name_ru || '—'} query={searchQuery} /></p>
+                  {viewModal.store_name_ru && viewModal.store_name && viewModal.store_name_ru !== viewModal.store_name && (
+                    <p style={{ marginTop: -6 }}><strong>Название (рус):</strong> <HighlightText text={viewModal.store_name_ru} query={searchQuery} /></p>
+                  )}
                   <p><strong>Дата:</strong> {formatDate(viewModal.receipt_date)} {viewModal.receipt_time}</p>
                   <p><strong>Итого:</strong> {formatAmount(viewModal.total_amount, viewModal.currency)}</p>
                   <p><strong>Тип:</strong> {DOC_TYPE_LABELS[viewModal.document_type] || viewModal.document_type || '🧾 Чек'}</p>
                   <p><strong>Объект:</strong> <HighlightText text={viewModal.object || '—'} query={searchQuery} /></p>
                   {viewModal.subtype && <p><strong>Подтип:</strong> {SUBTYPE_LABELS[viewModal.subtype] || viewModal.subtype}</p>}
                   {viewModal.provider && <p><strong>Поставщик:</strong> <HighlightText text={viewModal.provider} query={searchQuery} /></p>}
+                  {viewModal.supply_address && <p><strong>Адрес поставки:</strong> <HighlightText text={viewModal.supply_address} query={searchQuery} /></p>}
+                  {viewModal.invoice_number && <p><strong>№ фактуры:</strong> {viewModal.invoice_number}</p>}
+                  {viewModal.contract_number && <p><strong>№ договора:</strong> {viewModal.contract_number}</p>}
+                  {viewModal.cups && <p><strong>CUPS:</strong> {viewModal.cups}</p>}
+                  {viewModal.meter_number && <p><strong>№ счётчика:</strong> {viewModal.meter_number}</p>}
+                  {viewModal.consumption != null && <p><strong>Потребление:</strong> {viewModal.consumption} {viewModal.consumption_unit || ''}</p>}
                   {(viewModal.valid_from || viewModal.valid_to) && (
                     <p><strong>{['bill', 'bank'].includes(viewModal.document_type) ? 'Период' : 'Действует'}:</strong> {viewModal.valid_from ? formatDate(viewModal.valid_from) : '—'} → {viewModal.valid_to ? formatDate(viewModal.valid_to) : '—'}
                       {expiryInfo(viewModal) && <span style={{ marginLeft: 8, color: expiryInfo(viewModal).color, fontWeight: 600 }}>{expiryInfo(viewModal).text}</span>}
@@ -1858,7 +1869,7 @@ function App() {
                   </div>
                   <div className="result-info">
                     <p><strong>ID:</strong> {lastSavedReceipt.id}</p>
-                    <p><strong>Магазин:</strong> {lastSavedReceipt.store_name_ru || lastSavedReceipt.store_name || '—'}</p>
+                    <p><strong>Магазин:</strong> {lastSavedReceipt.store_name || lastSavedReceipt.store_name_ru || '—'}</p>
                     <p><strong>Дата:</strong> {formatDate(lastSavedReceipt.receipt_date)}</p>
                     <p><strong>Итого:</strong> {formatAmount(lastSavedReceipt.total_amount, lastSavedReceipt.currency)}</p>
                     <p><strong>Товаров:</strong> {lastSavedReceipt.items?.length || 0}</p>
@@ -1943,7 +1954,7 @@ function App() {
                   <span style={{ flex: 1 }}>{res.file}</span>
                   {res.status === 'success' && res.receipt && (
                     <span style={{ color: '#155724' }}>
-                      {(DOC_TYPE_LABELS[res.receipt.document_type] || '🧾 Чек').split(' ')[0]} {res.receipt.store_name_ru || res.receipt.store_name || 'Документ'} — {formatAmount(res.receipt.total_amount, res.receipt.currency)}
+                      {(DOC_TYPE_LABELS[res.receipt.document_type] || '🧾 Чек').split(' ')[0]} {res.receipt.store_name || res.receipt.store_name_ru || 'Документ'} — {formatAmount(res.receipt.total_amount, res.receipt.currency)}
                     </span>
                   )}
                   {res.status === 'error' && (
@@ -2150,7 +2161,7 @@ function App() {
                       <div className="receipt-header" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, paddingTop: 2 }}>
                         <input type="checkbox" checked={selectedReceiptIds.has(receipt.id)} onChange={() => toggleSelect(receipt.id)} style={{ width: 20, height: 20, cursor: 'pointer', flexShrink: 0, marginTop: 2 }} />
                         <h3 style={{ margin: 0, flex: 1, lineHeight: 1.3 }}>
-                          <HighlightText text={receipt.store_name_ru || receipt.store_name || 'Без названия'} query={searchQuery} />
+                          <HighlightText text={receipt.store_name || receipt.store_name_ru || 'Без названия'} query={searchQuery} />
                         </h3>
                         <span className="type-badge" style={{ flexShrink: 0 }}>{DOC_TYPE_LABELS[receipt.document_type] || receipt.document_type || '🧾 Чек'}</span>
                         {dupAllIds.has(receipt.id) && (
@@ -2172,6 +2183,12 @@ function App() {
                         <p style={{ fontSize: 12, color: '#7f8c8d', margin: '4px 0' }}>
                           <HighlightText text={receipt.object} query={searchQuery} />
                           {receipt.subtype && <span style={{ marginLeft: 6, color: '#95a5a6' }}>{SUBTYPE_LABELS[receipt.subtype] || receipt.subtype}</span>}
+                          {receipt.consumption != null && <span style={{ marginLeft: 6, color: '#95a5a6' }}>{receipt.consumption} {receipt.consumption_unit || ''}</span>}
+                        </p>
+                      )}
+                      {receipt.supply_address && (
+                        <p style={{ fontSize: 11, color: '#95a5a6', margin: '2px 0' }}>
+                          <HighlightText text={receipt.supply_address} query={searchQuery} />
                         </p>
                       )}
                       <p style={{ fontSize: 12, color: '#3498db', margin: '4px 0', fontWeight: 500 }}>
@@ -2237,7 +2254,7 @@ function App() {
                   />
                 )}
                 <div style={{ background: 'rgba(255,255,255,0.06)', borderRadius: 12, padding: 14, lineHeight: 1.6 }}>
-                  <div><strong>Магазин:</strong> {lastSavedReceipt.store_name_ru || lastSavedReceipt.store_name || '—'}</div>
+                  <div><strong>Магазин:</strong> {lastSavedReceipt.store_name || lastSavedReceipt.store_name_ru || '—'}</div>
                   <div><strong>Дата:</strong> {formatDate(lastSavedReceipt.receipt_date)}</div>
                   <div><strong>Итого:</strong> {formatAmount(lastSavedReceipt.total_amount, lastSavedReceipt.currency)}</div>
                   <div><strong>Товаров:</strong> {lastSavedReceipt.items?.length || 0}</div>
