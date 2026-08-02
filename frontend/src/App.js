@@ -402,7 +402,7 @@ function App() {
   const uploadWithProgress = (url, formData, onUploadProgress) => new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', url);
-    xhr.timeout = 300000; // 5 мин: длинные чеки (100+ товаров) — модель пишет оригинал + перевод
+    xhr.timeout = 900000; // 15 мин: многостраничные документы (эскритура 29 стр.) распознаются постранично
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onUploadProgress(e.loaded / e.total);
     };
@@ -1276,6 +1276,8 @@ function App() {
 
   // Разница Δ: |итог чека − сумма товаров| — та же логика, что на карточке
   const diffOf = (r) => {
+    // Δ — только для документов со строками товаров; у договоров/полисов/выписок её нет
+    if (!['receipt', 'invoice', 'bill'].includes(r.document_type || 'receipt')) return null;
     const total = parseFloat(r.total_amount) || 0;
     const itemsTotal = calculateItemsTotal(r.items);
     if (!(total > 0) && !(itemsTotal > 0)) return null; // нет данных — на карточке «—»
@@ -1482,11 +1484,11 @@ function App() {
         </div>
       </header>
 
-      {backendInfo && !String(backendInfo.version || '').includes('2026-08-02.9') && (
+      {backendInfo && !String(backendInfo.version || '').includes('2026-08-02.10') && (
         <div style={{ background: '#fdecea', border: '1px solid #e74c3c', color: '#c0392b', padding: '10px 16px', borderRadius: 8, margin: '10px 15px', fontSize: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <strong> Бэкенд устарел!</strong>
           <span>
-            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-02.9</code>.
+            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-02.10</code>.
             Задеплой свежий index.js (Railway → householder-api → Deploy latest commit), иначе перевод не заработает.
           </span>
           <button onClick={() => setBackendInfo(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', color: '#c0392b' }}>✕</button>
@@ -1668,7 +1670,7 @@ function App() {
                     const itemsTotal = calculateItemsTotal(viewModal.items);
                     const total = parseFloat(viewModal.total_amount) || 0;
                     const diff = Math.abs(total - itemsTotal).toFixed(2);
-                    if (diff > 0.01) {
+                    if (diff > 0.01 && ['receipt', 'invoice', 'bill'].includes(viewModal.document_type || 'receipt')) {
                       return (
                         <p style={{ color: '#e74c3c', fontWeight: 600 }}>
                           Разница: {diff} {viewModal.currency || ''}
@@ -2138,7 +2140,9 @@ function App() {
                   const itemsTotal = calculateItemsTotal(receipt.items);
                   const total = parseFloat(receipt.total_amount) || 0;
                   const diff = Math.abs(total - itemsTotal).toFixed(2);
-                  const hasDiff = diff > 0.01;
+                  // Δ имеет смысл только для документов со строками товаров (чек/фактура/счёт);
+                  // у договоров, полисов и выписок суммы нет строк — Δ не показываем
+                  const hasDiff = diff > 0.01 && ['receipt', 'invoice', 'bill'].includes(receipt.document_type || 'receipt');
                   // Заголовок группы, когда меняется год-месяц
                   const gk = groupKeyOf(receipt);
                   const prevGk = idx > 0 ? groupKeyOf(paginatedReceipts[idx - 1]) : null;

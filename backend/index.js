@@ -500,6 +500,186 @@ async function translateRawText(rawText) {
   return null;
 }
 
+// ========== МНОГОСТРАНИЧНЫЕ ДОКУМЕНТЫ: распознавание ПО СТРАНИЦАМ ==========
+// Договоры, эскритуры (купля-продажа недвижимости), выписки, полисы:
+// PDF длиннее LONG_PDF_PAGE_THRESHOLD страниц обрабатывается постранично
+// (Gemini vision по 1-страничным PDF), вывод — модулями
+// ══════ СТРАНИЦА N ══════ в raw_text и raw_text_ru.
+// ТРЕБУЕТ пакет pdf-lib в backend/package.json ("pdf-lib": "^1.17.1")!
+
+const LONG_PDF_PAGE_THRESHOLD = 2;
+
+async function getPdfPageCount(pdfBuffer) {
+  try {
+    const { PDFDocument } = require('pdf-lib');
+    const doc = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
+    return doc.getPageCount();
+  } catch (e) {
+    console.warn('getPdfPageCount: не удалось посчитать страницы (установи pdf-lib):', e.message);
+    return 1;
+  }
+}
+
+// Текст одной страницы через Gemini vision (1-страничный PDF)
+async function extractPageTextWithGemini(pagePdfBuffer, pageNum, totalPages) {
+  if (!genAI) throw new Error('Постраничное распознавание требует GEMINI_API_KEY (vision по PDF-страницам)');
+  const model = genAI.getGenerativeModel({
+    model: DEFAULT_GEMINI_MODEL,
+    generationConfig: { maxOutputTokens: 8192, temperature: 0.1 }
+  });
+  const prompt = `Это страница ${pageNum} из ${totalPages} отсканированного многостраничного документа (договор, эскритура купли-продажи, банковская выписка, полис).
+Извлеки ВЕСЬ текст этой страницы ДОСЛОВНО, на языке оригинала (НЕ переводи), сохраняя порядок строк и, по возможности, структуру (подписи полей, таблицы построчно).
+Не добавляй ничего от себя: ни JSON, ни markdown, ни комментарии, ни сводки — только текст страницы.
+Если на странице нет текста (чистое фото/пустая) — верни одну строку: (страница без текста)`;
+  const result = await model.generateContent([
+    { inlineData: { data: pagePdfBuffer.toString('base64'), mimeType: 'application/pdf' } },
+    prompt
+  ]);
+  const t = (result.response.text() || '').trim();
+  return t || '(страница без текста)';
+}
+
+// Пул параллельных задач: не более concurrency одновременно (RPM-лимиты AI-провайдеров)
+async function runWithConcurrency(items, worker, concurrency = 3) {
+  const results = new Array(items.length);
+  let idx = 0;
+  const lanes = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (idx < items.length) {
+      const i = idx++;
+      try {
+        results[i] = await worker(items[i], i);
+      } catch (e) {
+        console.error(`page ${i + 1} failed:`, e.message);
+        results[i] = `(ошибка распознавания страницы: ${String(e.message).slice(0, 150)})`;
+      }
+    }
+  });
+  await Promise.all(lanes);
+  return results;
+}
+
+// Текстовый запрос с цепочкой провайдеров (сводка полей по тексту документа)
+async function callTextChain(prompt, maxTokens = 8192) {
+  const errors = [];
+  if (genAI) {
+    try {
+      const m = genAI.getGenerativeModel({ model: DEFAULT_GEMINI_MODEL, generationConfig: { maxOutputTokens: maxTokens, temperature: 0.1 } });
+      const r = await m.generateContent(prompt);
+      const t = r.response.text();
+      if (t && t.trim().length > 2) return t.trim();
+    } catch (e) { errors.push(`gemini: ${e.message}`); }
+  }
+  if (groq) {
+    try {
+      const r = await groq.chat.completions.create({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'user', content: prompt }], max_tokens: Math.min(maxTokens, 8192), temperature: 0.1 });
+      const t = r.choices[0].message.content;
+      if (t && t.trim().length > 2) return t.trim();
+    } catch (e) { errors.push(`groq: ${e.message}`); }
+  }
+  for (const key of ['openrouter', 'github', 'mistral', 'kimi']) {
+    const cfg = OPENAI_COMPAT_PROVIDERS[key];
+    if (!cfg || !cfg.apiKey) continue;
+    try {
+      const body = {
+        model: cfg.defaultModel,
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: key === 'mistral' ? 8192 : maxTokens,
+        temperature: 0.1
+      };
+      if (key === 'kimi') {
+        delete body.temperature;
+        if (/kimi-k3/i.test(cfg.defaultModel)) {
+          delete body.max_tokens;
+          body.max_completion_tokens = maxTokens;
+          body.reasoning_effort = 'low';
+        }
+      }
+      const r = await axios.post(`${cfg.baseURL}/chat/completions`, body, {
+        headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', ...cfg.extraHeaders },
+        timeout: 180000
+      });
+      const t = r.data.choices?.[0]?.message?.content;
+      if (t && t.trim().length > 2) return t.trim();
+    } catch (e) { errors.push(`${key}: ${e.message}`); }
+  }
+  throw new Error('callTextChain: все провайдеры недоступны: ' + errors.join(' | '));
+}
+
+// Промпт JSON-сводки полей по распознанному тексту многостраничного документа
+function buildDocumentSummaryPrompt(textSample) {
+  return `Ты анализируешь многостраничный документ (договор купли-продажи недвижимости/эскритура, контракт, страховой полис, банковская выписка), распознанный по страницам. Верни ТОЛЬКО JSON, без markdown и комментариев:
+{
+  "store_name": "краткое название документа/главного контрагента НА ЯЗЫКЕ ОРИГИНАЛА (пример: Escritura de compraventa — Jardines del Duque), БЕЗ перевода",
+  "store_name_ru": "перевод store_name на русский",
+  "receipt_date": "YYYY-MM-DD — главная дата документа (подписание/выдача)",
+  "receipt_time": null,
+  "total_amount": главная сумма ЧИСЛОМ (precio de compraventa / цена сделки, сумма полиса) или null,
+  "subtotal": null, "tax_amount": null, "tax_rate": null,
+  "currency": "EUR",
+  "payment_method": null, "country": null,
+  "document_type": "contract | insurance | bank | other",
+  "subtype": одно из [electricity, water, gas, internet, phone, comunidad, rent, waste, insurance_home, insurance_car, insurance_health, tax, other] или null,
+  "provider": "нотариус / банк / компания-эмитент или null",
+  "valid_from": "YYYY-MM-DD или null", "valid_to": "YYYY-MM-DD или null",
+  "invoice_number": "номер документа/протокола (número de protocolo) или null",
+  "contract_number": "номер договора или null",
+  "supply_address": "ПОЛНЫЙ адрес недвижимости/объекта как напечатан (ищи внимательно: Dirección, Finca, sitio, Calle) или null",
+  "cups": null, "meter_number": null, "consumption": null, "consumption_unit": null,
+  "object": "Duqe — если адрес содержит Reykjavik; Maria — если Callao; Kit — если Alcojora; иначе null",
+  "items": [],
+  "raw_text": null, "raw_text_ru": null
+}
+
+Текст документа (фрагменты — начало и конец):
+
+${textSample}`;
+}
+
+// Главная функция постраничного режима: текст по страницам + перевод по страницам + JSON-сводка
+async function recognizeLongPdfByPages(pdfBuffer, currency, docType) {
+  const { PDFDocument } = require('pdf-lib');
+  const src = await PDFDocument.load(pdfBuffer, { ignoreEncryption: true });
+  const pageCount = src.getPageCount();
+  console.log(`Постраничный режим: документ ${pageCount} стр.`);
+
+  // 1) Разбиваем PDF на 1-страничные документы
+  const pageBuffers = [];
+  for (let i = 0; i < pageCount; i++) {
+    const sub = await PDFDocument.create();
+    const [page] = await sub.copyPages(src, [i]);
+    sub.addPage(page);
+    pageBuffers.push(Buffer.from(await sub.save()));
+  }
+
+  // 2) Текст каждой страницы — Gemini vision (3 параллельно)
+  const pageTexts = await runWithConcurrency(pageBuffers, (buf, i) => extractPageTextWithGemini(buf, i + 1, pageCount), 3);
+  const raw_text = pageTexts.map((t, i) => `══════ СТРАНИЦА ${i + 1} из ${pageCount} ══════\n${t}`).join('\n\n');
+
+  // 3) Перевод каждой страницы — текстовая цепочка (3 параллельно)
+  const ruTexts = await runWithConcurrency(pageTexts, async (t) => {
+    if (/^\((ошибка|страница без текста)/.test(t)) return t;
+    return (await translateRawText(t)) || '(перевод недоступен)';
+  }, 3);
+  const raw_text_ru = ruTexts.map((t, i) => `══════ СТРАНИЦА ${i + 1} из ${pageCount} ══════\n${t}`).join('\n\n');
+
+  // 4) JSON-сводка полей (начало + конец документа)
+  const sample = `${raw_text.slice(0, 12000)}\n\n…(середина документа опущена)…\n\n${raw_text.slice(-5000)}`;
+  let data;
+  try {
+    data = parseAIResponse(await callTextChain(buildDocumentSummaryPrompt(sample)));
+  } catch (e) {
+    console.error('Сводка документа не удалась:', e.message);
+    data = parseAIResponse('{}');
+  }
+  data.raw_text = raw_text;
+  data.raw_text_ru = raw_text_ru;
+  if (!data.object) data.object = detectObjectByAddress(data.supply_address, raw_text);
+  if (!Array.isArray(data.items)) data.items = [];
+  if (docType && docType !== 'auto') data.document_type = docType;
+  else if (!data.store_name && !data.receipt_date) data.document_type = 'contract';
+  return data;
+}
+
 // Если у результата распознавания нет перевода — дозапрашиваем его отдельно
 async function ensureRawTextRu(data) {
   if (!data || !data.raw_text || data.raw_text_ru) return data;
@@ -929,9 +1109,15 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     let recognitionMethod = model;
     let fallback = false;
     let recognizeErrorMsg = null;
-    
+
+    // Многостраничный PDF (договор/эскритура/выписка/полис) — режим «по страницам»
+    const pdfPageCount = isPdf ? await getPdfPageCount(processedBuffer) : 0;
+
     try {
-      if (model.startsWith('gemini')) {
+      if (pdfPageCount > LONG_PDF_PAGE_THRESHOLD) {
+        receiptData = await recognizeLongPdfByPages(processedBuffer, currency, docType);
+        recognitionMethod = `page-by-page ${pdfPageCount}p (gemini vision)`;
+      } else if (model.startsWith('gemini')) {
         receiptData = await recognizeWithGemini(processedBuffer, model, currency, docType, mimeType);
       } else if (model.startsWith('groq')) {
         receiptData = await recognizeWithGroq(processedBuffer, model, currency, docType);
@@ -1026,8 +1212,15 @@ app.post('/api/reprocess-receipt', requireAuth, async (req, res) => {
     const currency = req.body.currency || 'auto';
     const docType = req.body.docType || 'auto';
     
+    // Многостраничный PDF (договор/эскритура/выписка/полис) — режим «по страницам»
+    const pdfPageCount = mimeType === 'application/pdf' ? await getPdfPageCount(buffer) : 0;
+
     let receiptData;
-    if (model.startsWith('gemini')) {
+    let pageModeMethod = null;
+    if (pdfPageCount > LONG_PDF_PAGE_THRESHOLD) {
+      receiptData = await recognizeLongPdfByPages(buffer, currency, docType);
+      pageModeMethod = `page-by-page ${pdfPageCount}p (gemini vision)`;
+    } else if (model.startsWith('gemini')) {
       receiptData = await recognizeWithGemini(buffer, model, currency, docType, mimeType);
     } else if (model.startsWith('groq')) {
       receiptData = await recognizeWithGroq(buffer, model, currency, docType);
@@ -1075,7 +1268,7 @@ app.post('/api/reprocess-receipt', requireAuth, async (req, res) => {
       meter_number: receiptData.meter_number || null,
       consumption: receiptData.consumption ?? null,
       consumption_unit: receiptData.consumption_unit || null,
-      recognition_method: model,
+      recognition_method: pageModeMethod || model,
       recognized_at: new Date().toISOString()
     };
     // Объект по адресу поставки (правило 17): обновляем только если AI смог определить
@@ -1103,7 +1296,7 @@ app.get('/api/diagnostics', async (req, res) => {
   try {
     const columns = await getTableColumns();
     res.json({
-      version: '2026-08-02.9 (utility fields: invoice/contract/CUPS/meter/consumption + address-to-object)',
+      version: '2026-08-02.10 (long docs: page-by-page PDF recognition + per-page output)',
       raw_text_ru_column: columns.includes('raw_text_ru'),
       fix_if_false: 'alter table receipts add column if not exists raw_text_ru text;',
       v7_columns: ['subtype', 'provider', 'valid_from', 'valid_to', 'meta', 'related_id', 'object_id'].every(c => columns.includes(c)),

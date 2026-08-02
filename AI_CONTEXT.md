@@ -273,13 +273,23 @@ Bucket: `receipt-images` (public, policies SELECT/INSERT/DELETE).
 ## 13. Порядок деплоя
 
 1. **Supabase (householder):** выполнить `supabase/setup.sql` (таблица + raw_text_ru + bucket + policies), затем `supabase-migration-v7.sql` (objects + subtype/provider/valid_*/meta/related_id/object_id), затем `supabase-migration-v9.sql` (поля коммунальных счетов)
-2. **Railway householder-api:** репо GitHub, Root Directory `backend`, Build `npm install`, Start `node index.js`, Variables (п. 4 — ключи Supabase ОТ ПРОЕКТА HOUSEHOLDER)
+2. **Railway householder-api:** репо GitHub, Root Directory `backend`, Build `npm install`, Start `node index.js`, Variables (п. 4 — ключи Supabase ОТ ПРОЕКТА HOUSEHOLDER). В backend/package.json обязательна зависимость `"pdf-lib": "^1.17.1"` (постраничный режим, v10)
 3. **Railway householder-web:** репо GitHub, Root Directory `frontend`, Build `npm run build`, Start `npx serve -s build`; в App.js `API_URL = 'https://householder-api-production.up.railway.app'`
 4. Проверка: `https://householder-api-production.up.railway.app/api/check-models` → JSON со всеми провайдерами
 
 ## 14. Changelog
 
-**2026-08-02 (текущая финальная версия, v9 — коммунальные счета: поля, авто-объект по адресу, оригинальные названия)**
+**2026-08-02 (текущая финальная версия, v10 — многостраничные документы: распознавание и вывод ПО СТРАНИЦАМ)**
+- Постраничный режим для договоров/эскритур/выписок/полисов: PDF длиннее 2 страниц (LONG_PDF_PAGE_THRESHOLD) обрабатывается иначе — pdf-lib разбивает документ на 1-страничные PDF; каждая страница распознаётся Gemini vision отдельным запросом (дословный текст оригинала, без JSON); raw_text собирается модулями `══════ СТРАНИЦА N из M ══════`; перевод — тоже ПО СТРАНИЦАМ (translateRawText на каждую), raw_text_ru с теми же модулями; параллельность 3 (runWithConcurrency — RPM-лимиты); страница с ошибкой не роняет документ — встаёт плашка «(ошибка распознавания страницы)»
+- JSON-сводка полей (название, дата, сумма сделки, тип, адрес, № протокола/договора, объект по адресу) — отдельным текстовым запросом callTextChain (Gemini → Groq → OpenRouter/GitHub/Mistral/Kimi) по началу (12k) + концу (5k) документа, через buildDocumentSummaryPrompt; результат прогоняется через обычный parseAIResponse
+- Режим работает и в upload-receipt, и в reprocess-receipt; recognition_method = `page-by-page Np (gemini vision)`
+- **НОВАЯ ЗАВИСИМОСТЬ backend/package.json: `"pdf-lib": "^1.17.1"`** (pure JS, Railway-safe, нативных бинарей не требует). Без неё getPdfPageCount вернёт 1 → старый цельный режим (деградация безопасная)
+- Таймаут фронта при загрузке: 300 сек → 900 сек (29-страничная эскритура: ~29 vision-запросов + ~29 переводов)
+- Δ (разница сумм) теперь только для receipt/invoice/bill: у договоров/полисов/выписок нет товарных строк — Δ и её фильтр не показывают шум (diffOf → null → корзина «— Нет сумм»)
+- Тестовый документ: ESCRITURA JARDINES DEL DUQUE 19.09.2017 — 29 страниц, ПОЛНОСТЬЮ скан без текстового слоя (только vision)
+- Версия бэкенда: 2026-08-02.10 (watchdog обновлён синхронно)
+
+**2026-08-02 (v9 — коммунальные счета: поля, авто-объект по адресу, оригинальные названия)**
 - Поля счетов за воду/свет (миграция supabase-migration-v9.sql): invoice_number (№ фактуры), contract_number (№ договора), supply_address (Dirección de suministro), cups (электричество), meter_number (счётчик воды), consumption + consumption_unit ('kWh'|'m3'). Промпт правило 16; parseAIResponse/save/reprocess/PUT whitelist прокидывают; модалка показывает блок (Адрес поставки, № фактуры, № договора, CUPS, № счётчика, Потребление); на карточке — адрес поставки и потребление рядом с объектом; всё searchable
 - Авто-объект по адресу поставки (промпт правило 17 + ДЕТЕРМИНИРОВАННАЯ страховка): OBJECT_ADDRESS_MAP в index.js — Reykjavik → Duqe, Callao → Maria, Alcojora → Kit. detectObjectByAddress(supply_address, raw_text) срабатывает даже если модель проигнорировала правило. Приоритет: явный выбор пользователя в форме (≠'other') > AI/карта > 'other'. Reprocess обновляет object только если определён
 - Провайдер→подтип (промпт правило 18): AQUALIA/ENTEMANSER/муниципальная вода → water; IBERDROLA/ENDESA/PODO → electricity
