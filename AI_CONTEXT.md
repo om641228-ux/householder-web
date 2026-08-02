@@ -104,6 +104,7 @@ Node.js >= 20.0.0. Supabase подключён с `realtime.transport: ws` (об
 | POST | `/api/bulk-update-object` | Массовая смена объекта |
 | POST | `/api/bulk-update-currency` | Массовая смена валюты |
 | POST | `/api/bulk-update-type` | Массовая смена типа (body: {ids, document_type} — один из 7 типов, см. ниже) |
+| POST | `/api/bulk-update-subtype` | Массовая смена подтипа (body: {ids, subtype} — одно из 13 значений SUBTYPE_LABELS) |
 | POST | `/api/upload-receipt` | Загрузка + распознавание (multipart/form-data: image/pdf, model, currency, docType, object, token) |
 | POST | `/api/reprocess-receipt` | Перераспознавание |
 | POST | `/api/translate-receipt` | Перевод raw_text существующего чека (без перераспознавания) |
@@ -272,7 +273,14 @@ Bucket: `receipt-images` (public, policies SELECT/INSERT/DELETE).
 
 ## 14. Changelog
 
-**2026-08-01 (текущая финальная версия, v7 — домашние документы, шаг 2: объекты и метаданные)**
+**2026-08-02 (текущая финальная версия, v8 — подтип как сущность + зум изображений)**
+- Подтип (subtype) стал полноценной сущностью: селектор «Подтип» на странице загрузки (🤖 Авто или вручную — ручной выбор перекрывает AI, formData.subtype → upload-receipt); фильтр «Подтип» (ExcelFilter, значение 'none' = без подтипа); массовое действие «Сменить подтип...» → POST /api/bulk-update-subtype
+- Промпт (правило 15): subtype ОБЯЗАТЕЛЕН и для invoice, если это фактура за услуги (свет/вода/интернет/мусор/связь/comunidad) — «подтип фактуры»; добавлен waste (basura/recogida de residuos)
+- ФИКС логики: бейдж «⚠️ Истекает / ⛔ Истёк» — ТОЛЬКО для insurance/contract; у bill/bank valid_to — это конец расчётного периода (в модалке для них подпись «Период» вместо «Действует»). Раньше оплаченный счёт Iberdrola 2024 ошибочно показывал «⛔ Истёк»
+- Увеличение изображений на странице распознавания: клик по превью в drop-zone открывает полноэкранный просмотр (раньше клик по превью открывал файловый диалог — превью внутри label htmlFor!); в полноэкранном режиме клик по фото переключает «уместить в экран ⇄ натуральный размер» (fsZoom), скролл, Esc — закрыть. Тот же просмотр используется в модалке карточки и панелях результата
+- Версия бэкенда: 2026-08-01.8 (watchdog обновлён синхронно)
+
+**2026-08-01 (v7 — домашние документы, шаг 2: объекты и метаданные)**
 - Модель данных: ОДНА таблица receipts (все документы) + таблица objects (дома: name UNIQUE, address, notes) + гибкие колонки вместо таблицы-под-тип: subtype, provider, valid_from, valid_to, meta JSONB, related_id (связь документ→документ), object_id (FK). Миграция — supabase-migration-v7.sql: сидит objects из distinct receipts.object и бэкфиллит object_id по имени
 - Бэкенд: GET /api/objects (fallback на distinct receipts.object + флаг migration_needed, если миграция не выполнена — НЕ ломается), POST /api/objects; PUT /api/receipts/:id — редактирование полей по whitelist; parseAIResponse извлекает subtype (whitelist из 13 значений)/provider/valid_from/valid_to (промпт правило 15); saveReceiptToDB и reprocess-receipt сохраняют новые поля; diagnostics показывает v7_columns
 - Фронт: объекты загружаются из /api/objects (запасной список DEFAULT_OBJECTS при ошибке); SUBTYPE_LABELS (⚡ электричество, 💧 вода, 🌐 интернет и т.д.); expiryInfo — бейджи «⚠️ Истекает через N дн.» (≤30 дней, оранжевый) и «⛔ Истёк» (красный) на карточке и в модалке; модалка показывает Подтип/Поставщик/Действует; поиск по provider и подтипу

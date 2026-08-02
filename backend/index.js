@@ -216,7 +216,7 @@ Cambio: <как на документе>
 
 14. raw_text_ru — ОБЯЗАТЕЛЬНОЕ ПОЛЕ: ПОЛНЫЙ ПЕРЕВОД raw_text на русский язык с той же модульной структурой и порядком строк. Все названия, подписи и примечания переведи; числа, даты, артикулы и реквизиты оставь без изменений. Заголовки модулей те же: ══════ МАГАЗИН ══════, ══════ ДОКУМЕНТ ══════, ══════ ТОВАРЫ ══════, ══════ СУММЫ ══════, ══════ ОПЛАТА ══════, ══════ ПРОЧИЙ ТЕКСТ ══════. Ответ БЕЗ поля raw_text_ru считается НЕВАЛИДНЫМ.
 15. Для документов типа bill / insurance / bank / contract дополнительно извлеки:
-    - subtype — подтип услуги/документа, ОДНО из значений: electricity (luz/electricidad), water (agua), gas, internet, phone (teléfono/móvil), comunidad, rent (alquiler), waste (basura), insurance_home, insurance_car, insurance_health, tax (impuestos/tasas), other. Для receipt/invoice — null.
+    - subtype — подтип услуги/документа, ОДНО из значений: electricity (luz/electricidad), water (agua), gas, internet, phone (teléfono/móvil), comunidad, rent (alquiler), waste (basura/recogida de residuos), insurance_home, insurance_car, insurance_health, tax (impuestos/tasas), other. Для receipt — null. ВАЖНО: если документ определён как invoice, но это фактура за услуги (свет, вода, интернет, мусор, связь, comunidad) — subtype заполни ОБЯЗАТЕЛЬНО.
     - provider — компания-поставщик или эмитент документа (Iberdrola, Endesa, Movistar, Mapfre, название банка...).
     - valid_from / valid_to — период действия полиса/договора или период счёта в формате YYYY-MM-DD, если указаны на документе; иначе null.
 
@@ -846,6 +846,7 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     const currency = req.body.currency || 'auto';
     const docType = req.body.docType || 'receipt';
     const object = req.body.object || 'other';
+    const subtypeOverride = req.body.subtype && req.body.subtype !== 'auto' ? req.body.subtype : null;
     
     const isPdf = req.file.mimetype === 'application/pdf' || /\.pdf$/i.test(req.file.originalname || '');
     const mimeType = isPdf ? 'application/pdf' : 'image/jpeg';
@@ -912,7 +913,9 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     // При docType='auto' берём тип, определённый AI по содержимому документа
     receiptData.docType = docType === 'auto' ? (receiptData.document_type || 'receipt') : docType;
     receiptData.object = object;
-    
+    // Ручной выбор подтипа на форме загрузки перекрывает определённый AI
+    if (subtypeOverride) receiptData.subtype = subtypeOverride;
+
     const saved = await saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod);
     
     res.json({
@@ -1018,7 +1021,7 @@ app.get('/api/diagnostics', async (req, res) => {
   try {
     const columns = await getTableColumns();
     res.json({
-      version: '2026-08-01.7 (objects table + subtype/provider/valid_to + PUT /api/receipts/:id)',
+      version: '2026-08-01.8 (subtype entity: upload selector + filter + bulk; expiry badge only insurance/contract)',
       raw_text_ru_column: columns.includes('raw_text_ru'),
       fix_if_false: 'alter table receipts add column if not exists raw_text_ru text;',
       v7_columns: ['subtype', 'provider', 'valid_from', 'valid_to', 'meta', 'related_id', 'object_id'].every(c => columns.includes(c)),
@@ -1223,6 +1226,22 @@ app.post('/api/bulk-update-type', requireAuth, async (req, res) => {
       return res.status(400).json({ error: `document_type должен быть одним из: ${ALLOWED_TYPES.join(', ')}` });
     }
     const { error } = await supabaseAdmin.from('receipts').update({ document_type }).in('id', ids);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ========== BULK UPDATE SUBTYPE (подтип услуги: вода, электричество, интернет, мусор...) ==========
+app.post('/api/bulk-update-subtype', requireAuth, async (req, res) => {
+  try {
+    const { ids, subtype } = req.body;
+    const ALLOWED_SUBTYPES = ['electricity', 'water', 'gas', 'internet', 'phone', 'comunidad', 'rent', 'waste', 'insurance_home', 'insurance_car', 'insurance_health', 'tax', 'other'];
+    if (!ALLOWED_SUBTYPES.includes(subtype)) {
+      return res.status(400).json({ error: `subtype должен быть одним из: ${ALLOWED_SUBTYPES.join(', ')}` });
+    }
+    const { error } = await supabaseAdmin.from('receipts').update({ subtype }).in('id', ids);
     if (error) throw error;
     res.json({ success: true });
   } catch (e) {

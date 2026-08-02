@@ -22,9 +22,11 @@ const SUBTYPE_LABELS = {
   tax: '💰 Налог',
   other: '📎 Прочее'
 };
-// Срок действия документа: null — нет даты/всё хорошо; иначе бейдж предупреждения
+// Срок действия документа: null — нет даты/всё хорошо; иначе бейдж предупреждения.
+// Только страховки и договоры: у счетов (bill) и выписок (bank) valid_to — это конец ПЕРИОДА, а не срок действия
 function expiryInfo(r) {
   if (!r || !r.valid_to) return null;
+  if (!['insurance', 'contract'].includes(r.document_type)) return null;
   const days = Math.ceil((new Date(r.valid_to).getTime() - Date.now()) / 86400000);
   if (isNaN(days)) return null;
   if (days < 0) return { text: '⛔ Истёк', color: '#c0392b' };
@@ -414,6 +416,7 @@ function App() {
   const [selectedModel, setSelectedModel] = useState('groq-llama-4-scout');
   const [currency, setCurrency] = useState('auto');
   const [docType, setDocType] = useState('auto');
+  const [subtype, setSubtype] = useState('auto');
   const [object, setObject] = useState('other');
   const [modelModalOpen, setModelModalOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState('');
@@ -425,6 +428,7 @@ function App() {
   const [filterYears, setFilterYears] = useState([]);
   const [filterMonths, setFilterMonths] = useState([]);
   const [filterTypes, setFilterTypes] = useState([]);
+  const [filterSubtypes, setFilterSubtypes] = useState([]);
   const [filterObjects, setFilterObjects] = useState([]);
   const [filterDiffs, setFilterDiffs] = useState([]); // фильтр по разнице Δ (итог чека vs сумма товаров)
   const [searchQuery, setSearchQuery] = useState('');
@@ -439,10 +443,11 @@ function App() {
   const [selectedReceiptIds, setSelectedReceiptIds] = useState(new Set());
   const [viewModal, setViewModal] = useState(null);
   const [fullscreenImage, setFullscreenImage] = useState(null);
+  const [fsZoom, setFsZoom] = useState(false); // второй клик по фото в полноэкранном режиме — натуральный размер
 
   // Закрытие полноэкранного просмотра по Escape
   useEffect(() => {
-    if (!fullscreenImage) return;
+    if (!fullscreenImage) { setFsZoom(false); return; }
     const onKey = (e) => { if (e.key === 'Escape') setFullscreenImage(null); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -705,6 +710,7 @@ function App() {
       formData.append('model', selectedModel);
       formData.append('currency', currency);
       formData.append('docType', docType);
+      formData.append('subtype', subtype);
       formData.append('object', object);
       formData.append('token', token);
 
@@ -874,6 +880,7 @@ function App() {
         formData.append('model', selectedModel);
         formData.append('currency', currency);
         formData.append('docType', docType);
+        formData.append('subtype', subtype);
         formData.append('object', object);
         formData.append('token', token);
         let creepTimer = null;
@@ -1109,6 +1116,22 @@ function App() {
     } catch (e) { console.error(e); }
   };
 
+  const bulkChangeSubtype = async (newSubtype) => {
+    if (selectedReceiptIds.size === 0) return;
+    try {
+      const res = await fetch(`${API_URL}/api/bulk-update-subtype?token=${token}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: Array.from(selectedReceiptIds), subtype: newSubtype })
+      });
+      if (res.ok) { setSelectedReceiptIds(new Set()); loadReceipts(); }
+      else {
+        const err = await res.json().catch(() => ({}));
+        alert(err.error || 'Ошибка смены подтипа (проверь версию бэкенда)');
+      }
+    } catch (e) { console.error(e); }
+  };
+
   const bulkChangeType = async (newType) => {
     if (selectedReceiptIds.size === 0) return;
     try {
@@ -1270,6 +1293,7 @@ function App() {
 
   const filteredReceipts = receipts.filter(r => {
     if (filterTypes.length && !filterTypes.includes(r.document_type || 'receipt')) return false;
+    if (filterSubtypes.length && !filterSubtypes.includes(r.subtype || 'none')) return false;
     if (filterObjects.length && !filterObjects.includes(r.object || 'other')) return false;
     if (filterDiffs.length && !filterDiffs.includes(diffBucketOf(r))) return false;
     if (filterYears.length || filterMonths.length) {
@@ -1456,11 +1480,11 @@ function App() {
         </div>
       </header>
 
-      {backendInfo && !String(backendInfo.version || '').includes('2026-08-01.7') && (
+      {backendInfo && !String(backendInfo.version || '').includes('2026-08-01.8') && (
         <div style={{ background: '#fdecea', border: '1px solid #e74c3c', color: '#c0392b', padding: '10px 16px', borderRadius: 8, margin: '10px 15px', fontSize: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <strong> Бэкенд устарел!</strong>
           <span>
-            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-01.7</code>.
+            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-01.8</code>.
             Задеплой свежий index.js (Railway → householder-api → Deploy latest commit), иначе перевод не заработает.
           </span>
           <button onClick={() => setBackendInfo(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', color: '#c0392b' }}>✕</button>
@@ -1621,7 +1645,7 @@ function App() {
                   {viewModal.subtype && <p><strong>Подтип:</strong> {SUBTYPE_LABELS[viewModal.subtype] || viewModal.subtype}</p>}
                   {viewModal.provider && <p><strong>Поставщик:</strong> <HighlightText text={viewModal.provider} query={searchQuery} /></p>}
                   {(viewModal.valid_from || viewModal.valid_to) && (
-                    <p><strong>Действует:</strong> {viewModal.valid_from ? formatDate(viewModal.valid_from) : '—'} → {viewModal.valid_to ? formatDate(viewModal.valid_to) : '—'}
+                    <p><strong>{['bill', 'bank'].includes(viewModal.document_type) ? 'Период' : 'Действует'}:</strong> {viewModal.valid_from ? formatDate(viewModal.valid_from) : '—'} → {viewModal.valid_to ? formatDate(viewModal.valid_to) : '—'}
                       {expiryInfo(viewModal) && <span style={{ marginLeft: 8, color: expiryInfo(viewModal).color, fontWeight: 600 }}>{expiryInfo(viewModal).text}</span>}
                     </p>
                   )}
@@ -1728,6 +1752,13 @@ function App() {
                 </select>
               </div>
               <div className="control-group compact">
+                <label>Подтип:</label>
+                <select value={subtype} onChange={e => setSubtype(e.target.value)}>
+                  <option value="auto">🤖 Авто (AI)</option>
+                  {Object.entries(SUBTYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </div>
+              <div className="control-group compact">
                 <label>Объект:</label>
                 <select value={object} onChange={e => setObject(e.target.value)}>
                   {objectsList.map(o => <option key={o} value={o}>{o}</option>)}
@@ -1772,7 +1803,15 @@ function App() {
               <label htmlFor="file-input" style={{ display: 'block', width: '100%', cursor: 'pointer' }}>
                 {previewUrl ? (
                   <div className="preview-container">
-                    <img src={previewUrl} alt="Preview" className="preview" />
+                    <img
+                      src={previewUrl}
+                      alt="Preview"
+                      className="preview"
+                      title="Нажмите для увеличения"
+                      style={{ cursor: 'zoom-in' }}
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); setFullscreenImage(previewUrl); }}
+                    />
+                    <p style={{ fontSize: 11, color: '#95a5a6', margin: '4px 0 0' }}>Нажмите на изображение для увеличения</p>
                     {selectedFiles.length > 1 && (
                       <div className="file-nav">
                         <button onClick={(e) => {e.preventDefault(); prevFile();}} disabled={currentFileIndex === 0}>◀</button>
@@ -1929,6 +1968,7 @@ function App() {
             <ExcelFilter label="Год" options={availableYears.map(y => ({ value: y, label: String(y) }))} selected={filterYears} onChange={v => { setFilterYears(v); setCurrentPage(1); }} />
             <ExcelFilter label="Месяц" options={MONTH_NAMES.map((n, i) => ({ value: i + 1, label: n }))} selected={filterMonths} onChange={v => { setFilterMonths(v); setCurrentPage(1); }} />
             <ExcelFilter label="Тип" options={Object.entries(DOC_TYPE_LABELS).map(([v, l]) => ({ value: v, label: l }))} selected={filterTypes} onChange={v => { setFilterTypes(v); setCurrentPage(1); }} />
+            <ExcelFilter label="Подтип" options={[...Object.entries(SUBTYPE_LABELS).map(([v, l]) => ({ value: v, label: l })), { value: 'none', label: '— Без подтипа' }]} selected={filterSubtypes} onChange={v => { setFilterSubtypes(v); setCurrentPage(1); }} />
             <ExcelFilter label="Объект" options={objectsList.map(o => ({ value: o, label: o }))} selected={filterObjects} onChange={v => { setFilterObjects(v); setCurrentPage(1); }} />
             <ExcelFilter label="Разница Δ" options={[
               { value: 'none', label: '✅ Без разницы' },
@@ -1993,6 +2033,10 @@ function App() {
               <select onChange={e => { if (e.target.value) bulkChangeType(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
                 <option value="">Сменить тип...</option>
                 {Object.entries(DOC_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+              <select onChange={e => { if (e.target.value) bulkChangeSubtype(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
+                <option value="">Сменить подтип...</option>
+                {Object.entries(SUBTYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
               <select onChange={e => { if (e.target.value) bulkChangeCurrency(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
                 <option value="">Сменить валюту...</option>
@@ -2248,16 +2292,22 @@ function App() {
           style={{
             position: 'fixed', inset: 0, zIndex: 3000,
             background: 'rgba(0,0,0,0.93)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            padding: 16, cursor: 'zoom-out'
+            display: 'flex', alignItems: fsZoom ? 'flex-start' : 'center', justifyContent: fsZoom ? 'flex-start' : 'center',
+            padding: 16, cursor: 'zoom-out', overflow: 'auto'
           }}
         >
           <img
             src={fullscreenImage}
             alt="Чек"
-            style={{
+            onClick={(e) => { e.stopPropagation(); setFsZoom(z => !z); }}
+            title={fsZoom ? 'Клик — уместить в экран' : 'Клик — натуральный размер'}
+            style={fsZoom ? {
+              maxWidth: 'none', maxHeight: 'none',
+              margin: 'auto', borderRadius: 8, cursor: 'zoom-out',
+              boxShadow: '0 8px 40px rgba(0,0,0,0.7)'
+            } : {
               maxWidth: '97vw', maxHeight: '97vh',
-              objectFit: 'contain', borderRadius: 8,
+              objectFit: 'contain', borderRadius: 8, cursor: 'zoom-in',
               boxShadow: '0 8px 40px rgba(0,0,0,0.7)'
             }}
           />
