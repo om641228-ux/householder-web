@@ -278,7 +278,9 @@ async function convertPdfToImages(pdfFile) {
   const maxPages = Math.min(pdf.numPages, 60);
   for (let p = 1; p <= maxPages; p++) {
     const page = await pdf.getPage(p);
-    const viewport = page.getViewport({ scale: 2.0 });
+    // scale 2.5: плотные таблицы (коммерческие предложения, сметы) с мелким текстом —
+    // при 2.0 модель теряла содержимое ячеек и возвращала пустую сетку таблицы
+    const viewport = page.getViewport({ scale: 2.5 });
     const canvas = document.createElement('canvas');
     canvas.width = viewport.width;
     canvas.height = viewport.height;
@@ -1729,11 +1731,11 @@ function App() {
         </div>
       </header>
 
-      {backendInfo && !String(backendInfo.version || '').includes('2026-08-03.17') && (
+      {backendInfo && !String(backendInfo.version || '').includes('2026-08-03.18') && (
         <div style={{ background: '#fdecea', border: '1px solid #e74c3c', color: '#c0392b', padding: '10px 16px', borderRadius: 8, margin: '10px 15px', fontSize: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <strong> Бэкенд устарел!</strong>
           <span>
-            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-03.17</code>.
+            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-03.18</code>.
             Задеплой свежий index.js (Railway → householder-api → Deploy latest commit), иначе перевод не заработает.
           </span>
           <button onClick={() => setBackendInfo(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', color: '#c0392b' }}>✕</button>

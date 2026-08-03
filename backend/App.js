@@ -41,6 +41,9 @@ const DOC_TYPE_LABELS = {
   insurance: '🛡️ Страховка',
   bank: '🏦 Банк',
   contract: '📑 Договор',
+  municipality: '🏛️ Мэрия',
+  tax: '💰 Налоговая',
+  proposal: '🤝 Комм. предложение',
   other: '📎 Другое'
 };
 const ITEMS_PER_PAGE_OPTIONS = [10, 20, 50, 'all'];
@@ -275,7 +278,9 @@ async function convertPdfToImages(pdfFile) {
   const maxPages = Math.min(pdf.numPages, 60);
   for (let p = 1; p <= maxPages; p++) {
     const page = await pdf.getPage(p);
-    const viewport = page.getViewport({ scale: 2.0 });
+    // scale 2.5: плотные таблицы (коммерческие предложения, сметы) с мелким текстом —
+    // при 2.0 модель теряла содержимое ячеек и возвращала пустую сетку таблицы
+    const viewport = page.getViewport({ scale: 2.5 });
     const canvas = document.createElement('canvas');
     canvas.width = viewport.width;
     canvas.height = viewport.height;
@@ -472,6 +477,13 @@ function App() {
   // При открытии другого чека галерея начинается с первой страницы, режим редактирования сбрасывается
   useEffect(() => { setModalPageIdx(0); setEditMode(false); setPageTextLang('ru'); }, [viewModal?.id]);
   const [pageTextLang, setPageTextLang] = useState('ru'); // текст страницы рядом с галереей: перевод | оригинал
+  // Ширина окна — адаптивная раскладка карточки документа (<900px: изображение и перевод — вертикально, для мобильных)
+  const [winWidth, setWinWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setWinWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   // Закрытие полноэкранного просмотра по Escape
   useEffect(() => {
@@ -1518,18 +1530,68 @@ function App() {
 
   // Поиск дубликатов: одинаковые магазин + дата чека + итоговая сумма.
   // В группе самый ранний по created_at — ОРИГИНАЛ, остальные — КОПИИ.
+  // ПРОВЕРКА перед статусом КОПИЯ: если у обоих документов заполнены сильные
+  // идентификаторы (№ договора, CUPS, № фактуры, адрес поставки) и они РАЗЛИЧАЮТСЯ —
+  // это РАЗНЫЕ документы, а не копии (разные договоры с пустым «Без названия»!).
+  const dupNorm = (v) => String(v || '').toLowerCase().replace(/[.,;«»"']/g, ' ').replace(/\s+/g, ' ').trim();
+  const DUP_STRONG_FIELDS = ['contract_number', 'cups', 'invoice_number', 'supply_address', 'object'];
+  const dupFieldConflict = (a, b) => DUP_STRONG_FIELDS.some(f => {
+    const x = dupNorm(a[f]);
+    const y = dupNorm(b[f]);
+    if (!x || !y || x === y) return false;      // у одного не заполнено — не конфликт
+    if (f === 'object' && (x === 'other' || y === 'other')) return false; // 'other' — заглушка, не улика
+    return !(x.includes(y) || y.includes(x));    // частичное совпадение (обрезанный адрес) — не конфликт
+  });
+  // Сравнение РАСПОЗНАННОГО ТЕКСТА (когда структурные поля пусты):
+  // 1) CUPS-коды точек поставки (ES…) — у обоих есть и НЕ пересекаются → разные документы
+  // 2) наборы длинных чисел (№ договора, потребление кВт·ч, телефоны): общего < 70% → разные
+  const dupCupsOf = (t) => new Set((String(t || '').toUpperCase().match(/ES[0-9A-Z]{14,24}/g) || []));
+  const dupNumsOf = (t) => new Set((String(t || '').match(/\d{5,}/g) || []));
+  const dupTextConflict = (a, b) => {
+    const ta = a.raw_text || '';
+    const tb = b.raw_text || '';
+    if (ta.length < 300 || tb.length < 300) return false; // нечего сравнивать
+    const ca = dupCupsOf(ta);
+    const cb = dupCupsOf(tb);
+    if (ca.size && cb.size) {
+      let inter = 0;
+      ca.forEach(c => { if (cb.has(c)) inter++; });
+      if (inter === 0) return true; // разные CUPS — точно разные договоры поставки
+    }
+    const na = dupNumsOf(ta);
+    const nb = dupNumsOf(tb);
+    if (na.size >= 5 && nb.size >= 5) {
+      let inter = 0;
+      na.forEach(n => { if (nb.has(n)) inter++; });
+      const jacc = inter / (na.size + nb.size - inter);
+      if (jacc < 0.7) return true;
+    }
+    return false;
+  };
+  const dupConflict = (a, b) => dupFieldConflict(a, b) || dupTextConflict(a, b);
   const dupMap = new Map();
   receipts.forEach(r => {
-    const key = `${String(r.store_name || '').toLowerCase().trim()}|${r.receipt_date || ''}|${parseFloat(r.total_amount) || 0}`;
+    // Совсем без идентичности (ни названия, ни даты, ни суммы) — о дубликатах не судим
+    if (!dupNorm(r.store_name) && !r.receipt_date && !(parseFloat(r.total_amount) || 0)) return;
+    const key = `${dupNorm(r.store_name)}|${r.receipt_date || ''}|${parseFloat(r.total_amount) || 0}`;
     if (!dupMap.has(key)) dupMap.set(key, []);
     dupMap.get(key).push(r);
   });
   const dupGroups = [];
   dupMap.forEach(g => {
-    if (g.length > 1) {
-      g.sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
-      dupGroups.push(g);
-    }
+    if (g.length < 2) return;
+    // Делим на подгруппы: конфликт сильных идентификаторов → разные документы
+    const subgroups = [];
+    g.forEach(r => {
+      const sg = subgroups.find(s => s.every(m => !dupConflict(m, r)));
+      if (sg) sg.push(r); else subgroups.push([r]);
+    });
+    subgroups.forEach(sg => {
+      if (sg.length > 1) {
+        sg.sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
+        dupGroups.push(sg);
+      }
+    });
   });
   const dupAllIds = new Set(dupGroups.flat().map(r => r.id));           // все участники групп дубликатов
   const dupCopyIds = new Set(dupGroups.flatMap(g => g.slice(1)).map(r => r.id)); // копии (все, кроме оригинала)
@@ -1669,11 +1731,11 @@ function App() {
         </div>
       </header>
 
-      {backendInfo && !String(backendInfo.version || '').includes('2026-08-03.15') && (
+      {backendInfo && !String(backendInfo.version || '').includes('2026-08-03.18') && (
         <div style={{ background: '#fdecea', border: '1px solid #e74c3c', color: '#c0392b', padding: '10px 16px', borderRadius: 8, margin: '10px 15px', fontSize: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <strong> Бэкенд устарел!</strong>
           <span>
-            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-03.15</code>.
+            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-03.18</code>.
             Задеплой свежий index.js (Railway → householder-api → Deploy latest commit), иначе перевод не заработает.
           </span>
           <button onClick={() => setBackendInfo(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', color: '#c0392b' }}>✕</button>
@@ -1808,11 +1870,10 @@ function App() {
               <h2> Чек #{viewModal.id}</h2>
               <button className="modal-close" onClick={() => setViewModal(null)}>✕</button>
             </div>
-            <div className="modal-body" style={{ minHeight: 0 }}>
-              {/* При галерее страниц секция растягивается на всю ширину модалки (CSS класс — узкая колонка 300px),
-                  чтобы рядом со страницей читался перевод */}
-              <div className="modal-image-section" style={(Array.isArray(viewModal.page_urls) && viewModal.page_urls.filter(Boolean).length) ? { flex: '1 1 100%' } : undefined}>
-                {(() => {
+            {/* При галерее страниц тело модалки — простым БЛОКОМ (без CSS-flex классов):
+                одинаково во всех браузерах (Safari включительно) и на мобильных */}
+            <div className="modal-body" style={{ minHeight: 0, ...((Array.isArray(viewModal.page_urls) && viewModal.page_urls.filter(Boolean).length) ? { display: 'block' } : {}) }}>
+              {(() => {
                   // Если у документа сохранены все страницы (v13) — показываем галерею страниц
                   const pages = Array.isArray(viewModal.page_urls) ? viewModal.page_urls.filter(Boolean) : [];
                   if (pages.length) {
@@ -1841,39 +1902,54 @@ function App() {
                         {label}
                       </button>
                     );
+                    // Колонки — через display:table с tableLayout:fixed (ширины колонок гарантированы,
+                    // не зависит от flex-особенностей браузера); <900px — вертикально (мобильные)
+                    const isNarrowModal = winWidth < 900;
+                    const imageBlock = isPdfUrl(pages[idx]) ? (
+                      <a href={curUrl} target="_blank" rel="noreferrer" className="no-image"
+                        style={{ display: 'block', textDecoration: 'none', color: '#2980b9', fontWeight: 600 }}>
+                        📄 Страница {idx + 1} — PDF, открыть в новой вкладке ↗
+                      </a>
+                    ) : (
+                      <img
+                        src={curUrl}
+                        alt={`Страница ${idx + 1}`}
+                        className="modal-image"
+                        onClick={() => setFullscreenImage(curUrl)}
+                        style={{ cursor: 'zoom-in', maxWidth: '100%' }}
+                        title="Нажмите — открыть на весь экран"
+                      />
+                    );
+                    const hasPageText = !!(pageRu || pageOrig);
+                    const textPanel = !hasPageText ? null : (
+                      <div style={{ textAlign: 'left', boxSizing: 'border-box' }}>
+                        <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
+                          {langBtn('ru', '🇷🇺 Перевод', !!pageRu)}
+                          {langBtn('orig', 'Оригинал', !!pageOrig)}
+                          <span style={{ fontSize: 11, color: '#95a5a6', alignSelf: 'center' }}>стр. {idx + 1}</span>
+                        </div>
+                        <div style={{ maxHeight: isNarrowModal ? '45vh' : '55vh', overflowY: 'auto', overflowX: 'hidden', background: '#f8f9fa', border: '1px solid #e0e6ed', borderRadius: 8, padding: '10px 12px', fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere', color: '#2c3e50' }}>
+                          {pageText}
+                        </div>
+                      </div>
+                    );
                     return (
                       <>
-                        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                          <div style={{ flex: '3 1 380px', minWidth: 0, textAlign: 'center' }}>
-                            {isPdfUrl(pages[idx]) ? (
-                              <a href={curUrl} target="_blank" rel="noreferrer" className="no-image"
-                                style={{ display: 'block', textDecoration: 'none', color: '#2980b9', fontWeight: 600 }}>
-                                📄 Страница {idx + 1} — PDF, открыть в новой вкладке ↗
-                              </a>
-                            ) : (
-                              <img
-                                src={curUrl}
-                                alt={`Страница ${idx + 1}`}
-                                className="modal-image"
-                                onClick={() => setFullscreenImage(curUrl)}
-                                style={{ cursor: 'zoom-in' }}
-                                title="Нажмите — открыть на весь экран"
-                              />
-                            )}
-                          </div>
-                          {(pageRu || pageOrig) ? (
-                            <div style={{ flex: '2 1 300px', minWidth: 0, maxWidth: '100%', textAlign: 'left' }}>
-                              <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
-                                {langBtn('ru', '🇷🇺 Перевод', !!pageRu)}
-                                {langBtn('orig', 'Оригинал', !!pageOrig)}
-                                <span style={{ fontSize: 11, color: '#95a5a6', alignSelf: 'center' }}>стр. {idx + 1}</span>
-                              </div>
-                              <div style={{ maxHeight: '55vh', overflowY: 'auto', overflowX: 'hidden', background: '#f8f9fa', border: '1px solid #e0e6ed', borderRadius: 8, padding: '10px 12px', fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere', color: '#2c3e50' }}>
-                                {pageText}
-                              </div>
+                        {hasPageText && !isNarrowModal ? (
+                          <div style={{ display: 'table', width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+                            <div style={{ display: 'table-cell', width: '58%', verticalAlign: 'top', textAlign: 'center', paddingRight: 10, boxSizing: 'border-box' }}>
+                              {imageBlock}
                             </div>
-                          ) : null}
-                        </div>
+                            <div style={{ display: 'table-cell', width: '42%', verticalAlign: 'top', boxSizing: 'border-box' }}>
+                              {textPanel}
+                            </div>
+                          </div>
+                        ) : (
+                          <div style={{ textAlign: 'center' }}>
+                            {imageBlock}
+                            {textPanel && <div style={{ marginTop: 8 }}>{textPanel}</div>}
+                          </div>
+                        )}
                         {pages.length > 1 && !manyPages && (
                           // До 10 страниц — все миниатюры с переносом
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, justifyContent: 'center' }}>
@@ -1902,21 +1978,24 @@ function App() {
                       </>
                     );
                   }
-                  // Обычный однофайловый чек — как раньше
-                  return (viewModal.photo_url || viewModal.image_url) ? (
-                    isPdfUrl(viewModal.photo_url || viewModal.image_url)
-                      ? <div className="no-image">📄 PDF-документ</div>
-                      : <img
-                          src={fixImageUrl(viewModal.photo_url || viewModal.image_url)}
-                          alt="Чек"
-                          className="modal-image"
-                          onClick={() => setFullscreenImage(fixImageUrl(viewModal.photo_url || viewModal.image_url))}
-                          style={{ cursor: 'zoom-in' }}
-                          title="Нажмите — открыть на весь экран"
-                        />
-                  ) : <div className="no-image">Нет фото</div>;
+                  // Обычный однофайловый чек — как раньше (узкая колонка CSS-классом + modal-info рядом)
+                  return (
+                    <div className="modal-image-section">
+                      {(viewModal.photo_url || viewModal.image_url) ? (
+                        isPdfUrl(viewModal.photo_url || viewModal.image_url)
+                          ? <div className="no-image">📄 PDF-документ</div>
+                          : <img
+                              src={fixImageUrl(viewModal.photo_url || viewModal.image_url)}
+                              alt="Чек"
+                              className="modal-image"
+                              onClick={() => setFullscreenImage(fixImageUrl(viewModal.photo_url || viewModal.image_url))}
+                              style={{ cursor: 'zoom-in' }}
+                              title="Нажмите — открыть на весь экран"
+                            />
+                      ) : <div className="no-image">Нет фото</div>}
+                    </div>
+                  );
                 })()}
-              </div>
               <div className="modal-info">
                 {editMode && (
                   <div className="info-block" style={{ background: '#fdf6ec', border: '1px solid #f0e0c0' }}>
@@ -2528,7 +2607,7 @@ function App() {
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 5 }}>
                               {dupAllIds.has(receipt.id) && (
                                 dupCopyIds.has(receipt.id)
-                                  ? <span title="Дубликат: такой же магазин, дата и сумма" style={{ background: '#e74c3c', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>КОПИЯ</span>
+                                  ? <span title="Дубликат: совпадают название, дата и сумма; № договора/CUPS/адрес/объект и распознанный текст НЕ различаются" style={{ background: '#e74c3c', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>КОПИЯ</span>
                                   : <span title="Оригинал (самый ранний из группы дубликатов)" style={{ background: '#27ae60', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>ОРИГИНАЛ</span>
                               )}
                               {expiryInfo(receipt) && (
