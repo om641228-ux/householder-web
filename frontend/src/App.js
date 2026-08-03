@@ -409,8 +409,8 @@ function App() {
       if (e.lengthComputable) onUploadProgress(e.loaded / e.total);
     };
     xhr.onload = () => resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, text: xhr.responseText });
-    xhr.onerror = () => reject(new Error('Ошибка сети'));
-    xhr.ontimeout = () => reject(new Error('Превышено время ожидания (300 сек)'));
+    xhr.onerror = () => reject(new Error('Соединение оборвано (прокси или сеть). Если документ был многостраничным — обновите список: он мог успеть сохраниться на сервере'));
+    xhr.ontimeout = () => reject(new Error('Превышено время ожидания (15 мин). Проверьте список документов — документ мог успеть сохраниться на сервере'));
     xhr.send(formData);
   });
   const [lastSavedReceipt, setLastSavedReceipt] = useState(null);
@@ -743,7 +743,6 @@ function App() {
         }
       });
       if (creepTimer) clearInterval(creepTimer);
-      setUploadProgress(100);
 
       const text = res.text;
       let data;
@@ -751,7 +750,16 @@ function App() {
       if (!res.ok) throw new Error(data.error || data.message || `Ошибка сервера: ${res.status}`);
       if (!data.success && !data.id) throw new Error(data.error || 'Сохранение не удалось');
 
-      const receiptData = data.data || data;
+      let receiptData;
+      if (data.jobId) {
+        // Асинхронный режим (backend 2026-08-03.15+): опрашиваем задачу — длинные документы
+        // обрабатываются в фоне и не упираются в ~5-минутный лимит прокси Railway
+        setProgressStage('recognize');
+        receiptData = await pollDocJob(data.jobId);
+      } else {
+        receiptData = data.data || data;
+      }
+      setUploadProgress(100);
       if (receiptData.image_url) receiptData.image_url = fixImageUrl(receiptData.image_url);
       setLastSavedReceipt(receiptData);
       loadReceipts();
@@ -763,6 +771,32 @@ function App() {
     setProgressStage(null);
     setUploadProgress(0);
   };
+
+  // Опрос асинхронной задачи распознавания документа (GET /api/doc-job/:id)
+  // Реальный прогресс: vision страниц (40–70%), перевод (70–95%), финализация (96–97%)
+  const pollDocJob = (jobId) => new Promise((resolve, reject) => {
+    const started = Date.now();
+    const timer = setInterval(async () => {
+      try {
+        const r = await fetch(`${API_URL}/api/doc-job/${jobId}?token=${token}`);
+        const j = await r.json();
+        if (j.status === 'done') { clearInterval(timer); resolve(j.result); return; }
+        if (j.status === 'error') { clearInterval(timer); reject(new Error(j.error || 'Ошибка обработки документа')); return; }
+        const total = j.pagesTotal || 1;
+        let pct = 45;
+        if (j.stage === 'vision') pct = 40 + Math.round(30 * ((j.visionDone || 0) / total));
+        else if (j.stage === 'translate') pct = 70 + Math.round(25 * ((j.translateDone || 0) / total));
+        else if (j.stage === 'finalize') pct = 96;
+        setUploadProgress(Math.min(97, Math.max(41, pct)));
+        if (Date.now() - started > 25 * 60 * 1000) {
+          clearInterval(timer);
+          reject(new Error('Обработка заняла больше 25 минут — проверьте список документов, возможно, документ уже сохранён'));
+        }
+      } catch (e) {
+        // мигнула сеть при опросе — просто пробуем снова на следующем тике
+      }
+    }, 4000);
+  });
 
   const recognizeAndSave = async (fileArg) => {
     // Без явного файла и при выбранных нескольких — это страницы одного документа
@@ -1616,11 +1650,11 @@ function App() {
         </div>
       </header>
 
-      {backendInfo && !String(backendInfo.version || '').includes('2026-08-02.14') && (
+      {backendInfo && !String(backendInfo.version || '').includes('2026-08-03.15') && (
         <div style={{ background: '#fdecea', border: '1px solid #e74c3c', color: '#c0392b', padding: '10px 16px', borderRadius: 8, margin: '10px 15px', fontSize: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <strong> Бэкенд устарел!</strong>
           <span>
-            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-02.14</code>.
+            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-03.15</code>.
             Задеплой свежий index.js (Railway → householder-api → Deploy latest commit), иначе перевод не заработает.
           </span>
           <button onClick={() => setBackendInfo(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', color: '#c0392b' }}>✕</button>

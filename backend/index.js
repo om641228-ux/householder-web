@@ -694,10 +694,17 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
 // Общая сборка многостраничного документа из буферов страниц (PDF-страницы или изображения):
 // каждая страница — отдельный vision-запрос, затем общая финализация.
 // Если передан userId — все страницы также сохраняются в Storage (page_urls).
-async function assembleDocumentFromPages(pageBuffers, mimeTypes, currency, docType, userId = null) {
+// onProgress('vision'|'translate') — колбэк прогресса для асинхронных задач
+async function assembleDocumentFromPages(pageBuffers, mimeTypes, currency, docType, userId = null, onProgress = null) {
   console.log(`Постраничный режим: документ ${pageBuffers.length} стр.`);
-  const pageTexts = await runWithConcurrency(pageBuffers, (buf, i) => extractPageTextWithGemini(buf, mimeTypes[i] || 'application/pdf', i + 1, pageBuffers.length), 3);
-  const data = await finalizeDocumentFromPageTexts(pageTexts, currency, docType);
+  const pageTexts = await runWithConcurrency(pageBuffers, async (buf, i) => {
+    try {
+      return await extractPageTextWithGemini(buf, mimeTypes[i] || 'application/pdf', i + 1, pageBuffers.length);
+    } finally {
+      if (onProgress) onProgress('vision');
+    }
+  }, 3);
+  const data = await finalizeDocumentFromPageTexts(pageTexts, currency, docType, onProgress ? () => onProgress('translate') : null);
   if (userId) {
     data.page_urls = await uploadPagesToStorage(pageBuffers, mimeTypes, userId);
     console.log(`Страницы сохранены в Storage: ${data.page_urls.length}/${pageBuffers.length}`);
@@ -1358,6 +1365,31 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
 // ========== UPLOAD DOCUMENT PAGES (несколько файлов = страницы ОДНОГО документа) ==========
 // Фронт отправляет все выбранные файлы как 'pages' — они собираются в один документ
 // с модулями ══════ СТРАНИЦА N ══════ (тот же конвейер, что у длинных PDF)
+// ========== АСИНХРОННЫЕ ЗАДАЧИ (многостраничные документы) ==========
+// ПРИЧИНА: прокси Railway жёстко обрывает HTTP-запросы дольше ~5 минут (фронтенд получает
+// «Ошибка сети» на 92%), а документ в 20+ плотных страниц обрабатывается 10–15 минут
+// (vision + перевод каждой страницы). Поэтому POST сразу возвращает jobId, обработка
+// идёт в фоне, фронтенд опрашивает GET /api/doc-job/:id каждые 4 сек.
+const docJobs = new Map(); // id -> { status, stage, visionDone, translateDone, pagesTotal, result, error, createdAt }
+function createDocJob(pagesTotal) {
+  const id = require('crypto').randomUUID();
+  docJobs.set(id, { status: 'processing', stage: 'vision', visionDone: 0, translateDone: 0, pagesTotal, createdAt: Date.now() });
+  return id;
+}
+// Чистка завершённых/зависших задач (TTL 2 часа)
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, j] of docJobs) { if (now - j.createdAt > 2 * 3600 * 1000) docJobs.delete(id); }
+}, 600000).unref();
+
+app.get('/api/doc-job/:id', (req, res) => {
+  const user = tokens.get(req.query.token);
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
+  const job = docJobs.get(req.params.id);
+  if (!job) return res.status(404).json({ status: 'error', error: 'Задача не найдена (сервер перезапускался) — загрузите документ заново' });
+  res.json(job);
+});
+
 app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, res) => {
   try {
     const token = req.query.token || req.body.token;
@@ -1382,19 +1414,37 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
       mimeTypes.push(isPdf ? 'application/pdf' : 'image/jpeg');
     }
 
-    // Распознаём страницы и сохраняем КАЖДУЮ в Storage (page_urls)
-    const receiptData = await assembleDocumentFromPages(pageBuffers, mimeTypes, currency, docType, user.id);
-    const recognitionMethod = `page-by-page ${files.length}f (gemini vision)`;
-    receiptData.docType = docType === 'auto' ? (receiptData.document_type || 'contract') : docType;
-    receiptData.object = (object && object !== 'other') ? object : (receiptData.object || 'other');
-    if (subtypeOverride) receiptData.subtype = subtypeOverride;
+    // Асинхронный режим: сразу отвечаем jobId (быстро, до таймаута прокси), обработка — в фоне
+    const jobId = createDocJob(files.length);
+    res.json({ success: true, jobId, async: true });
+    const job = docJobs.get(jobId);
+    const t0 = Date.now();
 
-    // Обложка документа — первая страница (уже загружена вместе со всеми; повторно не грузим)
-    const pageUrls = Array.isArray(receiptData.page_urls) ? receiptData.page_urls : [];
-    const imageUrl = pageUrls[0] || await uploadToStorage(pageBuffers[0], files[0].originalname, user.id, mimeTypes[0]);
+    try {
+      // Распознаём страницы и сохраняем КАЖДУЮ в Storage (page_urls)
+      const receiptData = await assembleDocumentFromPages(pageBuffers, mimeTypes, currency, docType, user.id, (stage) => {
+        if (stage === 'vision') job.visionDone++;
+        else if (stage === 'translate') { job.stage = 'translate'; job.translateDone++; }
+      });
+      job.stage = 'finalize';
+      const recognitionMethod = `page-by-page ${files.length}f (gemini vision, async)`;
+      receiptData.docType = docType === 'auto' ? (receiptData.document_type || 'contract') : docType;
+      receiptData.object = (object && object !== 'other') ? object : (receiptData.object || 'other');
+      if (subtypeOverride) receiptData.subtype = subtypeOverride;
 
-    const saved = await saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod);
-    res.json({ success: true, id: saved.id, ...saved, image_url: imageUrl });
+      // Обложка документа — первая страница (уже загружена вместе со всеми; повторно не грузим)
+      const pageUrls = Array.isArray(receiptData.page_urls) ? receiptData.page_urls : [];
+      const imageUrl = pageUrls[0] || await uploadToStorage(pageBuffers[0], files[0].originalname, user.id, mimeTypes[0]);
+
+      const saved = await saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod);
+      job.status = 'done';
+      job.result = { success: true, id: saved.id, ...saved, image_url: imageUrl };
+      console.log(`Задача ${jobId}: документ ${files.length} стр. готов за ${Math.round((Date.now() - t0) / 1000)}с`);
+    } catch (e) {
+      console.error(`Задача ${jobId} упала:`, e);
+      job.status = 'error';
+      job.error = e.message;
+    }
   } catch (e) {
     console.error('upload-document-pages error:', e);
     res.status(500).json({ error: e.message });
@@ -1518,7 +1568,7 @@ app.get('/api/diagnostics', async (req, res) => {
   try {
     const columns = await getTableColumns();
     res.json({
-      version: '2026-08-02.14 (все страницы плотных документов: диапазоны по 3 + дозапрос обрезанных страниц по одной)',
+      version: '2026-08-03.15 (асинхронные задачи: многостраничные документы не падают по таймауту прокси Railway)',
       raw_text_ru_column: columns.includes('raw_text_ru'),
       fix_if_false: 'alter table receipts add column if not exists raw_text_ru text;',
       v13_page_urls_column: columns.includes('page_urls'),
