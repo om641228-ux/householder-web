@@ -633,17 +633,17 @@ async function callTextChain(prompt, maxTokens = 8192) {
 
 // Промпт JSON-сводки полей по распознанному тексту многостраничного документа
 function buildDocumentSummaryPrompt(textSample) {
-  return `Ты анализируешь многостраничный документ (договор купли-продажи недвижимости/эскритура, контракт, страховой полис, банковская выписка), распознанный по страницам. Верни ТОЛЬКО JSON, без markdown и комментариев:
+  return `Ты анализируешь многостраничный документ, распознанный по страницам. Это может быть: СЧЁТ за коммунальные услуги (factura de electricidad/agua/gas — consumo, CUPS, período de facturación), торговая фактура, договор (contrato de suministro, escritura de compraventa), страховой полис, банковская выписка, официальное уведомление. Верни ТОЛЬКО JSON, без markdown и комментариев:
 {
-  "store_name": "краткое название документа/главного контрагента НА ЯЗЫКЕ ОРИГИНАЛА (пример: Escritura de compraventa — Jardines del Duque), БЕЗ перевода",
+  "store_name": "краткое название документа/главного контрагента НА ЯЗЫКЕ ОРИГИНАЛА (примеры: Factura electricidad — Plenitude; Contrato de suministro — Plenitude; Escritura de compraventa — Jardines del Duque), БЕЗ перевода",
   "store_name_ru": "перевод store_name на русский",
-  "receipt_date": "YYYY-MM-DD — главная дата документа (подписание/выдача)",
+  "receipt_date": "YYYY-MM-DD — главная дата документа (для счёта — fecha de emisión/factura; для договора — подписание)",
   "receipt_time": null,
-  "total_amount": главная сумма ЧИСЛОМ (precio de compraventa / цена сделки, сумма полиса) или null,
+  "total_amount": главная сумма ЧИСЛОМ (для счёта — Total factura / importe total; для сделки — precio de compraventa; для полиса — сумма полиса) или null,
   "subtotal": null, "tax_amount": null, "tax_rate": null,
   "currency": "EUR",
   "payment_method": null, "country": null,
-  "document_type": "contract | insurance | bank | other",
+  "document_type": одно из [bill, invoice, contract, insurance, bank, receipt, other] — bill = счёт за электричество/воду/газ/интернет (factura, informe de consumo, CUPS, lecturas); invoice = торговая фактура за товары/услуги; contract = договор/контракт (condiciones generales, contrato); insurance = страховой полис; bank = банковская выписка; receipt = кассовый чек; other = прочее,
   "subtype": одно из [electricity, water, gas, internet, phone, comunidad, rent, waste, insurance_home, insurance_car, insurance_health, tax, other] или null,
   "provider": "нотариус / банк / компания-эмитент или null",
   "valid_from": "YYYY-MM-DD или null", "valid_to": "YYYY-MM-DD или null",
@@ -687,7 +687,7 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
   if (!data.object) data.object = detectObjectByAddress(data.supply_address, raw_text);
   if (!Array.isArray(data.items)) data.items = [];
   if (docType && docType !== 'auto') data.document_type = docType;
-  else if (!data.store_name && !data.receipt_date) data.document_type = 'contract';
+  else if (!data.store_name && !data.receipt_date) data.document_type = 'other';
   return data;
 }
 
@@ -1428,7 +1428,7 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
       });
       job.stage = 'finalize';
       const recognitionMethod = `page-by-page ${files.length}f (gemini vision, async)`;
-      receiptData.docType = docType === 'auto' ? (receiptData.document_type || 'contract') : docType;
+      receiptData.docType = docType === 'auto' ? (receiptData.document_type || 'other') : docType;
       receiptData.object = (object && object !== 'other') ? object : (receiptData.object || 'other');
       if (subtypeOverride) receiptData.subtype = subtypeOverride;
 
@@ -1568,7 +1568,7 @@ app.get('/api/diagnostics', async (req, res) => {
   try {
     const columns = await getTableColumns();
     res.json({
-      version: '2026-08-03.15 (асинхронные задачи: многостраничные документы не падают по таймауту прокси Railway)',
+      version: '2026-08-03.16 (постраничный режим: фактуры/счета больше не классифицируются как договоры)',
       raw_text_ru_column: columns.includes('raw_text_ru'),
       fix_if_false: 'alter table receipts add column if not exists raw_text_ru text;',
       v13_page_urls_column: columns.includes('page_urls'),
