@@ -247,6 +247,24 @@ function loadPdfJs() {
 const isPdfFile = (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '');
 const isPdfUrl = (url) => /\.pdf(\?|$)/i.test(url || '');
 
+// Текст одной страницы из raw_text / raw_text_ru (формат «══════ СТРАНИЦА N из M ══════»)
+function extractRawPage(rawText, pageNum) {
+  if (!rawText) return '';
+  const re = /═{2,}\s*СТРАНИЦА\s+(\d+)\s+из\s+\d+\s*═{2,}/gi;
+  const marks = [];
+  let m;
+  while ((m = re.exec(rawText)) !== null) {
+    marks.push({ page: parseInt(m[1], 10), start: re.lastIndex, markStart: m.index });
+  }
+  for (let i = 0; i < marks.length; i++) {
+    if (marks[i].page === pageNum) {
+      const end = i + 1 < marks.length ? marks[i + 1].markStart : rawText.length;
+      return rawText.slice(marks[i].start, end).trim();
+    }
+  }
+  return '';
+}
+
 async function convertPdfToImages(pdfFile) {
   const pdfjsLib = await loadPdfJs();
   const data = await pdfFile.arrayBuffer();
@@ -452,7 +470,8 @@ function App() {
   const [savingEdit, setSavingEdit] = useState(false);
 
   // При открытии другого чека галерея начинается с первой страницы, режим редактирования сбрасывается
-  useEffect(() => { setModalPageIdx(0); setEditMode(false); }, [viewModal?.id]);
+  useEffect(() => { setModalPageIdx(0); setEditMode(false); setPageTextLang('ru'); }, [viewModal?.id]);
+  const [pageTextLang, setPageTextLang] = useState('ru'); // текст страницы рядом с галереей: перевод | оригинал
 
   // Закрытие полноэкранного просмотра по Escape
   useEffect(() => {
@@ -1809,23 +1828,50 @@ function App() {
                           style={{ width: manyPages ? 46 : 52, height: manyPages ? 46 : 52, objectFit: 'cover', borderRadius: 6, cursor: 'pointer', flexShrink: 0, border: i === idx ? '2px solid #2980b9' : '1px solid #ccd6dd' }} />
                       )
                     );
+                    // Перевод/оригинал выбранной страницы — рядом с изображением
+                    const pageRu = extractRawPage(viewModal.raw_text_ru, idx + 1);
+                    const pageOrig = extractRawPage(viewModal.raw_text, idx + 1);
+                    const effLang = (pageTextLang === 'ru' && pageRu) ? 'ru' : (pageTextLang === 'orig' && pageOrig) ? 'orig' : (pageRu ? 'ru' : 'orig');
+                    const pageText = effLang === 'ru' ? pageRu : pageOrig;
+                    const langBtn = (lang, label, enabled) => (
+                      <button key={lang} onClick={() => setPageTextLang(lang)} disabled={!enabled}
+                        style={{ padding: '3px 10px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: enabled ? 'pointer' : 'not-allowed', border: effLang === lang ? '1px solid #2980b9' : '1px solid #ccd6dd', background: effLang === lang ? '#eaf3fb' : '#fff', color: enabled ? '#2c3e50' : '#b2bec3' }}>
+                        {label}
+                      </button>
+                    );
                     return (
                       <>
-                        {isPdfUrl(pages[idx]) ? (
-                          <a href={curUrl} target="_blank" rel="noreferrer" className="no-image"
-                            style={{ display: 'block', textDecoration: 'none', color: '#2980b9', fontWeight: 600 }}>
-                            📄 Страница {idx + 1} — PDF, открыть в новой вкладке ↗
-                          </a>
-                        ) : (
-                          <img
-                            src={curUrl}
-                            alt={`Страница ${idx + 1}`}
-                            className="modal-image"
-                            onClick={() => setFullscreenImage(curUrl)}
-                            style={{ cursor: 'zoom-in' }}
-                            title="Нажмите — открыть на весь экран"
-                          />
-                        )}
+                        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                          <div style={{ flex: '1 1 340px', minWidth: 0, textAlign: 'center' }}>
+                            {isPdfUrl(pages[idx]) ? (
+                              <a href={curUrl} target="_blank" rel="noreferrer" className="no-image"
+                                style={{ display: 'block', textDecoration: 'none', color: '#2980b9', fontWeight: 600 }}>
+                                📄 Страница {idx + 1} — PDF, открыть в новой вкладке ↗
+                              </a>
+                            ) : (
+                              <img
+                                src={curUrl}
+                                alt={`Страница ${idx + 1}`}
+                                className="modal-image"
+                                onClick={() => setFullscreenImage(curUrl)}
+                                style={{ cursor: 'zoom-in' }}
+                                title="Нажмите — открыть на весь экран"
+                              />
+                            )}
+                          </div>
+                          {(pageRu || pageOrig) ? (
+                            <div style={{ flex: '1 1 300px', minWidth: 0, textAlign: 'left' }}>
+                              <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+                                {langBtn('ru', '🇷🇺 Перевод', !!pageRu)}
+                                {langBtn('orig', 'Оригинал', !!pageOrig)}
+                                <span style={{ fontSize: 11, color: '#95a5a6', alignSelf: 'center' }}>стр. {idx + 1}</span>
+                              </div>
+                              <div style={{ maxHeight: '55vh', overflowY: 'auto', background: '#f8f9fa', border: '1px solid #e0e6ed', borderRadius: 8, padding: '10px 12px', fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#2c3e50' }}>
+                                {pageText}
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
                         {pages.length > 1 && !manyPages && (
                           // До 10 страниц — все миниатюры с переносом
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, justifyContent: 'center' }}>
