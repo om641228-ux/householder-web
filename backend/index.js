@@ -546,11 +546,12 @@ async function getPdfPageCountViaGemini(pdfBuffer) {
 }
 
 // Текст одной страницы через Gemini vision (1-страничный PDF или изображение страницы)
+// Лимит 12288: плотные страницы договоров (20+ тыс. знаков ≈ 6–7 тыс. токенов) + thinking-запас
 async function extractPageTextWithGemini(pageBuffer, mimeType, pageNum, totalPages) {
   if (!genAI) throw new Error('Постраничное распознавание требует GEMINI_API_KEY (vision по страницам)');
   const model = genAI.getGenerativeModel({
     model: DEFAULT_GEMINI_MODEL,
-    generationConfig: { maxOutputTokens: 8192, temperature: 0.1 }
+    generationConfig: { maxOutputTokens: 12288, temperature: 0.1 }
   });
   const prompt = `Это страница ${pageNum} из ${totalPages} отсканированного многостраничного документа (договор, эскритура купли-продажи, банковская выписка, полис).
 Извлеки ВЕСЬ текст этой страницы ДОСЛОВНО, на языке оригинала (НЕ переводи), сохраняя порядок строк и, по возможности, структуру (подписи полей, таблицы построчно).
@@ -706,11 +707,13 @@ async function assembleDocumentFromPages(pageBuffers, mimeTypes, currency, docTy
 
 // Текст ДИАПАЗОНА страниц из целого PDF (режим без pdf-lib: Gemini видит весь документ,
 // мы просим страницы N–M; каждая страница в ответе — с заголовком ═══ Страница K ═══)
+// Возвращает { text, truncated }: truncated=true, если ответ обрезан лимитом токенов
+// (плотные договоры: 3 страницы по 20+ тыс. знаков могут не влезть даже в 24576 токенов).
 async function extractPageRangeTextWithGemini(pdfBuffer, fromPage, toPage, totalPages) {
   if (!genAI) throw new Error('Постраничное распознавание требует GEMINI_API_KEY');
   const model = genAI.getGenerativeModel({
     model: DEFAULT_GEMINI_MODEL,
-    generationConfig: { maxOutputTokens: 16384, temperature: 0.1 }
+    generationConfig: { maxOutputTokens: 24576, temperature: 0.1 }
   });
   const prompt = `Это отсканированный документ из ${totalPages} страниц.
 Извлеки ДОСЛОВНО весь текст СТРАНИЦ С ${fromPage} ПО ${toPage} включительно, на языке оригинала (НЕ переводи), сохраняя порядок строк.
@@ -721,7 +724,11 @@ async function extractPageRangeTextWithGemini(pdfBuffer, fromPage, toPage, total
     { inlineData: { data: pdfBuffer.toString('base64'), mimeType: 'application/pdf' } },
     prompt
   ]);
-  return (result.response.text() || '').trim();
+  const cand = result.response.candidates && result.response.candidates[0];
+  const truncated = !!cand && cand.finishReason === 'MAX_TOKENS';
+  let text = '';
+  try { text = (result.response.text() || '').trim(); } catch (e) { text = ''; }
+  return { text, truncated };
 }
 
 // Разбор ответов диапазонов на отдельные страницы по заголовкам ═══ Страница K ═══
@@ -745,14 +752,46 @@ function splitRangeTextsToPages(rangeTexts, pageCount) {
   return pages.map(t => t || '(страница не распознана)');
 }
 
-// Постраничный режим БЕЗ pdf-lib: целый PDF → текст диапазонами по 5 страниц
+// Постраничный режим БЕЗ pdf-lib: целый PDF → текст диапазонами по 3 страницы.
+// Плотные документы (договоры по 18–25 тыс. знаков на страницу, напр. контракты Plenitude)
+// могут не помещаться в лимит вывода → диапазон обрезается, последние страницы теряются.
+// Поэтому: все страницы, которые не распознались ИЛИ попали в обрезанный/упавший диапазон,
+// дозапрашиваются ПО ОДНОЙ — гарантия, что ни одна страница не потеряна.
 async function recognizeLongPdfByPageRanges(pdfBuffer, pageCount, currency, docType) {
-  console.log(`Постраничный режим без pdf-lib: ${pageCount} стр., диапазоны по 5`);
-  const RANGE = 5;
+  const RANGE = 3;
+  console.log(`Постраничный режим без pdf-lib: ${pageCount} стр., диапазоны по ${RANGE}`);
   const ranges = [];
   for (let from = 1; from <= pageCount; from += RANGE) ranges.push([from, Math.min(pageCount, from + RANGE - 1)]);
-  const rangeTexts = await runWithConcurrency(ranges, (r) => extractPageRangeTextWithGemini(pdfBuffer, r[0], r[1], pageCount), 2);
-  const pageTexts = splitRangeTextsToPages(rangeTexts, pageCount);
+  const rangeResults = await runWithConcurrency(ranges, (r) => extractPageRangeTextWithGemini(pdfBuffer, r[0], r[1], pageCount), 3);
+  const pageTexts = splitRangeTextsToPages(rangeResults.map(r => (r && r.text) || ''), pageCount);
+
+  // Дозапрос по одной странице: нерозпознанные + все страницы обрезанных/упавших диапазонов
+  const retryPages = new Set();
+  rangeResults.forEach((r, i) => {
+    if (!r || r.truncated || typeof r === 'string') {
+      for (let p = ranges[i][0]; p <= ranges[i][1]; p++) retryPages.add(p);
+    }
+  });
+  pageTexts.forEach((t, i) => { if (t === '(страница не распознана)') retryPages.add(i + 1); });
+
+  if (retryPages.size) {
+    const list = [...retryPages];
+    console.log(`Дозапрос страниц по одной (${list.length}): ${list.join(', ')}`);
+    const singles = await runWithConcurrency(list, (p) => extractPageRangeTextWithGemini(pdfBuffer, p, p, pageCount), 3);
+    list.forEach((p, i) => {
+      const s = singles[i];
+      let t = (s && s.text) || (typeof s === 'string' ? s : '');
+      // 1) пробуем стандартный разбор по заголовку ═══ Страница K ═══
+      const parsed = splitRangeTextsToPages([t], pageCount);
+      if (parsed[p - 1] && parsed[p - 1] !== '(страница не распознана)') {
+        pageTexts[p - 1] = parsed[p - 1];
+        return;
+      }
+      // 2) запасной вариант: модель не поставила заголовок — срезаем его сами и берём весь текст
+      t = t.replace(/^\s*═══\s*Страница\s+\d+\s*═══\s*/i, '').trim();
+      if (t && !/^\(ошибка/.test(t)) pageTexts[p - 1] = t;
+    });
+  }
   return finalizeDocumentFromPageTexts(pageTexts, currency, docType);
 }
 
@@ -1479,7 +1518,7 @@ app.get('/api/diagnostics', async (req, res) => {
   try {
     const columns = await getTableColumns();
     res.json({
-      version: '2026-08-02.13 (page_urls: все страницы документа сохраняются в Storage и показываются в карточке)',
+      version: '2026-08-02.14 (все страницы плотных документов: диапазоны по 3 + дозапрос обрезанных страниц по одной)',
       raw_text_ru_column: columns.includes('raw_text_ru'),
       fix_if_false: 'alter table receipts add column if not exists raw_text_ru text;',
       v13_page_urls_column: columns.includes('page_urls'),
