@@ -1529,13 +1529,41 @@ function App() {
   // идентификаторы (№ договора, CUPS, № фактуры, адрес поставки) и они РАЗЛИЧАЮТСЯ —
   // это РАЗНЫЕ документы, а не копии (разные договоры с пустым «Без названия»!).
   const dupNorm = (v) => String(v || '').toLowerCase().replace(/[.,;«»"']/g, ' ').replace(/\s+/g, ' ').trim();
-  const DUP_STRONG_FIELDS = ['contract_number', 'cups', 'invoice_number', 'supply_address'];
-  const dupConflict = (a, b) => DUP_STRONG_FIELDS.some(f => {
+  const DUP_STRONG_FIELDS = ['contract_number', 'cups', 'invoice_number', 'supply_address', 'object'];
+  const dupFieldConflict = (a, b) => DUP_STRONG_FIELDS.some(f => {
     const x = dupNorm(a[f]);
     const y = dupNorm(b[f]);
-    if (!x || !y || x === y) return false;   // у одного не заполнено — не конфликт
-    return !(x.includes(y) || y.includes(x)); // частичное совпадение (обрезанный адрес) — не конфликт
+    if (!x || !y || x === y) return false;      // у одного не заполнено — не конфликт
+    if (f === 'object' && (x === 'other' || y === 'other')) return false; // 'other' — заглушка, не улика
+    return !(x.includes(y) || y.includes(x));    // частичное совпадение (обрезанный адрес) — не конфликт
   });
+  // Сравнение РАСПОЗНАННОГО ТЕКСТА (когда структурные поля пусты):
+  // 1) CUPS-коды точек поставки (ES…) — у обоих есть и НЕ пересекаются → разные документы
+  // 2) наборы длинных чисел (№ договора, потребление кВт·ч, телефоны): общего < 70% → разные
+  const dupCupsOf = (t) => new Set((String(t || '').toUpperCase().match(/ES[0-9A-Z]{14,24}/g) || []));
+  const dupNumsOf = (t) => new Set((String(t || '').match(/\d{5,}/g) || []));
+  const dupTextConflict = (a, b) => {
+    const ta = a.raw_text || '';
+    const tb = b.raw_text || '';
+    if (ta.length < 300 || tb.length < 300) return false; // нечего сравнивать
+    const ca = dupCupsOf(ta);
+    const cb = dupCupsOf(tb);
+    if (ca.size && cb.size) {
+      let inter = 0;
+      ca.forEach(c => { if (cb.has(c)) inter++; });
+      if (inter === 0) return true; // разные CUPS — точно разные договоры поставки
+    }
+    const na = dupNumsOf(ta);
+    const nb = dupNumsOf(tb);
+    if (na.size >= 5 && nb.size >= 5) {
+      let inter = 0;
+      na.forEach(n => { if (nb.has(n)) inter++; });
+      const jacc = inter / (na.size + nb.size - inter);
+      if (jacc < 0.7) return true;
+    }
+    return false;
+  };
+  const dupConflict = (a, b) => dupFieldConflict(a, b) || dupTextConflict(a, b);
   const dupMap = new Map();
   receipts.forEach(r => {
     // Совсем без идентичности (ни названия, ни даты, ни суммы) — о дубликатах не судим
@@ -2574,7 +2602,7 @@ function App() {
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 5 }}>
                               {dupAllIds.has(receipt.id) && (
                                 dupCopyIds.has(receipt.id)
-                                  ? <span title="Дубликат: совпадают название, дата и сумма, а № договора/CUPS/адрес НЕ различаются" style={{ background: '#e74c3c', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>КОПИЯ</span>
+                                  ? <span title="Дубликат: совпадают название, дата и сумма; № договора/CUPS/адрес/объект и распознанный текст НЕ различаются" style={{ background: '#e74c3c', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>КОПИЯ</span>
                                   : <span title="Оригинал (самый ранний из группы дубликатов)" style={{ background: '#27ae60', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>ОРИГИНАЛ</span>
                               )}
                               {expiryInfo(receipt) && (
