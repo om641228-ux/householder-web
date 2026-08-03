@@ -177,6 +177,9 @@ function buildReceiptPrompt(currency, docType) {
     - "insurance" — СТРАХОВКА: полис, póliza de seguro, страховая премия, recibo de seguro.
     - "bank" — БАНКОВСКИЙ документ: выписка (extracto bancario), подтверждение перевода, SEPA-дебет, comisión bancaria.
     - "contract" — ДОГОВОР: contrato (аренда, услуги, трудовой), соглашение, дополнение к договору.
+    - "municipality" — МЭРИЯ: документы муниципалитета (Ayuntamiento): informe urbanístico, licencias, notificaciones municipales, tasas/ordenanzas муниципальные.
+    - "tax" — НАЛОГОВАЯ: документы налоговых органов (Agencia Tributaria/AEAT, Hacienda, налоговая Канар): IBI, IAE, declaraciones, liquidaciones, recibos de impuestos, modelo 303/130 и т.п.
+    - "proposal" — КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ: presupuesto, oferta comercial, cotización, proforma — НЕ счёт к оплате (это invoice/bill), а предложение цен/условий.
     - "other" — всё остальное, что не подходит под категории выше.
     Если сомневаешься между "invoice" и "bill": разовая продажа товаров/работ от поставщика → "invoice"; периодический счёт за услуги (свет, вода, связь, comunidad) → "bill".
     ${docTypeHint}
@@ -215,7 +218,7 @@ Cambio: <как на документе>
 <все остальные строки с документа на языке оригинала, не вошедшие в модули выше: реклама, примечания, реквизиты, футеры — каждая с новой строки>
 
 14. raw_text_ru — ОБЯЗАТЕЛЬНОЕ ПОЛЕ: ПОЛНЫЙ ПЕРЕВОД raw_text на русский язык с той же модульной структурой и порядком строк. Все названия, подписи и примечания переведи; числа, даты, артикулы и реквизиты оставь без изменений. Заголовки модулей те же: ══════ МАГАЗИН ══════, ══════ ДОКУМЕНТ ══════, ══════ ТОВАРЫ ══════, ══════ СУММЫ ══════, ══════ ОПЛАТА ══════, ══════ ПРОЧИЙ ТЕКСТ ══════. Ответ БЕЗ поля raw_text_ru считается НЕВАЛИДНЫМ.
-15. Для документов типа bill / insurance / bank / contract дополнительно извлеки:
+15. Для документов типа bill / insurance / bank / contract / municipality / tax / proposal дополнительно извлеки:
     - subtype — подтип услуги/документа, ОДНО из значений: electricity (luz/electricidad), water (agua), gas, internet, phone (teléfono/móvil), comunidad, rent (alquiler), waste (basura/recogida de residuos), insurance_home, insurance_car, insurance_health, tax (impuestos/tasas), other. Для receipt — null. ВАЖНО: если документ определён как invoice, но это фактура за услуги (свет, вода, интернет, мусор, связь, comunidad) — subtype заполни ОБЯЗАТЕЛЬНО.
     - provider — компания-поставщик или эмитент документа (Iberdrola, Endesa, Movistar, Mapfre, название банка...).
     - valid_from / valid_to — период действия полиса/договора или период счёта в формате YYYY-MM-DD, если указаны на документе; иначе null.
@@ -945,7 +948,7 @@ function parseAIResponse(text) {
       country: data.country || data.address || null,
       document_type: (() => {
       const raw = String(data.document_type || data.doc_type || data.type || '').toLowerCase().trim();
-      if (['receipt', 'invoice', 'bill', 'insurance', 'bank', 'contract', 'other'].includes(raw)) return raw;
+      if (['receipt', 'invoice', 'bill', 'insurance', 'bank', 'contract', 'municipality', 'tax', 'proposal', 'other'].includes(raw)) return raw;
       return /invoice|factura|фактур/i.test(raw) ? 'invoice' : 'receipt';
     })(),
       subtype: (() => {
@@ -1568,7 +1571,7 @@ app.get('/api/diagnostics', async (req, res) => {
   try {
     const columns = await getTableColumns();
     res.json({
-      version: '2026-08-03.16 (постраничный режим: фактуры/счета больше не классифицируются как договоры)',
+      version: '2026-08-03.17 (новые типы документов: мэрия, налоговая, коммерческое предложение)',
       raw_text_ru_column: columns.includes('raw_text_ru'),
       fix_if_false: 'alter table receipts add column if not exists raw_text_ru text;',
       v13_page_urls_column: columns.includes('page_urls'),
@@ -1776,7 +1779,7 @@ app.post('/api/bulk-update-currency', requireAuth, async (req, res) => {
 app.post('/api/bulk-update-type', requireAuth, async (req, res) => {
   try {
     const { ids, document_type } = req.body;
-    const ALLOWED_TYPES = ['receipt', 'invoice', 'bill', 'insurance', 'bank', 'contract', 'other'];
+    const ALLOWED_TYPES = ['receipt', 'invoice', 'bill', 'insurance', 'bank', 'contract', 'municipality', 'tax', 'proposal', 'other'];
     if (!ALLOWED_TYPES.includes(document_type)) {
       return res.status(400).json({ error: `document_type должен быть одним из: ${ALLOWED_TYPES.join(', ')}` });
     }

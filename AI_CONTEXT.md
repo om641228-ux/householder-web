@@ -282,7 +282,13 @@ Bucket: `receipt-images` (public, policies SELECT/INSERT/DELETE).
 
 ## 14. Changelog
 
-**2026-08-03 (текущая финальная версия, v19 — фактуры в постраничном режиме больше не «договоры»)**
+**2026-08-03 (текущая финальная версия, v20 — новые типы документов: мэрия, налоговая, коммерческое предложение)**
+- DOC_TYPE_LABELS (frontend, единый источник для фильтра «Тип», селектов загрузки/редактирования/массовой смены): + municipality «🏛️ Мэрия», tax «💰 Налоговая», proposal «🤝 Комм. предложение»
+- Backend: правило 12 промпта — определения: municipality = документы Ayuntamiento (informe urbanístico, licencias, tasas); tax = налоговые органы (AEAT/Hacienda: IBI, IAE, declaraciones, liquidaciones); proposal = presupuesto/oferta/cotización (НЕ счёт к оплате); списки допустимых значений расширены в санитайзере document_type и ALLOWED_TYPES массовой смены; промпт сводки многостраничных документов — полный список из 10 типов; правило 15 (subtype/provider) действует и на новые типы
+- HOTFIX: в хвосте index.js обнаружен и удалён мусорный дубль (обрывок catch + повторный START-блок после app.listen) — с ним бэкенд не стартовал бы; node --check зелёный
+- Версия бэкенда: 2026-08-03.17 (watchdog обновлён синхронно)
+
+**2026-08-03 (v19 — фактуры в постраничном режиме больше не «договоры»)**
 - ПРОБЛЕМА (скриншот «фактуры стали распознаваться как договор»): 3-страничная фактура Plenitude попадает в постраничный режим (порог >2 стр.), а промпт сводки buildDocumentSummaryPrompt предлагал document_type ТОЛЬКО из [contract, insurance, bank, other] — типа «счёт» не существовало, счёт классифицировался как contract; плюс дефолты при неопределённости тоже были 'contract' (finalize fallback и обработчик upload-document-pages)
 - РЕШЕНИЕ: промпт сводки переписан — документ может быть счёт за коммуналку (factura de electricidad/agua/gas — consumo, CUPS, período), торговая фактура, договор, полис, выписка, уведомление; document_type — полный список [bill, invoice, contract, insurance, bank, receipt, other] с пояснениями (bill = factura/informe de consumo/CUPS/lecturas); receipt_date для счёта = fecha de emisión; total_amount для счёта = Total factura; примеры store_name для счёта и договора
 - Дефолты 'contract' → 'other' при полной неопределённости (нет имени и даты / нет document_type)
