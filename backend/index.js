@@ -429,9 +429,11 @@ async function recognizeWithFallback(imageBuffer, currency, docType, mimeType = 
 // Модели (особенно kimi-k3) могут опустить raw_text_ru, несмотря на обязательность в промпте.
 // Если перевода нет — делаем отдельный ДЕШЁВЫЙ текстовый запрос (без картинки) на перевод.
 function buildTranslatePrompt(rawText) {
-  return `Переведи текст чека на русский язык. ПРАВИЛА:
+  return `Переведи текст документа на русский язык. ПРАВИЛА:
 - Сохрани структуру и порядок строк ОДИН В ОДИН. Заголовки вида ══════ ИМЯ ══════ оставь без изменений (они уже на русском)
+- Если текст УЖЕ на русском языке — верни его БЕЗ изменений
 - Переведи все названия, подписи и примечания; числа, даты, артикулы, реквизиты, номера карт и суммы НЕ меняй
+- Таблицы переводи ПОСТРОЧНО, сохраняя содержимое КАЖДОЙ ячейки. ЗАПРЕЩЕНО возвращать пустую сетку таблицы (строки из одних символов | и -) или удалять содержимое ячеек
 - Верни ТОЛЬКО переведённый текст, без пояснений и markdown
 
 ТЕКСТ:
@@ -548,23 +550,53 @@ async function getPdfPageCountViaGemini(pdfBuffer) {
   }
 }
 
+// Признак «пустой сетки»: модель выдала рамку таблицы без содержимого
+// (много строк только из | _ – - + и пробелов) или подозрительно мало видимых знаков.
+// Служебные строки-маркеры ("(страница без текста)" и т.п.) скелетом НЕ считаются.
+function looksLikeEmptySkeleton(text) {
+  const s = String(text || '').trim();
+  if (!s) return true;
+  if (s.startsWith('(')) return false; // служебный маркер
+  const lines = s.split('\n').map(l => l.trim()).filter(Boolean);
+  if (!lines.length) return true;
+  const skeletonLines = lines.filter(l => l.length >= 8 && /^[|_\-—–+\s.:]*$/.test(l)).length;
+  if (skeletonLines >= 4 && skeletonLines >= lines.length * 0.5) return true;
+  const visibleChars = lines.join('').replace(/[|_\-—–+\s.:]/g, '').length;
+  if (visibleChars < 40) return true; // почти пусто: повторная попытка не повредит
+  return false;
+}
+
 // Текст одной страницы через Gemini vision (1-страничный PDF или изображение страницы)
-// Лимит 12288: плотные страницы договоров (20+ тыс. знаков ≈ 6–7 тыс. токенов) + thinking-запас
+// Лимит 12288: плотные страницы договоров (20+ тыс. знаков ≈ 6–7 тыс. токенов) + thinking-запас.
+// Если результат похож на пустую сетку таблицы (мелкий текст не прочитался) — ОДИН повтор
+// с усиленным промптом (построчное чтение таблиц, 16384 токена, temperature 0).
 async function extractPageTextWithGemini(pageBuffer, mimeType, pageNum, totalPages) {
   if (!genAI) throw new Error('Постраничное распознавание требует GEMINI_API_KEY (vision по страницам)');
-  const model = genAI.getGenerativeModel({
-    model: DEFAULT_GEMINI_MODEL,
-    generationConfig: { maxOutputTokens: 12288, temperature: 0.1 }
-  });
-  const prompt = `Это страница ${pageNum} из ${totalPages} отсканированного многостраничного документа (договор, эскритура купли-продажи, банковская выписка, полис).
+  const inline = { inlineData: { data: pageBuffer.toString('base64'), mimeType: mimeType || 'application/pdf' } };
+  const prompt = `Это страница ${pageNum} из ${totalPages} отсканированного многостраничного документа (договор, эскритура купли-продажи, банковская выписка, полис, счёт, коммерческое предложение).
 Извлеки ВЕСЬ текст этой страницы ДОСЛОВНО, на языке оригинала (НЕ переводи), сохраняя порядок строк и, по возможности, структуру (подписи полей, таблицы построчно).
+ПРАВИЛА ДЛЯ ТАБЛИЦ: выпиши КАЖДУЮ строку таблицы отдельной строкой текста, перечисляя содержимое ВСЕХ ячеек через " | ". Если ячейку не удаётся прочитать — впиши [неразборчиво], но НЕ оставляй её молча пустой. ЗАПРЕЩЕНО выводить пустую рамку таблицы (строки из одних символов | и -) без содержимого.
 Не добавляй ничего от себя: ни JSON, ни markdown, ни комментарии, ни сводки — только текст страницы.
 Если на странице нет текста (чистое фото/пустая) — верни одну строку: (страница без текста)`;
-  const result = await model.generateContent([
-    { inlineData: { data: pageBuffer.toString('base64'), mimeType: mimeType || 'application/pdf' } },
-    prompt
-  ]);
-  const t = (result.response.text() || '').trim();
+  const retryPrompt = `Это страница ${pageNum} из ${totalPages} отсканированного документа с ТАБЛИЦАМИ и мелким текстом.
+В предыдущей попытке содержимое таблиц потерялось. Прочитай страницу МАКСИМАЛЬНО внимательно, как будто разглядываешь её по фрагментам с увеличением:
+- Сначала выпиши весь текст ВНЕ таблиц (заголовки, реквизиты, подписи, даты, адреса).
+- Затем КАЖДУЮ таблицу — строго построчно: одна строка таблицы = одна строка текста, ячейки через " | ", включая номера, наименования, количества, цены и суммы. Не пропускай и не объединяй строки. Если ячейка пуста В ОРИГИНАЛЕ — так и напиши: (пусто).
+Текст выводи на языке оригинала, без перевода, без markdown и комментариев.`;
+  const mk = (maxTok, temp) => genAI.getGenerativeModel({
+    model: DEFAULT_GEMINI_MODEL,
+    generationConfig: { maxOutputTokens: maxTok, temperature: temp }
+  });
+  const result = await mk(12288, 0.1).generateContent([inline, prompt]);
+  let t = (result.response.text() || '').trim();
+  if (looksLikeEmptySkeleton(t)) {
+    console.warn(`Страница ${pageNum}: похоже на пустую сетку (${t.length} зн.), повтор с усиленным промптом`);
+    try {
+      const r2 = await mk(16384, 0).generateContent([inline, retryPrompt]);
+      const t2 = (r2.response.text() || '').trim();
+      if (!looksLikeEmptySkeleton(t2) || t2.length > t.length) t = t2;
+    } catch (e) { console.warn(`Страница ${pageNum}: повтор не удался: ${e.message}`); }
+  }
   return t || '(страница без текста)';
 }
 
@@ -636,7 +668,7 @@ async function callTextChain(prompt, maxTokens = 8192) {
 
 // Промпт JSON-сводки полей по распознанному тексту многостраничного документа
 function buildDocumentSummaryPrompt(textSample) {
-  return `Ты анализируешь многостраничный документ, распознанный по страницам. Это может быть: СЧЁТ за коммунальные услуги (factura de electricidad/agua/gas — consumo, CUPS, período de facturación), торговая фактура, договор (contrato de suministro, escritura de compraventa), страховой полис, банковская выписка, официальное уведомление. Верни ТОЛЬКО JSON, без markdown и комментариев:
+  return `Ты анализируешь многостраничный документ, распознанный по страницам. Это может быть: СЧЁТ за коммунальные услуги (factura de electricidad/agua/gas — consumo, CUPS, período de facturación), торговая фактура, договор (contrato de suministro, escritura de compraventa), страховой полис, банковская выписка, документ мэрии (Ayuntamiento), налоговый документ (AEAT/Hacienda), коммерческое предложение (presupuesto/oferta), официальное уведомление. Верни ТОЛЬКО JSON, без markdown и комментариев:
 {
   "store_name": "краткое название документа/главного контрагента НА ЯЗЫКЕ ОРИГИНАЛА (примеры: Factura electricidad — Plenitude; Contrato de suministro — Plenitude; Escritura de compraventa — Jardines del Duque), БЕЗ перевода",
   "store_name_ru": "перевод store_name на русский",
@@ -646,7 +678,7 @@ function buildDocumentSummaryPrompt(textSample) {
   "subtotal": null, "tax_amount": null, "tax_rate": null,
   "currency": "EUR",
   "payment_method": null, "country": null,
-  "document_type": одно из [bill, invoice, contract, insurance, bank, receipt, other] — bill = счёт за электричество/воду/газ/интернет (factura, informe de consumo, CUPS, lecturas); invoice = торговая фактура за товары/услуги; contract = договор/контракт (condiciones generales, contrato); insurance = страховой полис; bank = банковская выписка; receipt = кассовый чек; other = прочее,
+  "document_type": одно из [bill, invoice, contract, insurance, bank, receipt, municipality, tax, proposal, other] — bill = счёт за электричество/воду/газ/интернет (factura, informe de consumo, CUPS, lecturas); invoice = торговая фактура за товары/услуги; contract = договор/контракт (condiciones generales, contrato); insurance = страховой полис; bank = банковская выписка; receipt = кассовый чек; municipality = документ мэрии (Ayuntamiento: informe urbanístico, licencias, tasas municipales); tax = налоговая (Hacienda/AEAT: IBI, IAE, declaraciones, liquidaciones); proposal = коммерческое предложение (presupuesto, oferta comercial, cotización, proforma — предложение цен, НЕ счёт к оплате); other = прочее,
   "subtype": одно из [electricity, water, gas, internet, phone, comunidad, rent, waste, insurance_home, insurance_car, insurance_health, tax, other] или null,
   "provider": "нотариус / банк / компания-эмитент или null",
   "valid_from": "YYYY-MM-DD или null", "valid_to": "YYYY-MM-DD или null",
@@ -664,6 +696,22 @@ function buildDocumentSummaryPrompt(textSample) {
 ${textSample}`;
 }
 
+// Разбор суммы в европейском/русском формате: "60 736,00" | "60.736,00" | "60,736.00" | "60736"
+function parseAmountLike(s) {
+  if (!s) return null;
+  let t = String(s).replace(/[\s ]/g, '');
+  const lastDot = t.lastIndexOf('.'), lastComma = t.lastIndexOf(',');
+  if (lastDot >= 0 && lastComma >= 0) {
+    if (lastComma > lastDot) t = t.replace(/\./g, '').replace(',', '.'); // 60.736,00
+    else t = t.replace(/,/g, ''); // 60,736.00
+  } else if (lastComma >= 0) {
+    const dec = t.length - lastComma - 1;
+    t = dec <= 2 ? t.replace(',', '.') : t.replace(/,/g, ''); // 60736,00 — десятичная; 60,736 — тысячи
+  }
+  const n = parseFloat(t);
+  return isNaN(n) ? null : n;
+}
+
 // Сборка документа из готовых текстов страниц: перевод по страницам + модули + JSON-сводка
 async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
   const pageCount = pageTexts.length;
@@ -672,7 +720,11 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
   // Перевод каждой страницы — текстовая цепочка (3 параллельно)
   const ruTexts = await runWithConcurrency(pageTexts, async (t) => {
     if (/^\((ошибка|страница без текста|страница не распознана)/.test(t)) return t;
-    return (await translateRawText(t)) || '(перевод недоступен)';
+    const ru = await translateRawText(t);
+    // Перевод недоступен или похож на пустую сетку при содержательном оригинале —
+    // показываем сам оригинал: содержимое важнее языка
+    if (!ru || (looksLikeEmptySkeleton(ru) && !looksLikeEmptySkeleton(t))) return t;
+    return ru;
   }, 3);
   const raw_text_ru = ruTexts.map((t, i) => `══════ СТРАНИЦА ${i + 1} из ${pageCount} ══════\n${t}`).join('\n\n');
 
@@ -689,6 +741,23 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
   data.raw_text_ru = raw_text_ru;
   if (!data.object) data.object = detectObjectByAddress(data.supply_address, raw_text);
   if (!Array.isArray(data.items)) data.items = [];
+  // Запасной вариант названия: первые содержательные строки первой страницы
+  // (сводка могла вернуть store_name=null, если текст страниц частично пуст)
+  if (!data.store_name) {
+    const firstLines = String(pageTexts[0] || '').split('\n')
+      .map(l => l.trim())
+      .filter(l => l.length >= 4 && !l.startsWith('(') && !/^[|_\-—–+\s.:═]*$/.test(l))
+      .slice(0, 2);
+    if (firstLines.length) data.store_name = firstLines.join(' — ').slice(0, 90);
+  }
+  // Запасной вариант суммы: ищем "Общая сумма / Итого / Total ..." в полном тексте документа
+  if (data.total_amount == null) {
+    const m = String(raw_text).match(/(?:общая\s+сумма|итого|всего\s+к\s+оплате|suma\s+total|importe\s+total|total\s+(?:a\s+pagar|factura|presupuesto)|precio\s+de\s+compraventa|total)\s*[:.\-]?\s*(\d[\d\s ]*[.,]\d{1,2}|\d[\d\s ]{1,12}\d)/i);
+    if (m) {
+      const n = parseAmountLike(m[1]);
+      if (n != null && n > 0 && n < 1e9) data.total_amount = n;
+    }
+  }
   if (docType && docType !== 'auto') data.document_type = docType;
   else if (!data.store_name && !data.receipt_date) data.document_type = 'other';
   return data;
@@ -1571,7 +1640,7 @@ app.get('/api/diagnostics', async (req, res) => {
   try {
     const columns = await getTableColumns();
     res.json({
-      version: '2026-08-03.17 (новые типы документов: мэрия, налоговая, коммерческое предложение)',
+      version: '2026-08-03.18 (исправлено распознавание плотных таблиц: анти-пустая-сетка, запасные название/сумма)',
       raw_text_ru_column: columns.includes('raw_text_ru'),
       fix_if_false: 'alter table receipts add column if not exists raw_text_ru text;',
       v13_page_urls_column: columns.includes('page_urls'),
