@@ -1809,7 +1809,9 @@ function App() {
               <button className="modal-close" onClick={() => setViewModal(null)}>✕</button>
             </div>
             <div className="modal-body" style={{ minHeight: 0 }}>
-              <div className="modal-image-section">
+              {/* При галерее страниц секция растягивается на всю ширину модалки (CSS класс — узкая колонка 300px),
+                  чтобы рядом со страницей читался перевод */}
+              <div className="modal-image-section" style={(Array.isArray(viewModal.page_urls) && viewModal.page_urls.filter(Boolean).length) ? { flex: '1 1 100%' } : undefined}>
                 {(() => {
                   // Если у документа сохранены все страницы (v13) — показываем галерею страниц
                   const pages = Array.isArray(viewModal.page_urls) ? viewModal.page_urls.filter(Boolean) : [];
@@ -1842,7 +1844,7 @@ function App() {
                     return (
                       <>
                         <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                          <div style={{ flex: '1 1 340px', minWidth: 0, textAlign: 'center' }}>
+                          <div style={{ flex: '3 1 380px', minWidth: 0, textAlign: 'center' }}>
                             {isPdfUrl(pages[idx]) ? (
                               <a href={curUrl} target="_blank" rel="noreferrer" className="no-image"
                                 style={{ display: 'block', textDecoration: 'none', color: '#2980b9', fontWeight: 600 }}>
@@ -1860,13 +1862,13 @@ function App() {
                             )}
                           </div>
                           {(pageRu || pageOrig) ? (
-                            <div style={{ flex: '1 1 300px', minWidth: 0, textAlign: 'left' }}>
+                            <div style={{ flex: '2 1 300px', minWidth: 0, maxWidth: '100%', textAlign: 'left' }}>
                               <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
                                 {langBtn('ru', '🇷🇺 Перевод', !!pageRu)}
                                 {langBtn('orig', 'Оригинал', !!pageOrig)}
                                 <span style={{ fontSize: 11, color: '#95a5a6', alignSelf: 'center' }}>стр. {idx + 1}</span>
                               </div>
-                              <div style={{ maxHeight: '55vh', overflowY: 'auto', background: '#f8f9fa', border: '1px solid #e0e6ed', borderRadius: 8, padding: '10px 12px', fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#2c3e50' }}>
+                              <div style={{ maxHeight: '55vh', overflowY: 'auto', overflowX: 'hidden', background: '#f8f9fa', border: '1px solid #e0e6ed', borderRadius: 8, padding: '10px 12px', fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere', color: '#2c3e50' }}>
                                 {pageText}
                               </div>
                             </div>
