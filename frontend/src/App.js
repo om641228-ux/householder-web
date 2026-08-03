@@ -1525,18 +1525,40 @@ function App() {
 
   // Поиск дубликатов: одинаковые магазин + дата чека + итоговая сумма.
   // В группе самый ранний по created_at — ОРИГИНАЛ, остальные — КОПИИ.
+  // ПРОВЕРКА перед статусом КОПИЯ: если у обоих документов заполнены сильные
+  // идентификаторы (№ договора, CUPS, № фактуры, адрес поставки) и они РАЗЛИЧАЮТСЯ —
+  // это РАЗНЫЕ документы, а не копии (разные договоры с пустым «Без названия»!).
+  const dupNorm = (v) => String(v || '').toLowerCase().replace(/[.,;«»"']/g, ' ').replace(/\s+/g, ' ').trim();
+  const DUP_STRONG_FIELDS = ['contract_number', 'cups', 'invoice_number', 'supply_address'];
+  const dupConflict = (a, b) => DUP_STRONG_FIELDS.some(f => {
+    const x = dupNorm(a[f]);
+    const y = dupNorm(b[f]);
+    if (!x || !y || x === y) return false;   // у одного не заполнено — не конфликт
+    return !(x.includes(y) || y.includes(x)); // частичное совпадение (обрезанный адрес) — не конфликт
+  });
   const dupMap = new Map();
   receipts.forEach(r => {
-    const key = `${String(r.store_name || '').toLowerCase().trim()}|${r.receipt_date || ''}|${parseFloat(r.total_amount) || 0}`;
+    // Совсем без идентичности (ни названия, ни даты, ни суммы) — о дубликатах не судим
+    if (!dupNorm(r.store_name) && !r.receipt_date && !(parseFloat(r.total_amount) || 0)) return;
+    const key = `${dupNorm(r.store_name)}|${r.receipt_date || ''}|${parseFloat(r.total_amount) || 0}`;
     if (!dupMap.has(key)) dupMap.set(key, []);
     dupMap.get(key).push(r);
   });
   const dupGroups = [];
   dupMap.forEach(g => {
-    if (g.length > 1) {
-      g.sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
-      dupGroups.push(g);
-    }
+    if (g.length < 2) return;
+    // Делим на подгруппы: конфликт сильных идентификаторов → разные документы
+    const subgroups = [];
+    g.forEach(r => {
+      const sg = subgroups.find(s => s.every(m => !dupConflict(m, r)));
+      if (sg) sg.push(r); else subgroups.push([r]);
+    });
+    subgroups.forEach(sg => {
+      if (sg.length > 1) {
+        sg.sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
+        dupGroups.push(sg);
+      }
+    });
   });
   const dupAllIds = new Set(dupGroups.flat().map(r => r.id));           // все участники групп дубликатов
   const dupCopyIds = new Set(dupGroups.flatMap(g => g.slice(1)).map(r => r.id)); // копии (все, кроме оригинала)
@@ -2552,7 +2574,7 @@ function App() {
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 5 }}>
                               {dupAllIds.has(receipt.id) && (
                                 dupCopyIds.has(receipt.id)
-                                  ? <span title="Дубликат: такой же магазин, дата и сумма" style={{ background: '#e74c3c', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>КОПИЯ</span>
+                                  ? <span title="Дубликат: совпадают название, дата и сумма, а № договора/CUPS/адрес НЕ различаются" style={{ background: '#e74c3c', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>КОПИЯ</span>
                                   : <span title="Оригинал (самый ранний из группы дубликатов)" style={{ background: '#27ae60', color: '#fff', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10 }}>ОРИГИНАЛ</span>
                               )}
                               {expiryInfo(receipt) && (
