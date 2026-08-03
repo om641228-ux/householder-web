@@ -2597,10 +2597,12 @@ function App() {
                       </div>
                     )}
                     <div className="receipt-card">
-                      <div className="receipt-header" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, paddingTop: 2 }}>
+                      {/* flexWrap + min-ширина заголовка: длинный бейдж типа (🤝 КОММ. ПРЕДЛОЖЕНИЕ)
+                          на узком экране уходит ПОД заголовок, а не сжимает его до 3 букв в строке */}
+                      <div className="receipt-header" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, paddingTop: 2, flexWrap: 'wrap' }}>
                         <input type="checkbox" checked={selectedReceiptIds.has(receipt.id)} onChange={() => toggleSelect(receipt.id)} style={{ width: 20, height: 20, cursor: 'pointer', flexShrink: 0, marginTop: 2 }} />
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <h3 style={{ margin: 0, lineHeight: 1.3, wordBreak: 'break-word' }}>
+                        <div style={{ flex: '1 1 180px', minWidth: 0 }}>
+                          <h3 style={{ margin: 0, lineHeight: 1.3, overflowWrap: 'break-word' }}>
                             <HighlightText text={receipt.store_name || receipt.store_name_ru || 'Без названия'} query={searchQuery} />
                           </h3>
                           {(dupAllIds.has(receipt.id) || expiryInfo(receipt) || (Array.isArray(receipt.page_urls) && receipt.page_urls.length > 1)) && (
@@ -2619,7 +2621,7 @@ function App() {
                             </div>
                           )}
                         </div>
-                        <span className="type-badge" style={{ flexShrink: 0 }}>{DOC_TYPE_LABELS[receipt.document_type] || receipt.document_type || '🧾 Чек'}</span>
+                        <span className="type-badge" style={{ flexShrink: 0, marginLeft: 'auto' }}>{DOC_TYPE_LABELS[receipt.document_type] || receipt.document_type || '🧾 Чек'}</span>
                       </div>
                       <p className="date">{formatDate(receipt.receipt_date)} {receipt.receipt_time}</p>
                       <p className="amount" style={{ color: hasDiff ? '#e67e22' : '#27ae60' }}>
