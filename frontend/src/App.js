@@ -253,7 +253,8 @@ async function convertPdfToImages(pdfFile) {
   const pdf = await pdfjsLib.getDocument({ data }).promise;
   const baseName = (pdfFile.name || 'document').replace(/\.pdf$/i, '');
   const out = [];
-  const maxPages = Math.min(pdf.numPages, 10);
+  // До 60 страниц = лимит бэкенда upload.array('pages', 60); раньше было 10 — длинные договоры обрезались
+  const maxPages = Math.min(pdf.numPages, 60);
   for (let p = 1; p <= maxPages; p++) {
     const page = await pdf.getPage(p);
     const viewport = page.getViewport({ scale: 2.0 });
@@ -395,6 +396,7 @@ function App() {
   const [previewUrls, setPreviewUrls] = useState([]);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [recognizing, setRecognizing] = useState(false);
+  const [preparingPdf, setPreparingPdf] = useState(false); // конвертация PDF → страницы в браузере (длинные PDF — до минуты)
   const [uploadProgress, setUploadProgress] = useState(0);
   const [progressStage, setProgressStage] = useState(null); // 'upload' | 'recognize'
 
@@ -655,7 +657,9 @@ function App() {
   const handleFileSelect = async (e) => {
     const picked = Array.from(e.target.files).filter(f => f.type.startsWith('image/') || isPdfFile(f));
     if (picked.length > 0) {
+      setPreparingPdf(picked.some(isPdfFile));
       const files = await expandFilesWithPdf(picked);
+      setPreparingPdf(false);
       if (!files.length) return;
       previewUrls.forEach(url => URL.revokeObjectURL(url));
       const urls = files.map(f => URL.createObjectURL(f));
@@ -672,7 +676,9 @@ function App() {
     e.preventDefault();
     const picked = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/') || isPdfFile(f));
     if (picked.length > 0) {
+      setPreparingPdf(picked.some(isPdfFile));
       const files = await expandFilesWithPdf(picked);
+      setPreparingPdf(false);
       if (!files.length) return;
       previewUrls.forEach(url => URL.revokeObjectURL(url));
       const urls = files.map(f => URL.createObjectURL(f));
@@ -2072,7 +2078,12 @@ function App() {
             <div className="drop-zone" onDrop={handleDrop} onDragOver={e => e.preventDefault()}>
               <input type="file" accept="image/*,application/pdf" multiple onChange={handleFileSelect} id="file-input-hidden" style={{ display: 'none' }} />
               <label htmlFor="file-input" style={{ display: 'block', width: '100%', cursor: 'pointer' }}>
-                {previewUrl ? (
+                {preparingPdf ? (
+                  <div className="drop-text">
+                    <p>⏳ Конвертирую PDF в страницы…</p>
+                    <p className="hint">Длинный документ может занять до минуты</p>
+                  </div>
+                ) : previewUrl ? (
                   <div className="preview-container">
                     <img
                       src={previewUrl}
