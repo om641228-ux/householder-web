@@ -1757,6 +1757,18 @@ function App() {
                   if (pages.length) {
                     const idx = Math.min(modalPageIdx, pages.length - 1);
                     const curUrl = fixImageUrl(pages[idx]);
+                    const manyPages = pages.length > 10; // >10 страниц — компактный режим навигации
+                    const renderThumb = (p, i) => (
+                      isPdfUrl(p) ? (
+                        <button key={i} onClick={() => setModalPageIdx(i)} title={`Страница ${i + 1} (PDF)`}
+                          style={{ minWidth: manyPages ? 36 : 40, height: manyPages ? 46 : 52, padding: '0 5px', borderRadius: 6, cursor: 'pointer', fontSize: manyPages ? 11 : 12, fontWeight: 600, flexShrink: 0, border: i === idx ? '2px solid #2980b9' : '1px solid #ccd6dd', background: i === idx ? '#eaf3fb' : '#fff', color: '#2c3e50' }}>
+                          📄 {i + 1}
+                        </button>
+                      ) : (
+                        <img key={i} src={fixImageUrl(p)} alt={`стр. ${i + 1}`} onClick={() => setModalPageIdx(i)}
+                          style={{ width: manyPages ? 46 : 52, height: manyPages ? 46 : 52, objectFit: 'cover', borderRadius: 6, cursor: 'pointer', flexShrink: 0, border: i === idx ? '2px solid #2980b9' : '1px solid #ccd6dd' }} />
+                      )
+                    );
                     return (
                       <>
                         {isPdfUrl(pages[idx]) ? (
@@ -1774,19 +1786,28 @@ function App() {
                             title="Нажмите — открыть на весь экран"
                           />
                         )}
-                        {pages.length > 1 && (
+                        {pages.length > 1 && !manyPages && (
+                          // До 10 страниц — все миниатюры с переносом
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, justifyContent: 'center' }}>
-                            {pages.map((p, i) => (
-                              isPdfUrl(p) ? (
-                                <button key={i} onClick={() => setModalPageIdx(i)} title={`Страница ${i + 1} (PDF)`}
-                                  style={{ minWidth: 40, height: 52, padding: '0 6px', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600, border: i === idx ? '2px solid #2980b9' : '1px solid #ccd6dd', background: i === idx ? '#eaf3fb' : '#fff', color: '#2c3e50' }}>
-                                  📄 {i + 1}
-                                </button>
-                              ) : (
-                                <img key={i} src={fixImageUrl(p)} alt={`стр. ${i + 1}`} onClick={() => setModalPageIdx(i)}
-                                  style={{ width: 52, height: 52, objectFit: 'cover', borderRadius: 6, cursor: 'pointer', border: i === idx ? '2px solid #2980b9' : '1px solid #ccd6dd' }} />
-                              )
-                            ))}
+                            {pages.map(renderThumb)}
+                          </div>
+                        )}
+                        {pages.length > 1 && manyPages && (
+                          // Больше 10 страниц: навигация ‹ N из M › + прокручиваемая лента миниатюр
+                          <div style={{ marginTop: 8 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 6 }}>
+                              <button onClick={() => setModalPageIdx(Math.max(0, idx - 1))} disabled={idx === 0}
+                                style={{ width: 30, height: 26, borderRadius: 6, border: '1px solid #ccd6dd', background: '#fff', cursor: idx === 0 ? 'not-allowed' : 'pointer', fontWeight: 700, color: '#2c3e50' }}>‹</button>
+                              <select value={idx} onChange={e => setModalPageIdx(Number(e.target.value))}
+                                style={{ padding: '4px 8px', borderRadius: 6, border: '1px solid #ccd6dd', fontSize: 13, cursor: 'pointer' }}>
+                                {pages.map((_, i) => <option key={i} value={i}>Страница {i + 1} из {pages.length}</option>)}
+                              </select>
+                              <button onClick={() => setModalPageIdx(Math.min(pages.length - 1, idx + 1))} disabled={idx === pages.length - 1}
+                                style={{ width: 30, height: 26, borderRadius: 6, border: '1px solid #ccd6dd', background: '#fff', cursor: idx === pages.length - 1 ? 'not-allowed' : 'pointer', fontWeight: 700, color: '#2c3e50' }}>›</button>
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 6, overflowX: 'auto', paddingBottom: 4 }}>
+                              {pages.map(renderThumb)}
+                            </div>
                           </div>
                         )}
                         <div style={{ fontSize: 12, color: '#95a5a6', marginTop: 4 }}>📑 Страница {idx + 1} из {pages.length}</div>

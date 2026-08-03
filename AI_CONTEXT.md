@@ -139,7 +139,9 @@ CREATE TABLE receipts (
   currency TEXT DEFAULT 'AED',
   country TEXT, payment_method TEXT, payment_amount NUMERIC, cashier TEXT,
   items JSONB,               -- [{name, name_ru, quantity, price, total}]
-  image_url TEXT,            -- Supabase Storage public URL (jpg или pdf)
+  image_url TEXT,            -- Supabase Storage public URL (jpg или pdf) — обложка/первый файл
+  -- колонка v13 (миграция supabase-migration-v13.sql):
+  page_urls JSONB,           -- [url, ...] ВСЕ страницы документа в Storage (мультифайл и page-by-page PDF); NULL у однофайловых чеков
   raw_text TEXT,             -- распознанный текст, оригинал (модульная структура, см. п. 9)
   raw_text_ru TEXT,          -- ПЕРЕВОД raw_text на русский (та же структура) — ОБЯЗАТЕЛЬНАЯ колонка!
   document_type TEXT DEFAULT 'receipt',   -- 'receipt'|'invoice'|'bill'|'insurance'|'bank'|'contract'|'other'
@@ -273,14 +275,29 @@ Bucket: `receipt-images` (public, policies SELECT/INSERT/DELETE).
 
 ## 13. Порядок деплоя
 
-1. **Supabase (householder):** выполнить `supabase/setup.sql` (таблица + raw_text_ru + bucket + policies), затем `supabase-migration-v7.sql` (objects + subtype/provider/valid_*/meta/related_id/object_id), затем `supabase-migration-v9.sql` (поля коммунальных счетов)
+1. **Supabase (householder):** выполнить `supabase/setup.sql` (таблица + raw_text_ru + bucket + policies), затем `supabase-migration-v7.sql` (objects + subtype/provider/valid_*/meta/related_id/object_id), затем `supabase-migration-v9.sql` (поля коммунальных счетов), затем `supabase-migration-v13.sql` (page_urls — все страницы документа)
 2. **Railway householder-api:** репо GitHub, Root Directory `backend`, Build `npm install`, Start `node index.js`, Variables (п. 4 — ключи Supabase ОТ ПРОЕКТА HOUSEHOLDER). В backend/package.json обязательна зависимость `"pdf-lib": "^1.17.1"` (постраничный режим, v10)
 3. **Railway householder-web:** репо GitHub, Root Directory `frontend`, Build `npm run build`, Start `npx serve -s build`; в App.js `API_URL = 'https://householder-api-production.up.railway.app'`
 4. Проверка: `https://householder-api-production.up.railway.app/api/check-models` → JSON со всеми провайдерами
 
 ## 14. Changelog
 
-**2026-08-02 (текущая финальная версия, v12 — постраничный режим работает БЕЗ pdf-lib)**
+**2026-08-02 (текущая финальная версия, v14 — ручное редактирование полей в карточке чека)**
+- Frontend: кнопка «✏️ Редактировать» в футере модалки → форма (жёлтой панелью над «Основная информация»): название ориг/рус, тип, объект, подтип, поставщик, дата/время, сумма/валюта, действует с/до, адрес поставки, № фактуры, № договора, CUPS, № счётчика, потребление+ед. Сохранение → PUT /api/receipts/:id (бэкенд-эндпоинт существовал с v7); пустая строка → null, суммы → числа; после сохранения обновляются и список, и открытая карточка. Режим сбрасывается при смене чека (тот же useEffect, что и modalPageIdx)
+- Галерея страниц при >10 страницах: вместо переносимой ленты всех миниатюр — компактная навигация ‹ + select «Страница N из M» + › и однорядная прокручиваемая лента (overflow-x:auto, миниатюры 46px); ≤10 страниц — прежний режим
+- ФИКС «линия через кнопки футера» (Safari): пиксель-анализ показал «призрак» оранжевой кнопки ✏️ Редактировать (#f39c12) — Safari с backdrop-filter на overlay оставляет stale-слой при unmount при переключении режима. Решение: кнопки Редактировать/Отмена/Сохранить всегда смонтированы и прячутся через display:none (без mount/unmount); + flexShrink:0 на modal-header/modal-footer и minHeight:0 на modal-body (классический фикс сжатия футера в flex-column Safari)
+- ФИКС вёрстки шапки карточки: бейджи (КОПИЯ/ОРИГИНАЛ, истекает, 📑 N стр.) переехали ПОД название во flex-wrap ряд — три бейджа больше не сжимают заголовок в вертикальный столбик букв
+- Бэкенд без изменений (версия 2026-08-02.13)
+
+**2026-08-02 (v13 — все страницы документа сохраняются в базе и показываются в карточке)**
+- Новая колонка receipts.page_urls JSONB (миграция supabase-migration-v13.sql) — массив публичных URL ВСЕХ страниц документа в Storage (bucket receipt-images)
+- Backend: хелпер uploadPagesToStorage (3 параллельно, ошибка одной страницы не роняет документ); assembleDocumentFromPages и recognizeLongPdfByPages принимают userId и сохраняют каждую страницу; /api/upload-document-pages больше не грузит первую страницу дважды — обложка = page_urls[0]; reprocess обновляет page_urls (только если постраничный режим реально сохранил страницы); page_urls в PUT whitelist и обоих fallback-списках getTableColumns
+- Когда page_urls пуст: однофайловые чеки (достаточно image_url) и режим ranges без pdf-lib (нет буферов отдельных страниц — есть только целый PDF в image_url). Для полноценных страниц длинных PDF — поставь pdf-lib
+- Frontend: в модалке карточки блок изображения стал ГАЛЕРЕЕЙ страниц — большой просмотр выбранной страницы (клик → полноэкранный зум; PDF-страница — кнопка «открыть в новой вкладке»), лента миниатюр/номеров с подсветкой активной, подпись «📑 Страница N из M»; состояние modalPageIdx сбрасывается при смене чека; на карточке в списке — фиолетовый бейдж «📑 N стр.»
+- /api/diagnostics: флаг v13_page_urls_column + SQL-фикс
+- Версия бэкенда: 2026-08-02.13 (watchdog обновлён синхронно)
+
+**2026-08-02 (v12 — постраничный режим работает БЕЗ pdf-lib)**
 - Устранена жёсткая зависимость от pdf-lib (его отсутствие на Railway = причина молчаливой поломки v10: весь PDF уходил в kimi одним куском → «распознана 1 страница»). Теперь ДВА пути постраничного режима:
   1) pdf-lib есть → разрезка на 1-страничные PDF, vision по страницам (как v10)
   2) pdf-lib нет → recognizeLongPdfByPageRanges: Gemini читает ЦЕЛЫЙ PDF, текст запрашиваем диапазонами по 5 страниц («═══ Страница K ═══» заголовки), splitRangeTextsToPages раскладывает по страницам (юнит-тест в changelog v12 проверен)
