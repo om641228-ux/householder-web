@@ -472,6 +472,13 @@ function App() {
   // При открытии другого чека галерея начинается с первой страницы, режим редактирования сбрасывается
   useEffect(() => { setModalPageIdx(0); setEditMode(false); setPageTextLang('ru'); }, [viewModal?.id]);
   const [pageTextLang, setPageTextLang] = useState('ru'); // текст страницы рядом с галереей: перевод | оригинал
+  // Ширина окна — адаптивная раскладка карточки документа (<900px: изображение и перевод — вертикально, для мобильных)
+  const [winWidth, setWinWidth] = useState(window.innerWidth);
+  useEffect(() => {
+    const onResize = () => setWinWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   // Закрытие полноэкранного просмотра по Escape
   useEffect(() => {
@@ -1808,11 +1815,10 @@ function App() {
               <h2> Чек #{viewModal.id}</h2>
               <button className="modal-close" onClick={() => setViewModal(null)}>✕</button>
             </div>
-            <div className="modal-body" style={{ minHeight: 0 }}>
-              {/* При галерее страниц секция растягивается на всю ширину модалки (CSS класс — узкая колонка 300px),
-                  чтобы рядом со страницей читался перевод */}
-              <div className="modal-image-section" style={(Array.isArray(viewModal.page_urls) && viewModal.page_urls.filter(Boolean).length) ? { flex: '1 1 100%' } : undefined}>
-                {(() => {
+            {/* При галерее страниц тело модалки — простым БЛОКОМ (без CSS-flex классов):
+                одинаково во всех браузерах (Safari включительно) и на мобильных */}
+            <div className="modal-body" style={{ minHeight: 0, ...((Array.isArray(viewModal.page_urls) && viewModal.page_urls.filter(Boolean).length) ? { display: 'block' } : {}) }}>
+              {(() => {
                   // Если у документа сохранены все страницы (v13) — показываем галерею страниц
                   const pages = Array.isArray(viewModal.page_urls) ? viewModal.page_urls.filter(Boolean) : [];
                   if (pages.length) {
@@ -1841,39 +1847,54 @@ function App() {
                         {label}
                       </button>
                     );
+                    // Колонки — через display:table с tableLayout:fixed (ширины колонок гарантированы,
+                    // не зависит от flex-особенностей браузера); <900px — вертикально (мобильные)
+                    const isNarrowModal = winWidth < 900;
+                    const imageBlock = isPdfUrl(pages[idx]) ? (
+                      <a href={curUrl} target="_blank" rel="noreferrer" className="no-image"
+                        style={{ display: 'block', textDecoration: 'none', color: '#2980b9', fontWeight: 600 }}>
+                        📄 Страница {idx + 1} — PDF, открыть в новой вкладке ↗
+                      </a>
+                    ) : (
+                      <img
+                        src={curUrl}
+                        alt={`Страница ${idx + 1}`}
+                        className="modal-image"
+                        onClick={() => setFullscreenImage(curUrl)}
+                        style={{ cursor: 'zoom-in', maxWidth: '100%' }}
+                        title="Нажмите — открыть на весь экран"
+                      />
+                    );
+                    const hasPageText = !!(pageRu || pageOrig);
+                    const textPanel = !hasPageText ? null : (
+                      <div style={{ textAlign: 'left', boxSizing: 'border-box' }}>
+                        <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
+                          {langBtn('ru', '🇷🇺 Перевод', !!pageRu)}
+                          {langBtn('orig', 'Оригинал', !!pageOrig)}
+                          <span style={{ fontSize: 11, color: '#95a5a6', alignSelf: 'center' }}>стр. {idx + 1}</span>
+                        </div>
+                        <div style={{ maxHeight: isNarrowModal ? '45vh' : '55vh', overflowY: 'auto', overflowX: 'hidden', background: '#f8f9fa', border: '1px solid #e0e6ed', borderRadius: 8, padding: '10px 12px', fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere', color: '#2c3e50' }}>
+                          {pageText}
+                        </div>
+                      </div>
+                    );
                     return (
                       <>
-                        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                          <div style={{ flex: '3 1 380px', minWidth: 0, textAlign: 'center' }}>
-                            {isPdfUrl(pages[idx]) ? (
-                              <a href={curUrl} target="_blank" rel="noreferrer" className="no-image"
-                                style={{ display: 'block', textDecoration: 'none', color: '#2980b9', fontWeight: 600 }}>
-                                📄 Страница {idx + 1} — PDF, открыть в новой вкладке ↗
-                              </a>
-                            ) : (
-                              <img
-                                src={curUrl}
-                                alt={`Страница ${idx + 1}`}
-                                className="modal-image"
-                                onClick={() => setFullscreenImage(curUrl)}
-                                style={{ cursor: 'zoom-in' }}
-                                title="Нажмите — открыть на весь экран"
-                              />
-                            )}
-                          </div>
-                          {(pageRu || pageOrig) ? (
-                            <div style={{ flex: '2 1 300px', minWidth: 0, maxWidth: '100%', textAlign: 'left' }}>
-                              <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
-                                {langBtn('ru', '🇷🇺 Перевод', !!pageRu)}
-                                {langBtn('orig', 'Оригинал', !!pageOrig)}
-                                <span style={{ fontSize: 11, color: '#95a5a6', alignSelf: 'center' }}>стр. {idx + 1}</span>
-                              </div>
-                              <div style={{ maxHeight: '55vh', overflowY: 'auto', overflowX: 'hidden', background: '#f8f9fa', border: '1px solid #e0e6ed', borderRadius: 8, padding: '10px 12px', fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere', color: '#2c3e50' }}>
-                                {pageText}
-                              </div>
+                        {hasPageText && !isNarrowModal ? (
+                          <div style={{ display: 'table', width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse' }}>
+                            <div style={{ display: 'table-cell', width: '58%', verticalAlign: 'top', textAlign: 'center', paddingRight: 10, boxSizing: 'border-box' }}>
+                              {imageBlock}
                             </div>
-                          ) : null}
-                        </div>
+                            <div style={{ display: 'table-cell', width: '42%', verticalAlign: 'top', boxSizing: 'border-box' }}>
+                              {textPanel}
+                            </div>
+                          </div>
+                        ) : (
+                          <div style={{ textAlign: 'center' }}>
+                            {imageBlock}
+                            {textPanel && <div style={{ marginTop: 8 }}>{textPanel}</div>}
+                          </div>
+                        )}
                         {pages.length > 1 && !manyPages && (
                           // До 10 страниц — все миниатюры с переносом
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, justifyContent: 'center' }}>
@@ -1902,21 +1923,24 @@ function App() {
                       </>
                     );
                   }
-                  // Обычный однофайловый чек — как раньше
-                  return (viewModal.photo_url || viewModal.image_url) ? (
-                    isPdfUrl(viewModal.photo_url || viewModal.image_url)
-                      ? <div className="no-image">📄 PDF-документ</div>
-                      : <img
-                          src={fixImageUrl(viewModal.photo_url || viewModal.image_url)}
-                          alt="Чек"
-                          className="modal-image"
-                          onClick={() => setFullscreenImage(fixImageUrl(viewModal.photo_url || viewModal.image_url))}
-                          style={{ cursor: 'zoom-in' }}
-                          title="Нажмите — открыть на весь экран"
-                        />
-                  ) : <div className="no-image">Нет фото</div>;
+                  // Обычный однофайловый чек — как раньше (узкая колонка CSS-классом + modal-info рядом)
+                  return (
+                    <div className="modal-image-section">
+                      {(viewModal.photo_url || viewModal.image_url) ? (
+                        isPdfUrl(viewModal.photo_url || viewModal.image_url)
+                          ? <div className="no-image">📄 PDF-документ</div>
+                          : <img
+                              src={fixImageUrl(viewModal.photo_url || viewModal.image_url)}
+                              alt="Чек"
+                              className="modal-image"
+                              onClick={() => setFullscreenImage(fixImageUrl(viewModal.photo_url || viewModal.image_url))}
+                              style={{ cursor: 'zoom-in' }}
+                              title="Нажмите — открыть на весь экран"
+                            />
+                      ) : <div className="no-image">Нет фото</div>}
+                    </div>
+                  );
                 })()}
-              </div>
               <div className="modal-info">
                 {editMode && (
                   <div className="info-block" style={{ background: '#fdf6ec', border: '1px solid #f0e0c0' }}>
