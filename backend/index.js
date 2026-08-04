@@ -1251,6 +1251,10 @@ function filterRecordByColumns(record, columns) {
   if (record.raw_text_ru && !columns.includes('raw_text_ru')) {
     console.warn('ВНИМАНИЕ: колонка raw_text_ru отсутствует в таблице receipts — перевод НЕ сохранён! Выполните: alter table receipts add column if not exists raw_text_ru text;');
   }
+  // То же для статуса оплаты: без колонки payment_status (миграция v19) статус молча отбрасывается
+  if (record.payment_status && !columns.includes('payment_status')) {
+    console.warn('ВНИМАНИЕ: колонка payment_status отсутствует в таблице receipts — статус оплаты НЕ сохранён! Выполните: alter table receipts add column if not exists payment_status text;');
+  }
   const filtered = {};
   for (const [key, value] of Object.entries(record)) {
     if (columns.includes(key)) {
@@ -1652,7 +1656,7 @@ app.get('/api/diagnostics', async (req, res) => {
   try {
     const columns = await getTableColumns();
     res.json({
-      version: '2026-08-04.20 (значок оплаты в углу карточки, быстрый выбор оплаты в модалке, массовая смена оплаты)',
+      version: '2026-08-04.21 (подсказка к ошибке отсутствующей колонки payment_status: миграция v19 + reload schema)',
       raw_text_ru_column: columns.includes('raw_text_ru'),
       fix_if_false: 'alter table receipts add column if not exists raw_text_ru text;',
       v13_page_urls_column: columns.includes('page_urls'),
@@ -1773,7 +1777,7 @@ app.put('/api/receipts/:id', requireAuth, async (req, res) => {
     if (error) throw error;
     res.json({ receipt: data });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: withPaymentStatusHint(e.message) });
   }
 });
 
@@ -1906,9 +1910,17 @@ app.post('/api/bulk-update-payment-status', requireAuth, async (req, res) => {
     if (error) throw error;
     res.json({ success: true });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: withPaymentStatusHint(e.message) });
   }
 });
+
+// Подсказка к ошибке Supabase «Could not find the 'payment_status' column ... in the schema cache»:
+// либо не выполнена миграция v19, либо PostgREST держит старый кэш схемы после ALTER TABLE
+function withPaymentStatusHint(msg) {
+  const m = String(msg || '');
+  if (!/payment_status/i.test(m)) return m;
+  return m + ' | РЕШЕНИЕ: выполни supabase-migration-v19.sql в Supabase SQL Editor (ПРОЕКТ householder!): alter table receipts add column if not exists payment_status text; — и затем: notify pgrst, \'reload schema\'; (принудительное обновление кэша схемы PostgREST)';
+}
 
 // ========== EXPORT EXCEL ==========
 app.post('/api/export-excel', requireAuth, async (req, res) => {
