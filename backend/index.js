@@ -1652,7 +1652,7 @@ app.get('/api/diagnostics', async (req, res) => {
   try {
     const columns = await getTableColumns();
     res.json({
-      version: '2026-08-04.19 (статус оплаты документа: к оплате / оплачено / недоплачено)',
+      version: '2026-08-04.20 (значок оплаты в углу карточки, быстрый выбор оплаты в модалке, массовая смена оплаты)',
       raw_text_ru_column: columns.includes('raw_text_ru'),
       fix_if_false: 'alter table receipts add column if not exists raw_text_ru text;',
       v13_page_urls_column: columns.includes('page_urls'),
@@ -1883,6 +1883,26 @@ app.post('/api/bulk-update-subtype', requireAuth, async (req, res) => {
       return res.status(400).json({ error: `subtype должен быть одним из: ${ALLOWED_SUBTYPES.join(', ')}` });
     }
     const { error } = await supabaseAdmin.from('receipts').update({ subtype }).in('id', ids);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ========== BULK UPDATE PAYMENT STATUS (к оплате / оплачено / недоплачено; null — очистить) ==========
+app.post('/api/bulk-update-payment-status', requireAuth, async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'Нет id документов' });
+    // Допустимы три значения; null/пустое — очистка статуса
+    const status = req.body.payment_status == null || req.body.payment_status === ''
+      ? null
+      : sanitizePaymentStatus(req.body.payment_status);
+    if (req.body.payment_status && !status) {
+      return res.status(400).json({ error: 'payment_status должен быть одним из: to_pay, paid, underpaid (или пусто — очистить)' });
+    }
+    const { error } = await supabaseAdmin.from('receipts').update({ payment_status: status }).in('id', ids);
     if (error) throw error;
     res.json({ success: true });
   } catch (e) {

@@ -23,10 +23,11 @@ const SUBTYPE_LABELS = {
   other: '📎 Прочее'
 };
 // Статус оплаты документа (ручное поле, AI не определяет): to_pay / paid / underpaid
+// short — компактная метка для значка в правом верхнем углу карточки
 const PAYMENT_STATUS_META = {
-  to_pay: { label: '🟠 К оплате', color: '#e67e22', bg: '#fdf2e3' },
-  paid: { label: '🟢 Оплачено', color: '#27ae60', bg: '#e8f8ef' },
-  underpaid: { label: '🔴 Недоплачено', color: '#e74c3c', bg: '#fdecea' }
+  to_pay: { label: '🟠 К оплате', short: '🟠', color: '#e67e22', bg: '#fdf2e3' },
+  paid: { label: '🟢 Оплачено', short: '🟢', color: '#27ae60', bg: '#e8f8ef' },
+  underpaid: { label: '🔴 Недоплачено', short: '🔴', color: '#e74c3c', bg: '#fdecea' }
 };
 // Срок действия документа: null — нет даты/всё хорошо; иначе бейдж предупреждения.
 // Только страховки и договоры: у счетов (bill) и выписок (bank) valid_to — это конец ПЕРИОДА, а не срок действия
@@ -1324,6 +1325,46 @@ function App() {
     }
   };
 
+  // Быстрая смена статуса оплаты прямо из карточки (менюшка в модалке) — без режима редактирования
+  const quickSavePaymentStatus = async (value) => {
+    if (!viewModal) return;
+    const v = value || null;
+    // Оптимистично обновляем UI сразу, затем сохраняем на сервере
+    setViewModal(prev => (prev ? { ...prev, payment_status: v } : prev));
+    setReceipts(prev => prev.map(r => (r.id === viewModal.id ? { ...r, payment_status: v } : r)));
+    try {
+      const res = await fetch(`${API_URL}/api/receipts/${viewModal.id}?token=${token}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payment_status: v })
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+    } catch (e) {
+      alert('Не удалось сохранить статус оплаты: ' + e.message);
+      loadReceipts(); // откат к серверному состоянию
+    }
+  };
+
+  const bulkChangePaymentStatus = async (value) => {
+    if (selectedReceiptIds.size === 0) return;
+    const v = value === '__clear' ? null : (value || null); // __clear — пункт «Очистить статус»
+    try {
+      const res = await fetch(`${API_URL}/api/bulk-update-payment-status?token=${token}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: Array.from(selectedReceiptIds), payment_status: v })
+      });
+      if (res.ok) { setSelectedReceiptIds(new Set()); loadReceipts(); }
+      else {
+        const err = await res.json().catch(() => ({}));
+        alert(err.error || 'Ошибка смены статуса оплаты (проверь версию бэкенда)');
+      }
+    } catch (e) { console.error(e); }
+  };
+
   const bulkChangeSubtype = async (newSubtype) => {
     if (selectedReceiptIds.size === 0) return;
     try {
@@ -1742,11 +1783,11 @@ function App() {
         </div>
       </header>
 
-      {backendInfo && !String(backendInfo.version || '').includes('2026-08-04.19') && (
+      {backendInfo && !String(backendInfo.version || '').includes('2026-08-04.20') && (
         <div style={{ background: '#fdecea', border: '1px solid #e74c3c', color: '#c0392b', padding: '10px 16px', borderRadius: 8, margin: '10px 15px', fontSize: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <strong> Бэкенд устарел!</strong>
           <span>
-            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-04.19</code>.
+            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-04.20</code>.
             Задеплой свежий index.js (Railway → householder-api → Deploy latest commit), иначе перевод не заработает.
           </span>
           <button onClick={() => setBackendInfo(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', color: '#c0392b' }}>✕</button>
@@ -2083,9 +2124,23 @@ function App() {
                   <p><strong>Тип:</strong> {DOC_TYPE_LABELS[viewModal.document_type] || viewModal.document_type || '🧾 Чек'}</p>
                   <p><strong>Объект:</strong> <HighlightText text={viewModal.object || '—'} query={searchQuery} /></p>
                   {viewModal.subtype && <p><strong>Подтип:</strong> {SUBTYPE_LABELS[viewModal.subtype] || viewModal.subtype}</p>}
-                  {viewModal.payment_status && PAYMENT_STATUS_META[viewModal.payment_status] && (
-                    <p><strong>Оплата:</strong> <span style={{ color: PAYMENT_STATUS_META[viewModal.payment_status].color, background: PAYMENT_STATUS_META[viewModal.payment_status].bg, padding: '2px 10px', borderRadius: 10, fontWeight: 700 }}>{PAYMENT_STATUS_META[viewModal.payment_status].label}</span></p>
-                  )}
+                  <p><strong>Оплата:</strong>{' '}
+                    {/* Менюшка быстрой смены статуса прямо в карточке — сохраняется сразу, без режима редактирования */}
+                    <select
+                      value={viewModal.payment_status || ''}
+                      onChange={e => quickSavePaymentStatus(e.target.value)}
+                      title="Сменить статус оплаты"
+                      style={{
+                        padding: '3px 8px', borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: 'pointer',
+                        border: `1px solid ${(PAYMENT_STATUS_META[viewModal.payment_status] || {}).color || '#ddd'}`,
+                        color: (PAYMENT_STATUS_META[viewModal.payment_status] || {}).color || '#666',
+                        background: (PAYMENT_STATUS_META[viewModal.payment_status] || {}).bg || '#fff'
+                      }}
+                    >
+                      <option value="">— не указан —</option>
+                      {Object.entries(PAYMENT_STATUS_META).map(([v, m]) => <option key={v} value={v}>{m.label}</option>)}
+                    </select>
+                  </p>
                   {viewModal.provider && <p><strong>Поставщик:</strong> <HighlightText text={viewModal.provider} query={searchQuery} /></p>}
                   {viewModal.supply_address && <p><strong>Адрес поставки:</strong> <HighlightText text={viewModal.supply_address} query={searchQuery} /></p>}
                   {viewModal.invoice_number && <p><strong>№ фактуры:</strong> {viewModal.invoice_number}</p>}
@@ -2513,6 +2568,11 @@ function App() {
                 <option value="">Сменить подтип...</option>
                 {Object.entries(SUBTYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
+              <select onChange={e => { if (e.target.value) bulkChangePaymentStatus(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
+                <option value="">Сменить оплату...</option>
+                {Object.entries(PAYMENT_STATUS_META).map(([v, m]) => <option key={v} value={v}>{m.label}</option>)}
+                <option value="__clear">✖ Очистить статус</option>
+              </select>
               <select onChange={e => { if (e.target.value) bulkChangeCurrency(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
                 <option value="">Сменить валюту...</option>
                 <option value="AED">AED</option>
@@ -2649,6 +2709,13 @@ function App() {
                           )}
                         </div>
                         <span className="type-badge" style={{ flexShrink: 0, marginLeft: 'auto' }}>{DOC_TYPE_LABELS[receipt.document_type] || receipt.document_type || '🧾 Чек'}</span>
+                        {/* Значок статуса оплаты в правом верхнем углу карточки: 🟢 оплачено / 🟠 к оплате / 🔴 недоплачено */}
+                        {receipt.payment_status && PAYMENT_STATUS_META[receipt.payment_status] && (
+                          <span
+                            title={`Статус оплаты: ${PAYMENT_STATUS_META[receipt.payment_status].label}`}
+                            style={{ flexShrink: 0, width: 24, height: 24, fontSize: 14, lineHeight: '22px', textAlign: 'center', background: PAYMENT_STATUS_META[receipt.payment_status].bg, border: `1px solid ${PAYMENT_STATUS_META[receipt.payment_status].color}`, borderRadius: '50%' }}
+                          >{PAYMENT_STATUS_META[receipt.payment_status].short}</span>
+                        )}
                       </div>
                       <p className="date">{formatDate(receipt.receipt_date)} {receipt.receipt_time}</p>
                       <p className="amount" style={{ color: hasDiff ? '#e67e22' : '#27ae60' }}>
