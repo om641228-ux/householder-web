@@ -22,6 +22,12 @@ const SUBTYPE_LABELS = {
   tax: '💰 Налог',
   other: '📎 Прочее'
 };
+// Статус оплаты документа (ручное поле, AI не определяет): to_pay / paid / underpaid
+const PAYMENT_STATUS_META = {
+  to_pay: { label: '🟠 К оплате', color: '#e67e22', bg: '#fdf2e3' },
+  paid: { label: '🟢 Оплачено', color: '#27ae60', bg: '#e8f8ef' },
+  underpaid: { label: '🔴 Недоплачено', color: '#e74c3c', bg: '#fdecea' }
+};
 // Срок действия документа: null — нет даты/всё хорошо; иначе бейдж предупреждения.
 // Только страховки и договоры: у счетов (bill) и выписок (bank) valid_to — это конец ПЕРИОДА, а не срок действия
 function expiryInfo(r) {
@@ -442,6 +448,7 @@ function App() {
   const [currency, setCurrency] = useState('auto');
   const [docType, setDocType] = useState('auto');
   const [subtype, setSubtype] = useState('auto');
+  const [paymentStatus, setPaymentStatus] = useState(''); // '' = статус оплаты не указан
   const [object, setObject] = useState('other');
   const [modelModalOpen, setModelModalOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState('');
@@ -756,6 +763,7 @@ function App() {
       formData.append('currency', currency);
       formData.append('docType', docType);
       formData.append('subtype', subtype);
+      formData.append('payment_status', paymentStatus);
       formData.append('object', object);
       formData.append('token', token);
 
@@ -850,6 +858,7 @@ function App() {
       formData.append('currency', currency);
       formData.append('docType', docType);
       formData.append('subtype', subtype);
+      formData.append('payment_status', paymentStatus);
       formData.append('object', object);
       formData.append('token', token);
 
@@ -1020,6 +1029,7 @@ function App() {
         formData.append('currency', currency);
         formData.append('docType', docType);
         formData.append('subtype', subtype);
+        formData.append('payment_status', paymentStatus);
         formData.append('object', object);
         formData.append('token', token);
         let creepTimer = null;
@@ -1267,6 +1277,7 @@ function App() {
       currency: viewModal.currency || '',
       document_type: viewModal.document_type || 'receipt',
       subtype: viewModal.subtype || '',
+      payment_status: viewModal.payment_status || '',
       provider: viewModal.provider || '',
       object: viewModal.object || 'other',
       supply_address: viewModal.supply_address || '',
@@ -1731,11 +1742,11 @@ function App() {
         </div>
       </header>
 
-      {backendInfo && !String(backendInfo.version || '').includes('2026-08-03.18') && (
+      {backendInfo && !String(backendInfo.version || '').includes('2026-08-04.19') && (
         <div style={{ background: '#fdecea', border: '1px solid #e74c3c', color: '#c0392b', padding: '10px 16px', borderRadius: 8, margin: '10px 15px', fontSize: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <strong> Бэкенд устарел!</strong>
           <span>
-            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-03.18</code>.
+            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-04.19</code>.
             Задеплой свежий index.js (Railway → householder-api → Deploy latest commit), иначе перевод не заработает.
           </span>
           <button onClick={() => setBackendInfo(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', color: '#c0392b' }}>✕</button>
@@ -2028,6 +2039,12 @@ function App() {
                               {Object.entries(SUBTYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                             </select>
                           </label>
+                          <label style={ls}>Статус оплаты
+                            <select style={is} value={editForm.payment_status || ''} onChange={e => setEditForm(f => ({ ...f, payment_status: e.target.value }))}>
+                              <option value="">— не указан —</option>
+                              {Object.entries(PAYMENT_STATUS_META).map(([v, m]) => <option key={v} value={v}>{m.label}</option>)}
+                            </select>
+                          </label>
                           {F('provider', 'Поставщик / эмитент')}
                           {F('receipt_date', 'Дата', 'date')}
                           {F('receipt_time', 'Время', 'time')}
@@ -2066,6 +2083,9 @@ function App() {
                   <p><strong>Тип:</strong> {DOC_TYPE_LABELS[viewModal.document_type] || viewModal.document_type || '🧾 Чек'}</p>
                   <p><strong>Объект:</strong> <HighlightText text={viewModal.object || '—'} query={searchQuery} /></p>
                   {viewModal.subtype && <p><strong>Подтип:</strong> {SUBTYPE_LABELS[viewModal.subtype] || viewModal.subtype}</p>}
+                  {viewModal.payment_status && PAYMENT_STATUS_META[viewModal.payment_status] && (
+                    <p><strong>Оплата:</strong> <span style={{ color: PAYMENT_STATUS_META[viewModal.payment_status].color, background: PAYMENT_STATUS_META[viewModal.payment_status].bg, padding: '2px 10px', borderRadius: 10, fontWeight: 700 }}>{PAYMENT_STATUS_META[viewModal.payment_status].label}</span></p>
+                  )}
                   {viewModal.provider && <p><strong>Поставщик:</strong> <HighlightText text={viewModal.provider} query={searchQuery} /></p>}
                   {viewModal.supply_address && <p><strong>Адрес поставки:</strong> <HighlightText text={viewModal.supply_address} query={searchQuery} /></p>}
                   {viewModal.invoice_number && <p><strong>№ фактуры:</strong> {viewModal.invoice_number}</p>}
@@ -2192,6 +2212,13 @@ function App() {
                 <select value={subtype} onChange={e => setSubtype(e.target.value)}>
                   <option value="auto">🤖 Авто (AI)</option>
                   {Object.entries(SUBTYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </div>
+              <div className="control-group compact">
+                <label>Оплата:</label>
+                <select value={paymentStatus} onChange={e => setPaymentStatus(e.target.value)}>
+                  <option value="">— Не указан</option>
+                  {Object.entries(PAYMENT_STATUS_META).map(([v, m]) => <option key={v} value={v}>{m.label}</option>)}
                 </select>
               </div>
               <div className="control-group compact">
@@ -2629,6 +2656,11 @@ function App() {
                         {hasDiff && <span style={{ fontSize: 12, color: '#e74c3c', marginLeft: 6 }}>(Δ {diff})</span>}
                       </p>
                       <p className="items-count"> {receipt.items?.length || 0} товаров</p>
+                      {receipt.payment_status && PAYMENT_STATUS_META[receipt.payment_status] && (
+                        <p style={{ margin: '2px 0', fontSize: 12 }}>
+                          <span style={{ color: PAYMENT_STATUS_META[receipt.payment_status].color, background: PAYMENT_STATUS_META[receipt.payment_status].bg, padding: '2px 9px', borderRadius: 10, fontWeight: 700 }}>{PAYMENT_STATUS_META[receipt.payment_status].label}</span>
+                        </p>
+                      )}
                       {receipt.object && (
                         <p style={{ fontSize: 12, color: '#7f8c8d', margin: '4px 0' }}>
                           <HighlightText text={receipt.object} query={searchQuery} />

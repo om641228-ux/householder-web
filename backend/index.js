@@ -1223,7 +1223,7 @@ async function getTableColumns() {
         'total_amount', 'subtotal', 'tax_amount', 'tax_rate', 'currency',
         'country', 'payment_method',
         'items', 'image_url', 'page_urls', 'raw_text', 'raw_text_ru', 'document_type', 'object',
-        'subtype', 'provider', 'valid_from', 'valid_to', 'meta', 'related_id', 'object_id',
+        'subtype', 'payment_status', 'provider', 'valid_from', 'valid_to', 'meta', 'related_id', 'object_id',
         'invoice_number', 'contract_number', 'supply_address', 'cups', 'meter_number',
         'consumption', 'consumption_unit',
         'recognition_method', 'recognized_at', 'created_at', 'owner_id', 'owner_name'
@@ -1236,7 +1236,7 @@ async function getTableColumns() {
       'total_amount', 'subtotal', 'tax_amount', 'tax_rate', 'currency',
       'country', 'payment_method',
       'items', 'image_url', 'page_urls', 'raw_text', 'raw_text_ru', 'document_type', 'object',
-      'subtype', 'provider', 'valid_from', 'valid_to', 'meta', 'related_id', 'object_id',
+      'subtype', 'payment_status', 'provider', 'valid_from', 'valid_to', 'meta', 'related_id', 'object_id',
       'invoice_number', 'contract_number', 'supply_address', 'cups', 'meter_number',
       'consumption', 'consumption_unit',
       'recognition_method', 'recognized_at', 'created_at', 'owner_id', 'owner_name'
@@ -1262,6 +1262,12 @@ function filterRecordByColumns(record, columns) {
   return filtered;
 }
 
+// Статус оплаты: только три значения (to_pay — к оплате, paid — оплачено, underpaid — недоплачено), иначе null
+function sanitizePaymentStatus(raw) {
+  const v = String(raw || '').toLowerCase().trim();
+  return ['to_pay', 'paid', 'underpaid'].includes(v) ? v : null;
+}
+
 async function saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod) {
   const columns = await getTableColumns();
   
@@ -1284,6 +1290,7 @@ async function saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod) {
     raw_text_ru: receiptData.raw_text_ru || null,
     document_type: receiptData.docType || 'receipt',
     subtype: receiptData.subtype || null,
+    payment_status: receiptData.payment_status || null,
     provider: receiptData.provider || null,
     valid_from: receiptData.valid_from || null,
     valid_to: receiptData.valid_to || null,
@@ -1327,6 +1334,7 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     const docType = req.body.docType || 'receipt';
     const object = req.body.object || 'other';
     const subtypeOverride = req.body.subtype && req.body.subtype !== 'auto' ? req.body.subtype : null;
+    const paymentStatusOverride = sanitizePaymentStatus(req.body.payment_status);
     
     const isPdf = req.file.mimetype === 'application/pdf' || /\.pdf$/i.test(req.file.originalname || '');
     const mimeType = isPdf ? 'application/pdf' : 'image/jpeg';
@@ -1415,6 +1423,8 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     receiptData.object = (object && object !== 'other') ? object : (receiptData.object || 'other');
     // Ручной выбор подтипа на форме загрузки перекрывает определённый AI
     if (subtypeOverride) receiptData.subtype = subtypeOverride;
+    // Статус оплаты — только ручной выбор на форме загрузки (AI его не определяет)
+    if (paymentStatusOverride) receiptData.payment_status = paymentStatusOverride;
 
     const saved = await saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod);
     
@@ -1475,6 +1485,7 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
     const docType = req.body.docType || 'auto';
     const object = req.body.object || 'other';
     const subtypeOverride = req.body.subtype && req.body.subtype !== 'auto' ? req.body.subtype : null;
+    const paymentStatusOverride = sanitizePaymentStatus(req.body.payment_status);
     if (!genAI) return res.status(500).json({ error: 'Постраничное распознавание требует GEMINI_API_KEY на бэкенде' });
 
     // Подготовка страниц: изображения сжимаем как обычно, PDF-страницы — как есть
@@ -1503,6 +1514,7 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
       receiptData.docType = docType === 'auto' ? (receiptData.document_type || 'other') : docType;
       receiptData.object = (object && object !== 'other') ? object : (receiptData.object || 'other');
       if (subtypeOverride) receiptData.subtype = subtypeOverride;
+      if (paymentStatusOverride) receiptData.payment_status = paymentStatusOverride;
 
       // Обложка документа — первая страница (уже загружена вместе со всеми; повторно не грузим)
       const pageUrls = Array.isArray(receiptData.page_urls) ? receiptData.page_urls : [];
@@ -1640,7 +1652,7 @@ app.get('/api/diagnostics', async (req, res) => {
   try {
     const columns = await getTableColumns();
     res.json({
-      version: '2026-08-03.18 (исправлено распознавание плотных таблиц: анти-пустая-сетка, запасные название/сумма)',
+      version: '2026-08-04.19 (статус оплаты документа: к оплате / оплачено / недоплачено)',
       raw_text_ru_column: columns.includes('raw_text_ru'),
       fix_if_false: 'alter table receipts add column if not exists raw_text_ru text;',
       v13_page_urls_column: columns.includes('page_urls'),
@@ -1649,6 +1661,8 @@ app.get('/api/diagnostics', async (req, res) => {
       fix_v7_if_false: 'Выполни supabase-migration-v7.sql в Supabase SQL Editor',
       v9_columns: ['invoice_number', 'contract_number', 'supply_address', 'cups', 'meter_number', 'consumption', 'consumption_unit'].every(c => columns.includes(c)),
       fix_v9_if_false: 'Выполни supabase-migration-v9.sql в Supabase SQL Editor',
+      v19_payment_status_column: columns.includes('payment_status'),
+      fix_v19_if_false: 'alter table receipts add column if not exists payment_status text; (или выполни supabase-migration-v19.sql)',
       pdf_lib: hasPdfLib(),
       fix_pdf_lib_if_false: 'Добавь "pdf-lib": "^1.17.1" в dependencies backend/package.json и задеплой',
       providers_configured: {
@@ -1740,7 +1754,7 @@ app.put('/api/receipts/:id', requireAuth, async (req, res) => {
   try {
     const EDITABLE = ['store_name', 'store_name_ru', 'receipt_date', 'receipt_time',
       'total_amount', 'subtotal', 'tax_amount', 'currency', 'country', 'payment_method',
-      'object', 'document_type', 'subtype', 'provider', 'valid_from', 'valid_to',
+      'object', 'document_type', 'subtype', 'payment_status', 'provider', 'valid_from', 'valid_to',
       'invoice_number', 'contract_number', 'supply_address', 'cups', 'meter_number',
       'consumption', 'consumption_unit',
       'related_id', 'meta', 'object_id', 'page_urls'];

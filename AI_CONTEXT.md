@@ -282,7 +282,14 @@ Bucket: `receipt-images` (public, policies SELECT/INSERT/DELETE).
 
 ## 14. Changelog
 
-**2026-08-03 (текущая финальная версия, v21.1 — вёрстка карточки: заголовок больше не рвётся по 3 буквы)**
+**2026-08-04 (текущая финальная версия, v22 — статус оплаты документа: к оплате / оплачено / недоплачено)**
+- Новое поле receipts.payment_status (text): 'to_pay' = 🟠 К оплате, 'paid' = 🟢 Оплачено, 'underpaid' = 🔴 Недоплачено, null = не указан. Это ОТДЕЛЬНОЕ поле, НЕ часть subtype (подтип — услуга: electricity/water/..., его определяет AI; статус оплаты — только ручной выбор, AI его не трогает)
+- МИГРАЦИЯ: supabase-migration-v19.sql — `alter table receipts add column if not exists payment_status text;` (выполнить в Supabase SQL Editor; diagnostics → v19_payment_status_column + fix_v19_if_false). Без миграции статус молча не сохранится (filterRecordByColumns отсечёт)
+- Backend: sanitizePaymentStatus (только 3 значения, иначе null); saveReceiptToDB + оба upload-эндпоинта (upload-receipt, upload-document-pages — paymentStatusOverride из формы); PUT /api/receipts/:id — payment_status в EDITABLE; fallback-списки колонок дополнены
+- Frontend: PAYMENT_STATUS_META (label/цвет/фон); селект «Оплата:» в форме загрузки (между Подтип и Объект, по умолчанию «— Не указан», уходит как payment_status во всех трёх загрузках); карточка-просмотр — строка «Оплата:» с цветным бейджем; карточка-редактирование — селект «Статус оплаты»; список — цветной бейдж под количеством товаров
+- Версия бэкенда: 2026-08-04.19 (watchdog обновлён синхронно)
+
+**2026-08-03 (v21.1 — вёрстка карточки: заголовок больше не рвётся по 3 буквы)**
 - ПРОБЛЕМА (мобильный скриншот «исправь верстку»): в шапке карточки чекбокс + заголовок + бейдж типа стоят в одной flex-строке без переноса; длинный бейдж «🤝 КОММ. ПРЕДЛОЖЕНИЕ» (~200px) на узком экране оставлял заголовку ~100px → «Conf/ort/de/Tener/ife/Sur»; wordBreak:'break-word' дополнительно рвал слова посередине
 - РЕШЕНИЕ (frontend, receipt-header): flexWrap:'wrap' + заголовок flex:'1 1 180px' (гарантированный минимум — при нехватке места бейдж переносится ПОД заголовок, прижимаясь вправо marginLeft:'auto'); h3: overflowWrap:'break-word' вместо wordBreak — перенос по словам, разрыв только при крайней необходимости. На десктопе раскладка визуально прежняя
 - Бэкенд без изменений (версия 2026-08-03.18)
