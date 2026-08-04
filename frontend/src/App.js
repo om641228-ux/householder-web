@@ -1775,6 +1775,10 @@ function App() {
             <button className={activeTab === 'list' ? 'active' : ''} onClick={() => {setActiveTab('list'); loadReceipts();}}>
               Чеки/фактуры ({receiptCount}) · Прочие документы ({invoiceCount})
             </button>
+            {/* Вкладка «Анализ»: дублирует окно чеков/фактур (отдельная точка входа — дальше можно менять независимо) */}
+            <button className={activeTab === 'analysis' ? 'active' : ''} onClick={() => {setActiveTab('analysis'); loadReceipts();}}>
+              📊 Анализ
+            </button>
           </nav>
         </div>
         <div className="header-right">
@@ -2492,7 +2496,7 @@ function App() {
         </div>
       )}
 
-      {activeTab === 'list' && (
+      {(activeTab === 'list' || activeTab === 'analysis') && (
         <div className="list-section">
           <div className="filters" style={{ flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
             <ExcelFilter label="Год" options={availableYears.map(y => ({ value: y, label: String(y) }))} selected={filterYears} onChange={v => { setFilterYears(v); setCurrentPage(1); }} />
@@ -2723,11 +2727,6 @@ function App() {
                         {hasDiff && <span style={{ fontSize: 12, color: '#e74c3c', marginLeft: 6 }}>(Δ {diff})</span>}
                       </p>
                       <p className="items-count"> {receipt.items?.length || 0} товаров</p>
-                      {receipt.payment_status && PAYMENT_STATUS_META[receipt.payment_status] && (
-                        <p style={{ margin: '2px 0', fontSize: 12 }}>
-                          <span style={{ color: PAYMENT_STATUS_META[receipt.payment_status].color, background: PAYMENT_STATUS_META[receipt.payment_status].bg, padding: '2px 9px', borderRadius: 10, fontWeight: 700 }}>{PAYMENT_STATUS_META[receipt.payment_status].label}</span>
-                        </p>
-                      )}
                       {receipt.object && (
                         <p style={{ fontSize: 12, color: '#7f8c8d', margin: '4px 0' }}>
                           <HighlightText text={receipt.object} query={searchQuery} />

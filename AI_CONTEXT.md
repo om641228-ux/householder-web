@@ -282,7 +282,12 @@ Bucket: `receipt-images` (public, policies SELECT/INSERT/DELETE).
 
 ## 14. Changelog
 
-**2026-08-04 (текущая финальная версия, v23.1 — диагностика ошибки «payment_status column … schema cache»)**
+**2026-08-04 (текущая финальная версия, v23.2 — карточка: только значок оплаты; новая вкладка «Анализ»)**
+- Из списочной карточки УБРАНА текстовая плашка «🟢 Оплачено» под количеством товаров — остался только круглый значок оплаты в правом верхнем углу шапки (после бейджа типа): 🟢/🟠/🔴 с tooltip
+- Новая вкладка «📊 Анализ» в верхней навигации (рядом с «Загрузка» и «Чеки/фактуры»): дублирует окно чеков/фактур — активен при activeTab 'analysis', список рендерится при 'list' И 'analysis' (одна и та же вёрстка, отдельная точка входа; при переключении — loadReceipts). Дальше вкладку можно развивать независимо (графики/сводки)
+- Бэкенд без изменений (версия 2026-08-04.21)
+
+**2026-08-04 (v23.1 — диагностика ошибки «payment_status column … schema cache»)**
 - ПРОБЛЕМА (скриншот): массовая смена оплаты падает с ошибкой Supabase «Could not find the 'payment_status' column of 'receipts' in the schema cache», метки оплаты в карточках нет — колонки payment_status в БД НЕТ: миграция v19 не выполнена / выполнена не в том проекте Supabase (у пользователя ДВА проекта: householder и recept!) / PostgREST держит старый кэш схемы после ALTER TABLE
 - РЕШЕНИЕ для пользователя: выполнить supabase-migration-v19.sql в SQL Editor ПРОЕКТА householder (хост = SUPABASE_URL в Railway Variables householder-api); файл теперь содержит `notify pgrst, 'reload schema';` (принудительное обновление кэша PostgREST) + проверочный select (0 строк = не тот проект)
 - Backend: withPaymentStatusHint — к любой ошибке, где фигурирует payment_status (PUT /api/receipts/:id, bulk-update-payment-status), добавляется понятное РЕШЕНИЕ прямо в текст ошибки; filterRecordByColumns — громкое console.warn, если статус отброшен из-за отсутствия колонки (раньше терялся молча)
