@@ -1358,6 +1358,59 @@ async function saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod) {
 }
 
 // ========== UPLOAD RECEIPT ==========
+// ========== МУЛЬТИ-ЧЕКИ НА ОДНОМ СКАНЕ ==========
+// На одном изображении может быть НЕСКОЛЬКО чеков (скан с двумя чеками рядом).
+// Быстрый детектор на gemini-2.5-flash возвращает рамки; каждая область вырезается
+// и проходит обычный конвейер распознавания отдельно → отдельный документ в базе.
+async function detectMultipleReceipts(imageBuffer, mimeType = 'image/jpeg') {
+  if (!genAI) return null;
+  try {
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-2.5-flash',
+      generationConfig: { maxOutputTokens: 1024, temperature: 0 }
+    });
+    const prompt = `На изображении может быть ОДИН документ или НЕСКОЛЬКО отдельных чеков/фактур (например, скан, где два чека лежат рядом на одной странице).
+Определи количество ОТДЕЛЬНЫХ чеков/фактур на изображении.
+ВАЖНО: один длинный чек — это ОДИН документ (шапка, фискальный блок и футер одного чека не делить). Два разных чека (разные магазины, разные итоги) — два документа.
+Верни СТРОГО JSON без пояснений:
+{"count": 1}
+или, если отдельных документов несколько:
+{"count": N, "boxes": [[ymin, xmin, ymax, xmax], ...], "labels": ["кратко: магазин 1", "магазин 2"]}
+Координаты — целые числа 0..1000 (нормализованные к размеру изображения), по одной рамке на каждый отдельный чек, с небольшим запасом по краям.`;
+    const result = await model.generateContent([
+      { inlineData: { data: imageBuffer.toString('base64'), mimeType } },
+      prompt
+    ]);
+    const text = result.response.text();
+    const m = text.match(/\{[\s\S]*\}/);
+    if (!m) return null;
+    const parsed = JSON.parse(m[0]);
+    const count = parseInt(parsed.count, 10) || 1;
+    if (count < 2 || !Array.isArray(parsed.boxes) || parsed.boxes.length < 2) return null;
+    return { count, boxes: parsed.boxes.slice(0, count), labels: Array.isArray(parsed.labels) ? parsed.labels : [] };
+  } catch (e) {
+    console.warn('detectMultipleReceipts:', e.message);
+    return null; // детектор не сработал — обычный путь (один документ)
+  }
+}
+
+// Вырезать область по нормализованным координатам 0..1000 (с полем 2% по краям)
+async function cropByNormalizedBox(imageBuffer, box) {
+  const meta = await sharp(imageBuffer).metadata();
+  const W = meta.width, H = meta.height;
+  if (!W || !H || !Array.isArray(box) || box.length < 4) return null;
+  const [ymin, xmin, ymax, xmax] = box.map(v => Math.max(0, Math.min(1000, Number(v) || 0)));
+  const padX = Math.round(W * 0.02), padY = Math.round(H * 0.02);
+  const left = Math.max(0, Math.round(xmin / 1000 * W) - padX);
+  const top = Math.max(0, Math.round(ymin / 1000 * H) - padY);
+  const right = Math.min(W, Math.round(xmax / 1000 * W) + padX);
+  const bottom = Math.min(H, Math.round(ymax / 1000 * H) + padY);
+  const width = right - left, height = bottom - top;
+  // слишком мелкая рамка — это не отдельный чек, а артефакт детектора
+  if (width < W * 0.08 || height < H * 0.08) return null;
+  return sharp(imageBuffer).extract({ left, top, width, height }).jpeg({ quality: 92 }).toBuffer();
+}
+
 app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
   try {
     const token = req.query.token || req.body.token;
@@ -1376,6 +1429,52 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     const isPdf = req.file.mimetype === 'application/pdf' || /\.pdf$/i.test(req.file.originalname || '');
     const mimeType = isPdf ? 'application/pdf' : 'image/jpeg';
     const processedBuffer = isPdf ? req.file.buffer : await processImage(req.file.buffer);
+
+    // МУЛЬТИ-ЧЕК: если на скане/фото несколько чеков — вырезаем каждый,
+    // распознаём и сохраняем как ОТДЕЛЬНЫЕ документы
+    if (!isPdf) {
+      try {
+        const multi = await detectMultipleReceipts(processedBuffer, mimeType);
+        if (multi && multi.count >= 2) {
+          console.log(`Мульти-чек: на изображении найдено документов: ${multi.count}`);
+          const savedDocs = [];
+          for (let i = 0; i < multi.boxes.length; i++) {
+            try {
+              const crop = await cropByNormalizedBox(processedBuffer, multi.boxes[i]);
+              if (!crop) continue;
+              const cropProcessed = await processImage(crop);
+              const cropUrl = await uploadToStorage(cropProcessed, `${req.file.originalname || 'scan'}_check${i + 1}.jpg`, user.id, 'image/jpeg');
+              const auto = await recognizeWithFallback(cropProcessed, currency, docType, 'image/jpeg');
+              let rd = auto.data;
+              rd = await ensureRawTextRu(rd);
+              rd.docType = docType === 'auto' ? (rd.document_type || 'receipt') : docType;
+              rd.object = (object && object !== 'other') ? object : (rd.object || 'other');
+              if (subtypeOverride) rd.subtype = subtypeOverride;
+              if (paymentStatusOverride) rd.payment_status = paymentStatusOverride;
+              const saved = await saveReceiptToDB(rd, cropUrl, user, `multi-check ${i + 1}/${multi.boxes.length} (${auto.model})`);
+              savedDocs.push({ id: saved.id, ...saved, image_url: cropUrl });
+            } catch (e) {
+              console.error(`Мульти-чек #${i + 1} не распознан:`, e.message);
+            }
+          }
+          if (savedDocs.length) {
+            return res.json({
+              success: true,
+              multi: true,
+              count: savedDocs.length,
+              documents: savedDocs,
+              id: savedDocs[0].id,
+              ...savedDocs[0],
+              warning: `На изображении найдено чеков: ${multi.boxes.length} — сохранено отдельно: ${savedDocs.length}`
+            });
+          }
+          // все кропы упали — идём обычным путём (один документ)
+        }
+      } catch (e) {
+        console.warn('Мульти-чек детектор:', e.message);
+      }
+    }
+
     const imageUrl = await uploadToStorage(processedBuffer, req.file.originalname, user.id, mimeType);
     
     let receiptData;

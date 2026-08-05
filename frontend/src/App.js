@@ -890,10 +890,18 @@ function App() {
       if (!res.ok) throw new Error(data.error || data.message || `Ошибка сервера: ${res.status}`);
       if (!data.success && !data.id) throw new Error(data.error || 'Сохранение не удалось');
 
-      const receiptData = data.data || data;
-      if (receiptData.image_url) receiptData.image_url = fixImageUrl(receiptData.image_url);
-      setLastSavedReceipt(receiptData);
-      loadReceipts();
+      if (data.multi && Array.isArray(data.documents) && data.documents.length) {
+        // На скане несколько чеков — все сохранены отдельно, показываем первый
+        const docs = data.documents.map(d => ({ ...d, image_url: d.image_url ? fixImageUrl(d.image_url) : d.image_url }));
+        setLastSavedReceipt(docs[0]);
+        loadReceipts();
+        alert(`🧾 На скане найдено чеков: ${data.count}\nКаждый распознан и сохранён отдельным документом — смотрите список «Чеки/фактуры».`);
+      } else {
+        const receiptData = data.data || data;
+        if (receiptData.image_url) receiptData.image_url = fixImageUrl(receiptData.image_url);
+        setLastSavedReceipt(receiptData);
+        loadReceipts();
+      }
     } catch (e) {
       console.error('Ошибка:', e);
       alert('Ошибка: ' + e.message);
@@ -1065,9 +1073,17 @@ function App() {
           if (!res.ok || (!data.success && !data.id)) {
             throw new Error(data.error || `Ошибка сервера: ${res.status}`);
           }
-          const receiptData = data.data || data;
-          if (receiptData.image_url) receiptData.image_url = fixImageUrl(receiptData.image_url);
-          results.push({ file: file.name, status: 'success', receipt: receiptData });
+          if (data.multi && Array.isArray(data.documents) && data.documents.length) {
+            // На скане несколько чеков — сервер сохранил каждый отдельно
+            data.documents.forEach((d, k) => {
+              if (d.image_url) d.image_url = fixImageUrl(d.image_url);
+              results.push({ file: `${file.name} · чек ${k + 1}/${data.documents.length}`, status: 'success', receipt: d });
+            });
+          } else {
+            const receiptData = data.data || data;
+            if (receiptData.image_url) receiptData.image_url = fixImageUrl(receiptData.image_url);
+            results.push({ file: file.name, status: 'success', receipt: receiptData });
+          }
           setFolderProgress(prev => ({ ...prev, success: prev.success + 1 }));
           done = true;
         } catch (err) {
