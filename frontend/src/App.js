@@ -434,8 +434,8 @@ function App() {
   });
   const [lastSavedReceipt, setLastSavedReceipt] = useState(null);
   const [scanResultOpen, setScanResultOpen] = useState(false);
-  // По умолчанию — Gemini 2.5 Flash: бывший дефолт Groq Llama 4 Scout снят Groq с поддержки (decommissioned)
-  const [selectedModel, setSelectedModel] = useState('gemini-2.5-flash');
+  // По умолчанию — Kimi K3 (бывший дефолт Groq Llama 4 Scout снят Groq с поддержки)
+  const [selectedModel, setSelectedModel] = useState('kimi-kimi-k3');
   const [currency, setCurrency] = useState('auto');
   const [docType, setDocType] = useState('auto');
   const [subtype, setSubtype] = useState('auto');
@@ -1009,6 +1009,7 @@ function App() {
 
   const handleFolderSelect = async (e) => {
     const picked = Array.from(e.target.files).filter(f => f.type.startsWith('image/') || isPdfFile(f));
+    e.target.value = ''; // иначе повторный выбор той же папки не сработает (onChange не сработает)
     if (picked.length === 0) {
       alert('В папке не найдено изображений или PDF');
       return;
@@ -2388,7 +2389,10 @@ function App() {
           </div>
 
           <input type="file" accept="image/*,application/pdf" multiple onChange={handleFileSelect} id="file-input" style={{ display: 'none' }} />
-          <input type="file" id="folder-input" webkitdirectory="" directory="" multiple accept="image/*,application/pdf" onChange={handleFolderSelect} style={{ display: 'none' }} />
+          {/* Только webkitdirectory — без multiple/accept: тогда диалог выбирает ПАПКУ целиком,
+              а файлы внутри не кликабельны (с accept/macOS диалог превращался в выбор файлов).
+              Фильтрация по типу всё равно есть в handleFolderSelect */}
+          <input type="file" id="folder-input" webkitdirectory="" directory="" onChange={handleFolderSelect} style={{ display: 'none' }} />
           <input type="file" id="statement-input" accept=".xlsx,.xls" onChange={handleStatementSelect} style={{ display: 'none' }} />
 
           <div className="recognize-bar">
