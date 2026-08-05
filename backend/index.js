@@ -918,16 +918,49 @@ const GROQ_ALIASES = {
 
 function resolveGroqModel(model) {
   const raw = String(model || '').replace(/^groq-/, '');
-  return GROQ_ALIASES[raw] || raw || 'meta-llama/llama-4-scout-17b-16e-instruct';
+  return GROQ_ALIASES[raw] || raw || 'llama-3.3-70b-versatile';
+}
+
+// Модели, снятые Groq с поддержки (decommissioned): llama-4-scout/maverick, 3.2-vision, mixtral, gemma.
+// Выбор такой модели раньше убивал распознавание (400 от Groq). Теперь проверяем по ЖИВОМУ списку.
+const DEAD_GROQ_MODELS = new Set([
+  'meta-llama/llama-4-scout-17b-16e-instruct',
+  'meta-llama/llama-4-maverick-17b-128e-instruct',
+  'llama-3.2-90b-vision-preview',
+  'llama-3.2-11b-vision-preview',
+  'mixtral-8x7b-32768',
+  'gemma2-9b-it'
+]);
+
+// Кэш живого списка моделей Groq (10 мин) — самозалечивание при будущих decommission
+let groqLiveCache = { at: 0, ids: null };
+async function isGroqModelAlive(resolvedId) {
+  if (!groq) return false;
+  if (DEAD_GROQ_MODELS.has(resolvedId)) return false;
+  try {
+    if (!groqLiveCache.ids || Date.now() - groqLiveCache.at > 10 * 60 * 1000) {
+      const list = await groq.models.list();
+      groqLiveCache = { at: Date.now(), ids: new Set((list.data || []).map(m => m.id)) };
+    }
+    return groqLiveCache.ids.has(resolvedId);
+  } catch {
+    return true; // список недоступен — не мешаем, дальше сработает endpoint-fallback
+  }
 }
 
 async function recognizeWithGroq(imageBuffer, modelName, currency, docType) {
   if (!groq) throw new Error('Groq API key not configured');
+  const resolvedModel = resolveGroqModel(modelName);
+  // Модель снята с поддержки Groq (например llama-4-scout) → сразу бросаем понятную ошибку,
+  // эндпоинт поймает её и уйдёт в recognizeWithFallback (Gemini) — распознавание не сломается
+  if (!(await isGroqModelAlive(resolvedModel))) {
+    throw new Error(`Модель ${resolvedModel} снята с поддержки Groq (decommissioned) — выбери другую модель в меню`);
+  }
   const base64 = imageBuffer.toString('base64');
   const prompt = buildReceiptPrompt(currency, docType);
-  
+
   const response = await groq.chat.completions.create({
-    model: resolveGroqModel(modelName),
+    model: resolvedModel,
     messages: [
       {
         role: 'user',

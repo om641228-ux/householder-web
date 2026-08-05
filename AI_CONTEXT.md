@@ -301,7 +301,22 @@ Bucket: `receipt-images` (public, policies SELECT/INSERT/DELETE).
 
 ## 14. Changelog
 
-**2026-08-05 (текущая финальная версия, v25 — догрузка выписки, фильтры/суммы в «Анализе», ручная привязка и разбитая оплата)**
+**2026-08-05 (текущая финальная версия, v25.3 — починка распознавания: Groq снял Llama 4 Scout с поддержки)**
+- ПРИЧИНА поломки «распознать папку»: модель по умолчанию groq-llama-4-scout УДАЛЕНА Groq (decommissioned — в живом /api/check-models её нет в каталоге Groq). Каждый файл получал 400 от Groq API
+- Backend: DEAD_GROQ_MODELS (llama-4-scout/maverick, 3.2-vision, mixtral, gemma2) + isGroqModelAlive(resolvedId) — проверка по ЖИВОМУ списку groq.models.list() с кэшем 10 мин (самозалечивание при будущих decommission). recognizeWithGroq бросает понятную ошибку → эндпоинт уходит в recognizeWithFallback (Gemini) — распознавание работает даже с мёртвой выбранной моделью. resolveGroqModel: дефолт сменён на llama-3.3-70b-versatile
+- Frontend: дефолт selectedModel 'groq-llama-4-scout' → 'gemini-2.5-flash'; мёртвые модели удалены из MODELS (llama-4-scout/maverick, 3.2-90b/11b vision, mixtral, gemma) и из GROQ_ALIASES_FRONT
+
+**2026-08-05 (v25.2 — контрагенты Excel-фильтром, новые объекты)**
+- Фильтр контрагентов в «Анализе» переведён на компонент ExcelFilter (тот же, что у фильтров списка чеков): кнопка «Контрагент ▾» → панель с поиском, «(Выделить все)», чекбоксами, «Авто-применение», «Применить»/«Очистить»; множественный выбор (bankCpFilter: string[]); счётчики движений в подписях; выбрано N → «Контрагент (N)»
+- Новые объекты: Иссера, Игорь, Лиза, Алехандро — добавлены в DEFAULT_OBJECTS; загрузка /api/objects теперь ОБЪЕДИНЯЕТ таблицу objects с DEFAULT_OBJECTS (union) → объекты видны везде сразу, без SQL. Опционально для записи в БД: insert into objects (name) values ('Иссера'),('Игорь'),('Лиза'),('Алехандро') on conflict (name) do nothing;
+- Только App.js, бэкенд не тронут
+
+**2026-08-05 (v25.1 — фильтр по контрагенту + сброс фильтров в «Анализе»)**
+- Выпадающий фильтр «Все контрагенты» — уникальные counterparty из загруженных движений с количеством в скобках, сортировка по убыванию частоты (bankCounterparty)
+- Кнопка «✖ Сброс» — очищает ВСЕ фильтры разом (тип, даты, контрагент, поиск); видна только когда хоть один фильтр активен (hasActiveFilters)
+- Только App.js, бэкенд не тронут
+
+**2026-08-05 (v25 — догрузка выписки, фильтры/суммы в «Анализе», ручная привязка и разбитая оплата)**
 - Импорт = ДОГРУЗКА: перед вставкой движения сравниваются с уже загруженными по счёту (ключ 1: entry_number; ключ 2: дата+сумма+concept) — вставляются ТОЛЬКО новые строки, существующие и их привязки не трогаются; ответ +{skipped, totalInFile}; алерт показывает «Новых/Пропущено дублей». upsert заменён на insert новых (дедуп на нашей стороне)
 - Ручная привязка: POST /api/link-bank-movement {movement_id, receipt_id} (match_status 'manual', score 100) + POST /api/unlink-bank-movement {movement_id}. Разбитая оплата: несколько платежей к одной фактуре — recomputeReceiptPayment(receiptId) пересчитывает по ВСЕМ движениям с matched_receipt_id=receipt: сумма<фактуры → 'underpaid', >= → 'paid', нет привязок → null; paid_date = дата последнего платежа; bank_movement_id заполняется только при единственной привязке
 - POST /api/rematch-bank — повторный прогон автопривязки (кнопка «🔁 Автопривязка»); runBankMatching: iban опционален; исключает фактуры с ЛЮБОЙ привязкой (usedIds из bank_movements) и payment_status 'paid' — иначе разбитые оплаты (bank_movement_id=null) матчились бы повторно

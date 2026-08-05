@@ -203,10 +203,7 @@ const FALLBACK_MODELS = [
   { name: 'gemini-1.5-pro', displayName: 'Gemini 1.5 Pro', provider: 'Gemini' },
   { name: 'gemini-2.0-flash', displayName: 'Gemini 2.0 Flash', provider: 'Gemini' },
   { name: 'gemini-2.0-flash-lite', displayName: 'Gemini 2.0 Flash Lite', provider: 'Gemini' },
-  { name: 'groq-llama-3.2-90b', displayName: 'Groq Llama 3.2 90B Vision', provider: 'Groq' },
-  { name: 'groq-llama-3.2-11b', displayName: 'Groq Llama 3.2 11B Vision', provider: 'Groq' },
-  { name: 'groq-llama-4-scout', displayName: 'Groq Llama 4 Scout', provider: 'Groq' },
-  { name: 'groq-llama-4-maverick', displayName: 'Groq Llama 4 Maverick', provider: 'Groq' },
+  // Снятые Groq с поддержки (decommissioned) модели llama-4-scout/maverick и 3.2-vision удалены из списка — не выбирать мёртвое
   { name: 'groq-qwen3.6-27b', displayName: 'Groq Qwen3.6 27B', provider: 'Groq' },
   { name: 'groq-llama-3.3-70b', displayName: 'Groq Llama 3.3 70B', provider: 'Groq' },
   { name: 'groq-compound', displayName: 'Groq Compound', provider: 'Groq' },
@@ -219,8 +216,6 @@ const FALLBACK_MODELS = [
   { name: 'groq-gpt-oss-20b', displayName: 'Groq GPT-OSS 20B', provider: 'Groq' },
   { name: 'groq-gpt-oss-safeguard-20b', displayName: 'Groq GPT-OSS Safeguard 20B', provider: 'Groq' },
   { name: 'groq-qwen3-32b', displayName: 'Groq Qwen3 32B', provider: 'Groq' },
-  { name: 'groq-mixtral', displayName: 'Groq Mixtral', provider: 'Groq' },
-  { name: 'groq-gemma', displayName: 'Groq Gemma', provider: 'Groq' },
   { name: 'openrouter-google/gemma-4-26b-a4b-it:free', displayName: 'Gemma 4 26B (Free)', provider: 'OpenRouter' },
   { name: 'openrouter-qwen/qwen2.5-vl-32b-instruct:free', displayName: 'Qwen 2.5 VL 32B (Free)', provider: 'OpenRouter' },
   { name: 'openrouter-qwen/qwen2.5-vl-72b-instruct:free', displayName: 'Qwen 2.5 VL 72B (Free)', provider: 'OpenRouter' },
@@ -319,14 +314,8 @@ async function expandFilesWithPdf(files) {
 
 // Короткие имена Groq → реальные ID из API (для подсветки выбранной строки)
 const GROQ_ALIASES_FRONT = {
-  'groq-llama-4-scout': 'groq-meta-llama/llama-4-scout-17b-16e-instruct',
-  'groq-llama-4-maverick': 'groq-meta-llama/llama-4-maverick-17b-128e-instruct',
-  'groq-llama-3.2-90b': 'groq-llama-3.2-90b-vision-preview',
-  'groq-llama-3.2-11b': 'groq-llama-3.2-11b-vision-preview',
   'groq-llama-3.3-70b': 'groq-llama-3.3-70b-versatile',
-  'groq-llama-3.1-8b': 'groq-llama-3.1-8b-instant',
-  'groq-mixtral': 'groq-mixtral-8x7b-32768',
-  'groq-gemma': 'groq-gemma2-9b-it'
+  'groq-llama-3.1-8b': 'groq-llama-3.1-8b-instant'
 };
 
 const isModelSelected = (modelName, selectedModel) =>
@@ -445,7 +434,8 @@ function App() {
   });
   const [lastSavedReceipt, setLastSavedReceipt] = useState(null);
   const [scanResultOpen, setScanResultOpen] = useState(false);
-  const [selectedModel, setSelectedModel] = useState('groq-llama-4-scout');
+  // По умолчанию — Gemini 2.5 Flash: бывший дефолт Groq Llama 4 Scout снят Groq с поддержки (decommissioned)
+  const [selectedModel, setSelectedModel] = useState('gemini-2.5-flash');
   const [currency, setCurrency] = useState('auto');
   const [docType, setDocType] = useState('auto');
   const [subtype, setSubtype] = useState('auto');
