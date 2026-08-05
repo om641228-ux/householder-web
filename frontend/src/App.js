@@ -463,6 +463,11 @@ function App() {
   const [filterTypes, setFilterTypes] = useState([]);
   const [filterSubtypes, setFilterSubtypes] = useState([]);
   const [filterObjects, setFilterObjects] = useState([]);
+  // Вкладка «Анализ»: движения банковской выписки + фильтры
+  const [bankMovements, setBankMovements] = useState([]);
+  const [bankLoading, setBankLoading] = useState(false);
+  const [bankFilter, setBankFilter] = useState('all'); // all | out | in | matched | unmatched
+  const [bankSearch, setBankSearch] = useState('');
   const [filterDiffs, setFilterDiffs] = useState([]); // фильтр по разнице Δ (итог чека vs сумма товаров)
   const [searchQuery, setSearchQuery] = useState('');
   const [itemsPerPage, setItemsPerPage] = useState(20);
@@ -1365,6 +1370,44 @@ function App() {
     } catch (e) { console.error(e); }
   };
 
+  // Загрузить движения банковской выписки (вкладка «Анализ»)
+  const loadBankMovements = async () => {
+    setBankLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/bank-movements?token=${token}`);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) setBankMovements(data.movements || []);
+      else console.error('bank-movements:', data.error);
+    } catch (e) { console.error(e); }
+    finally { setBankLoading(false); }
+  };
+
+  // Импорт выписки банка (.xlsx Ruralvía) → автопривязка фактур к платежам
+  const handleStatementSelect = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('statement', file);
+      const res = await fetch(`${API_URL}/api/import-bank-statement?token=${token}`, { method: 'POST', body: formData });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      alert(`🏦 Выписка импортирована: ${data.imported} движений (${data.account || data.iban || 'счёт'})\n\n✅ Привязано автоматически: ${data.autoMatched}\n⚪ Платежей без пары: ${data.unmatchedPayments}\n\nОткройте вкладку «📊 Анализ» — там все движения и привязки.`);
+      loadReceipts(); // статусы оплаты привязанных фактур изменились на «Оплачено»
+    } catch (err) {
+      alert('Ошибка импорта выписки: ' + err.message);
+    } finally { setLoading(false); }
+  };
+
+  // Открыть карточку документа по id (из списка движений в «Анализе»)
+  const openReceiptById = (id) => {
+    const r = receipts.find(x => String(x.id) === String(id));
+    if (r) setViewModal(r);
+    else alert('Документ не найден в загруженном списке — обновите «Чеки/фактуры» и попробуйте снова');
+  };
+
   const bulkChangeSubtype = async (newSubtype) => {
     if (selectedReceiptIds.size === 0) return;
     try {
@@ -1775,8 +1818,8 @@ function App() {
             <button className={activeTab === 'list' ? 'active' : ''} onClick={() => {setActiveTab('list'); loadReceipts();}}>
               Чеки/фактуры ({receiptCount}) · Прочие документы ({invoiceCount})
             </button>
-            {/* Вкладка «Анализ»: дублирует окно чеков/фактур (отдельная точка входа — дальше можно менять независимо) */}
-            <button className={activeTab === 'analysis' ? 'active' : ''} onClick={() => {setActiveTab('analysis'); loadReceipts();}}>
+            {/* Вкладка «Анализ»: банковские выписки и автопривязка платежей к фактурам */}
+            <button className={activeTab === 'analysis' ? 'active' : ''} onClick={() => {setActiveTab('analysis'); loadReceipts(); loadBankMovements();}}>
               📊 Анализ
             </button>
           </nav>
@@ -1787,11 +1830,11 @@ function App() {
         </div>
       </header>
 
-      {backendInfo && !String(backendInfo.version || '').includes('2026-08-04.21') && (
+      {backendInfo && !String(backendInfo.version || '').includes('2026-08-04.22') && (
         <div style={{ background: '#fdecea', border: '1px solid #e74c3c', color: '#c0392b', padding: '10px 16px', borderRadius: 8, margin: '10px 15px', fontSize: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <strong> Бэкенд устарел!</strong>
           <span>
-            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-04.21</code>.
+            На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-04.22</code>.
             Задеплой свежий index.js (Railway → householder-api → Deploy latest commit), иначе перевод не заработает.
           </span>
           <button onClick={() => setBackendInfo(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', color: '#c0392b' }}>✕</button>
@@ -2145,6 +2188,11 @@ function App() {
                       {Object.entries(PAYMENT_STATUS_META).map(([v, m]) => <option key={v} value={v}>{m.label}</option>)}
                     </select>
                   </p>
+                  {viewModal.paid_date && (
+                    <p><strong>Дата оплаты:</strong> {formatDate(viewModal.paid_date)}
+                      {viewModal.bank_movement_id && <span title="Привязано к движению по банковской выписке" style={{ marginLeft: 6, color: '#27ae60' }}>🏦 по выписке</span>}
+                    </p>
+                  )}
                   {viewModal.provider && <p><strong>Поставщик:</strong> <HighlightText text={viewModal.provider} query={searchQuery} /></p>}
                   {viewModal.supply_address && <p><strong>Адрес поставки:</strong> <HighlightText text={viewModal.supply_address} query={searchQuery} /></p>}
                   {viewModal.invoice_number && <p><strong>№ фактуры:</strong> {viewModal.invoice_number}</p>}
@@ -2248,6 +2296,9 @@ function App() {
             <label htmlFor="folder-input" className="btn-folder">
               📁 Распознать папку
             </label>
+            <label htmlFor="statement-input" className="btn-folder" style={{ background: '#16a085' }} title="Excel-выписка банка (.xlsx): фактуры автоматически привяжутся к платежам">
+              🏦 Выписка банка
+            </label>
             <div className="toolbar-controls">
               <div className="control-group compact">
                 <label>Валюта:</label>
@@ -2291,6 +2342,7 @@ function App() {
 
           <input type="file" accept="image/*,application/pdf" multiple onChange={handleFileSelect} id="file-input" style={{ display: 'none' }} />
           <input type="file" id="folder-input" webkitdirectory="" directory="" multiple accept="image/*,application/pdf" onChange={handleFolderSelect} style={{ display: 'none' }} />
+          <input type="file" id="statement-input" accept=".xlsx,.xls" onChange={handleStatementSelect} style={{ display: 'none' }} />
 
           <div className="recognize-bar">
             <button
@@ -2496,7 +2548,7 @@ function App() {
         </div>
       )}
 
-      {(activeTab === 'list' || activeTab === 'analysis') && (
+      {activeTab === 'list' && (
         <div className="list-section">
           <div className="filters" style={{ flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
             <ExcelFilter label="Год" options={availableYears.map(y => ({ value: y, label: String(y) }))} selected={filterYears} onChange={v => { setFilterYears(v); setCurrentPage(1); }} />
@@ -2772,6 +2824,85 @@ function App() {
               )}
             </>
           )}
+        </div>
+      )}
+      {activeTab === 'analysis' && (
+        <div className="analysis-section" style={{ padding: '6px 0 20px' }}>
+          {(() => {
+            const isOut = m => Number(m.amount) < 0;
+            const out = bankMovements.filter(isOut);
+            const matched = bankMovements.filter(m => m.matched_receipt_id);
+            const unmatchedOut = out.filter(m => !m.matched_receipt_id);
+            const unpaidBills = receipts.filter(r => ['bill', 'invoice'].includes(r.document_type) && !r.bank_movement_id && r.payment_status !== 'paid');
+            const stat = (label, value, color, bg) => (
+              <div key={label} style={{ flex: '1 1 150px', background: bg, border: `1px solid ${color}`, borderRadius: 10, padding: '10px 14px' }}>
+                <div style={{ fontSize: 22, fontWeight: 800, color }}>{value}</div>
+                <div style={{ fontSize: 12, color: '#555' }}>{label}</div>
+              </div>
+            );
+            const q = bankSearch.trim().toLowerCase();
+            const visible = bankMovements.filter(m => {
+              if (bankFilter === 'out' && !isOut(m)) return false;
+              if (bankFilter === 'in' && isOut(m)) return false;
+              if (bankFilter === 'matched' && !m.matched_receipt_id) return false;
+              if (bankFilter === 'unmatched' && (!isOut(m) || m.matched_receipt_id)) return false;
+              if (q && !String(m.concept || '').toLowerCase().includes(q) && !String(m.counterparty || '').toLowerCase().includes(q)) return false;
+              return true;
+            });
+            return (
+              <>
+                <h3 style={{ margin: '4px 0 10px' }}>🏦 Банковская выписка — привязка платежей к фактурам</h3>
+                {bankMovements.length === 0 && !bankLoading && (
+                  <div style={{ background: '#fff8e6', border: '1px solid #f0c36d', borderRadius: 10, padding: 16, marginBottom: 12 }}>
+                    Выписка ещё не загружена. Откройте вкладку «Загрузка» → кнопка «🏦 Выписка банка» и выберите Excel-файл (.xlsx) из банка — движения появятся здесь, а фактуры с совпавшими суммами сами получат статус 🟢 Оплачено.
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+                  {stat('Движений в выписке', bankMovements.length, '#2c3e50', '#f4f6f7')}
+                  {stat('Привязано автоматически', matched.length, '#27ae60', '#e8f8ef')}
+                  {stat('Платежи без фактуры', unmatchedOut.length, '#e67e22', '#fdf2e3')}
+                  {stat('Счета без платежа в банке', unpaidBills.length, '#e74c3c', '#fdecea')}
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+                  <select value={bankFilter} onChange={e => setBankFilter(e.target.value)} style={{ padding: '6px 10px', borderRadius: 6 }}>
+                    <option value="all">Все движения</option>
+                    <option value="out">Только платежи</option>
+                    <option value="in">Только поступления</option>
+                    <option value="matched">Привязанные</option>
+                    <option value="unmatched">Платежи без пары</option>
+                  </select>
+                  <input value={bankSearch} onChange={e => setBankSearch(e.target.value)} placeholder="Поиск по концепту…" style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ddd', flex: '1 1 200px' }} />
+                  <button onClick={loadBankMovements} style={{ padding: '6px 12px', borderRadius: 6, border: 'none', background: '#3498db', color: '#fff', cursor: 'pointer' }}>🔄 Обновить</button>
+                </div>
+                {bankLoading && <div className="loading-center"><div className="spinner"></div><p>Загрузка движений...</p></div>}
+                {!bankLoading && visible.map(m => {
+                  const linked = m.matched_receipt_id ? receipts.find(r => String(r.id) === String(m.matched_receipt_id)) : null;
+                  return (
+                    <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 6, boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+                      <span style={{ flex: '0 0 86px', color: '#7f8c8d', fontSize: 13 }}>{formatDate(m.operation_date)}</span>
+                      <span style={{ flex: '1 1 240px', minWidth: 0, overflowWrap: 'break-word', fontSize: 14 }}>
+                        <b>{m.concept || '—'}</b>
+                        {m.prefix && <span style={{ marginLeft: 6, fontSize: 11, color: '#95a5a6' }}>{m.prefix}</span>}
+                      </span>
+                      <span style={{ flex: '0 0 110px', textAlign: 'right', fontWeight: 700, color: isOut(m) ? '#e74c3c' : '#27ae60' }}>
+                        {isOut(m) ? '−' : '+'}{formatAmount(Math.abs(Number(m.amount)), 'EUR')}
+                      </span>
+                      {m.matched_receipt_id ? (
+                        <button onClick={() => openReceiptById(m.matched_receipt_id)} title={linked ? `Открыть: ${linked.store_name || linked.store_name_ru || 'документ'}` : 'Открыть документ'} style={{ flex: '0 0 auto', border: '1px solid #27ae60', background: '#e8f8ef', color: '#27ae60', borderRadius: 10, padding: '3px 10px', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
+                          🟢 {linked ? (linked.store_name || linked.store_name_ru || 'Документ') : `Чек #${m.matched_receipt_id}`}{m.match_score ? ` · ${m.match_score}б` : ''}
+                        </button>
+                      ) : (
+                        isOut(m) && <span style={{ flex: '0 0 auto', fontSize: 12, color: '#e67e22', background: '#fdf2e3', borderRadius: 10, padding: '3px 10px', fontWeight: 700 }}>⚪ Без фактуры</span>
+                      )}
+                    </div>
+                  );
+                })}
+                {!bankLoading && bankMovements.length > 0 && visible.length === 0 && (
+                  <p style={{ color: '#95a5a6' }}>Ничего не найдено по текущему фильтру.</p>
+                )}
+              </>
+            );
+          })()}
         </div>
       )}
       {scanResultOpen && (

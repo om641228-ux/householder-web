@@ -1225,7 +1225,7 @@ async function getTableColumns() {
         'items', 'image_url', 'page_urls', 'raw_text', 'raw_text_ru', 'document_type', 'object',
         'subtype', 'payment_status', 'provider', 'valid_from', 'valid_to', 'meta', 'related_id', 'object_id',
         'invoice_number', 'contract_number', 'supply_address', 'cups', 'meter_number',
-        'consumption', 'consumption_unit',
+        'consumption', 'consumption_unit', 'bank_movement_id', 'paid_date',
         'recognition_method', 'recognized_at', 'created_at', 'owner_id', 'owner_name'
       ];
     }
@@ -1238,7 +1238,7 @@ async function getTableColumns() {
       'items', 'image_url', 'page_urls', 'raw_text', 'raw_text_ru', 'document_type', 'object',
       'subtype', 'payment_status', 'provider', 'valid_from', 'valid_to', 'meta', 'related_id', 'object_id',
       'invoice_number', 'contract_number', 'supply_address', 'cups', 'meter_number',
-      'consumption', 'consumption_unit',
+      'consumption', 'consumption_unit', 'bank_movement_id', 'paid_date',
       'recognition_method', 'recognized_at', 'created_at', 'owner_id', 'owner_name'
     ];
   }
@@ -1656,7 +1656,7 @@ app.get('/api/diagnostics', async (req, res) => {
   try {
     const columns = await getTableColumns();
     res.json({
-      version: '2026-08-04.21 (подсказка к ошибке отсутствующей колонки payment_status: миграция v19 + reload schema)',
+      version: '2026-08-04.22 (банковские выписки: импорт Excel, автопривязка фактур к платежам, вкладка Анализ)',
       raw_text_ru_column: columns.includes('raw_text_ru'),
       fix_if_false: 'alter table receipts add column if not exists raw_text_ru text;',
       v13_page_urls_column: columns.includes('page_urls'),
@@ -1777,7 +1777,7 @@ app.put('/api/receipts/:id', requireAuth, async (req, res) => {
     if (error) throw error;
     res.json({ receipt: data });
   } catch (e) {
-    res.status(500).json({ error: withPaymentStatusHint(e.message) });
+    res.status(500).json({ error: withDbSchemaHint(e.message) });
   }
 });
 
@@ -1910,17 +1910,238 @@ app.post('/api/bulk-update-payment-status', requireAuth, async (req, res) => {
     if (error) throw error;
     res.json({ success: true });
   } catch (e) {
-    res.status(500).json({ error: withPaymentStatusHint(e.message) });
+    res.status(500).json({ error: withDbSchemaHint(e.message) });
   }
 });
 
-// Подсказка к ошибке Supabase «Could not find the 'payment_status' column ... in the schema cache»:
-// либо не выполнена миграция v19, либо PostgREST держит старый кэш схемы после ALTER TABLE
-function withPaymentStatusHint(msg) {
-  const m = String(msg || '');
-  if (!/payment_status/i.test(m)) return m;
-  return m + ' | РЕШЕНИЕ: выполни supabase-migration-v19.sql в Supabase SQL Editor (ПРОЕКТ householder!): alter table receipts add column if not exists payment_status text; — и затем: notify pgrst, \'reload schema\'; (принудительное обновление кэша схемы PostgREST)';
+// Подсказка к ошибкам Supabase про отсутствующие объекты схемы («... in the schema cache»):
+// либо не выполнена миграция, либо PostgREST держит старый кэш после ALTER/CREATE TABLE
+function withDbSchemaHint(msg) {
+  let m = String(msg || '');
+  if (/payment_status/i.test(m)) {
+    m += ' | РЕШЕНИЕ: выполни supabase-migration-v19.sql в Supabase SQL Editor (ПРОЕКТ householder!): alter table receipts add column if not exists payment_status text; — и затем: notify pgrst, \'reload schema\';';
+  }
+  if (/bank_movements/i.test(m)) {
+    m += ' | РЕШЕНИЕ: выполни supabase-migration-v20.sql в Supabase SQL Editor (ПРОЕКТ householder!) — таблица bank_movements + колонки receipts.bank_movement_id/paid_date; затем: notify pgrst, \'reload schema\';';
+  }
+  return m;
 }
+
+// ========== БАНКОВСКИЕ ВЫПИСКИ: импорт Excel + автопривязка фактур к платежам (v24) ==========
+// Формат выписки Ruralvía/Caja Rural (.xlsx): строки-метаданные (Nombre, IBAN),
+// строка заголовков (Fecha de la operación | Fecha valor | Tipo movimiento | Importe | Saldo | Nro. Apunte),
+// далее движения. Importe < 0 — платёж, > 0 — поступление. Nro. Apunte + IBAN — ключ дедупликации.
+
+// Стоп-слова для нормализации контрагентов (юр. формы и предлоги не несут смысла)
+const CP_STOPWORDS = new Set(['de', 'del', 'la', 'el', 'y', 'en', 'los', 'las', 'the', 'of', 'por', 'para', 'con',
+  'sa', 'sl', 'sau', 'slu', 'slne', 'scp', 'bv', 'inc', 'gmbh', 'srl', 'llc', 'co', 'sociedad', 'anonima', 'limitada']);
+
+// Токены имени контрагента: нижний регистр, без акцентов/пунктуации, без стоп-слов
+function counterpartyTokens(s) {
+  return String(s || '').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9а-яё\s]/gi, ' ')
+    .split(/\s+/)
+    .filter(t => t.length >= 2 && !CP_STOPWORDS.has(t));
+}
+
+// Похожесть имён: доля общих токенов от КОРОТКОГО имени (containment) —
+// «o2 fibra telefonica» vs «Telefónica» = 1.0, «Plenitude» vs «plenitude energy solutions» = 1.0
+function counterpartySim(a, b) {
+  const ta = new Set(counterpartyTokens(a));
+  const tb = new Set(counterpartyTokens(b));
+  if (!ta.size || !tb.size) return 0;
+  let inter = 0;
+  for (const t of ta) if (tb.has(t)) inter++;
+  return inter / Math.min(ta.size, tb.size);
+}
+
+// «rcbo.o2 fibra - telefonica de espana sau» → { prefix: 'rcbo', concept: 'o2 fibra - ...' }
+// «cuotas tes.gral.seg. socia» → { prefix: 'cuotas', concept: 'tes.gral.seg. socia' }
+function parseMovementConcept(tipoMovimiento) {
+  const raw = String(tipoMovimiento || '').trim();
+  const m = raw.match(/^([a-zñ]{1,8})\s*[.:]\s*(.+)$/i);
+  if (m) return { prefix: m[1].toLowerCase(), concept: m[2].trim() };
+  const m2 = raw.match(/^([a-zñ]{2,8})\s+(.+)$/i);
+  if (m2) return { prefix: m2[1].toLowerCase(), concept: m2[2].trim() };
+  return { prefix: '', concept: raw };
+}
+
+// Дата из Excel: Date-объект (cellDates), серийное число (25569 = 1970-01-01) или строка dd.mm.yyyy
+function excelDateToIso(v) {
+  if (v == null || v === '') return null;
+  if (v instanceof Date && !isNaN(v)) return v.toISOString().slice(0, 10);
+  if (typeof v === 'number' && isFinite(v)) {
+    const d = new Date(Math.round((v - 25569) * 86400 * 1000));
+    return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+  }
+  const d = new Date(v);
+  if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  const m = String(v).match(/(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})/);
+  if (m) {
+    const y = m[3].length === 2 ? '20' + m[3] : m[3];
+    return `${y}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  }
+  return null;
+}
+
+// Автопривязка: платёжные движения (amount<0) без пары ↔ фактуры без bank_movement_id.
+// Баллы: сумма до цента — ворота (+50); имя (маx по названию/переводу/поставщику) до +30;
+// дата (счёт до платежа, окно −7…+75 дн) до +15; № фактуры/договора в концепте +40.
+// Авто: strong-ID, либо ≥80 баллов с отрывом ≥10 от второго кандидата. Побочный эффект: receipt → 🟢 paid + paid_date.
+async function runBankMatching(ownerId, iban) {
+  const { data: movements, error: e1 } = await supabaseAdmin.from('bank_movements')
+    .select('*').is('matched_receipt_id', null).lt('amount', 0).eq('iban', iban);
+  if (e1) throw e1;
+  if (!movements || !movements.length) return { matched: 0, candidates: 0 };
+
+  const { data: receipts, error: e2 } = await supabaseAdmin.from('receipts')
+    .select('id, store_name, store_name_ru, provider, receipt_date, total_amount, invoice_number, contract_number, payment_status')
+    .is('bank_movement_id', null).not('total_amount', 'is', null);
+  if (e2) throw e2;
+
+  let matched = 0;
+  for (const mv of movements) {
+    const amt = Math.abs(Number(mv.amount));
+    const opDate = mv.operation_date ? new Date(mv.operation_date) : null;
+    const conceptText = `${mv.concept || ''} ${mv.counterparty || ''}`;
+    const conceptDigits = conceptText.replace(/\D/g, '');
+    const scored = [];
+    for (const r of receipts || []) {
+      const rAmt = Math.abs(Number(r.total_amount));
+      if (!isFinite(rAmt) || Math.abs(rAmt - amt) > 0.011) continue; // сумма — обязательные ворота
+      let score = 50;
+      const sim = Math.max(
+        counterpartySim(conceptText, r.store_name),
+        counterpartySim(conceptText, r.store_name_ru),
+        counterpartySim(conceptText, r.provider)
+      );
+      score += Math.round(30 * sim);
+      if (opDate && r.receipt_date) {
+        const days = Math.round((opDate.getTime() - new Date(r.receipt_date).getTime()) / 86400000);
+        if (days >= -2 && days <= 45) score += 15;
+        else if (days >= -7 && days <= 75) score += 8;
+      }
+      const strong = [r.invoice_number, r.contract_number].filter(Boolean)
+        .some(n => { const d = String(n).replace(/\D/g, ''); return d.length >= 5 && conceptDigits.includes(d); });
+      if (strong) score += 40;
+      scored.push({ r, score: Math.min(100, score), strong });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    const best = scored[0];
+    const second = scored[1];
+    const confident = best && (best.strong || (best.score >= 80 && (!second || best.score - second.score >= 10)));
+    if (confident) {
+      const now = new Date().toISOString();
+      const { error: ue1 } = await supabaseAdmin.from('bank_movements')
+        .update({ matched_receipt_id: best.r.id, match_status: 'auto', match_score: best.score, matched_at: now })
+        .eq('id', mv.id);
+      if (ue1) { console.error('match: обновление движения не удалось:', ue1.message); continue; }
+      const { error: ue2 } = await supabaseAdmin.from('receipts')
+        .update({ bank_movement_id: mv.id, payment_status: 'paid', paid_date: mv.operation_date })
+        .eq('id', best.r.id);
+      if (ue2) console.error('match: обновление фактуры не удалось:', ue2.message);
+      best.r.bank_movement_id = mv.id; // в этом прогоне фактура уже занята
+      matched++;
+      console.log(`match: «${mv.concept}» ${mv.amount} ↔ чек #${best.r.id} (${best.score} баллов)`);
+    }
+  }
+  return { matched, candidates: movements.length };
+}
+
+// Импорт выписки .xlsx (Ruralvía): парсинг → upsert по (iban, entry_number) → автопривязка
+app.post('/api/import-bank-statement', requireAuth, upload.single('statement'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Нет файла выписки (.xlsx)' });
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const grid = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+
+    // Метаданные счёта в первых строках: Nombre / IBAN
+    let accountName = null, iban = null;
+    for (const row of grid.slice(0, 8)) {
+      const c0 = String(row && row[0] || '').trim().toLowerCase();
+      if (c0 === 'nombre') accountName = String(row[1] || '').trim() || null;
+      if (c0 === 'iban') iban = String(row[1] || '').replace(/\s+/g, '') || null;
+    }
+    // Строка заголовков таблицы движений
+    const hdrIdx = grid.findIndex(row => Array.isArray(row)
+      && row.some(c => /fecha de la operaci/i.test(String(c || '')))
+      && row.some(c => /importe/i.test(String(c || ''))));
+    if (hdrIdx < 0) return res.status(400).json({ error: 'Не найден заголовок таблицы («Fecha de la operación» / «Importe») — похоже, это не выписка формата Ruralvía' });
+    const hdr = grid[hdrIdx].map(c => String(c || '').trim().toLowerCase());
+    const col = (re) => hdr.findIndex(h => re.test(h));
+    const cOp = col(/fecha de la operaci/), cVal = col(/fecha valor/), cTipo = col(/tipo/),
+      cImp = col(/importe/), cSaldo = col(/saldo/), cAp = col(/apunte/);
+
+    const batchId = crypto.randomUUID();
+    const rows = [];
+    for (let i = hdrIdx + 1; i < grid.length; i++) {
+      const row = grid[i];
+      if (!Array.isArray(row)) continue;
+      const opDate = excelDateToIso(cOp >= 0 ? row[cOp] : null);
+      const amount = cImp >= 0 ? Number(row[cImp]) : NaN;
+      const tipo = cTipo >= 0 ? String(row[cTipo] || '').trim() : '';
+      if (!opDate || !isFinite(amount) || !tipo) continue;
+      const { prefix, concept } = parseMovementConcept(tipo);
+      rows.push({
+        owner_id: req.user?.id || null,
+        iban, account_name: accountName,
+        operation_date: opDate,
+        value_date: excelDateToIso(cVal >= 0 ? row[cVal] : null),
+        prefix, concept,
+        counterparty: counterpartyTokens(concept).slice(0, 6).join(' ') || null,
+        amount,
+        balance: cSaldo >= 0 && row[cSaldo] != null && isFinite(Number(row[cSaldo])) ? Number(row[cSaldo]) : null,
+        entry_number: cAp >= 0 && row[cAp] != null ? (parseInt(row[cAp], 10) || null) : null,
+        import_batch: batchId
+      });
+    }
+    if (!rows.length) return res.status(400).json({ error: 'В файле не найдено ни одного движения' });
+
+    // upsert по (iban, entry_number): повторный импорт того же файла не плодит дубли;
+    // matched_receipt_id в payload отсутствует → при конфликте привязки сохраняются
+    let written = 0;
+    const withKey = rows.filter(r => r.iban && r.entry_number != null);
+    const noKey = rows.filter(r => !(r.iban && r.entry_number != null));
+    for (let i = 0; i < withKey.length; i += 200) {
+      const chunk = withKey.slice(i, i + 200);
+      const { error } = await supabaseAdmin.from('bank_movements').upsert(chunk, { onConflict: 'iban,entry_number' });
+      if (error) throw error;
+      written += chunk.length;
+    }
+    if (noKey.length) {
+      const { error } = await supabaseAdmin.from('bank_movements').insert(noKey);
+      if (error) throw error;
+      written += noKey.length;
+      console.warn(`import-bank-statement: ${noKey.length} движений без ключа (iban/entry_number) — вставлены без дедупликации`);
+    }
+
+    const matchRes = await runBankMatching(req.user?.id, iban);
+    console.log(`Выписка ${accountName || iban}: ${written} движений, автопривязка ${matchRes.matched}/${matchRes.candidates}`);
+    res.json({
+      success: true, imported: rows.length, account: accountName, iban,
+      autoMatched: matchRes.matched, unmatchedPayments: matchRes.candidates - matchRes.matched
+    });
+  } catch (e) {
+    res.status(500).json({ error: withDbSchemaHint(e.message) });
+  }
+});
+
+// Список движений для вкладки «Анализ» (фронт обогащает данными чеков на своей стороне)
+app.get('/api/bank-movements', requireAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('bank_movements')
+      .select('*')
+      .order('operation_date', { ascending: false })
+      .order('entry_number', { ascending: false })
+      .limit(1000);
+    if (error) throw error;
+    res.json({ movements: data || [] });
+  } catch (e) {
+    res.status(500).json({ error: withDbSchemaHint(e.message) });
+  }
+});
 
 // ========== EXPORT EXCEL ==========
 app.post('/api/export-excel', requireAuth, async (req, res) => {

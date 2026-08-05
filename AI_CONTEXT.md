@@ -110,7 +110,14 @@ Node.js >= 20.0.0. Supabase подключён с `realtime.transport: ws` (об
 | POST | `/api/reprocess-receipt` | Перераспознавание |
 | POST | `/api/translate-receipt` | Перевод raw_text существующего чека (без перераспознавания) |
 | POST | `/api/export-excel` | Экспорт Excel (.xlsx) |
-| GET | `/api/diagnostics` | Диагностика без токена: версия, колонка raw_text_ru, колонки v7, настроенные ключи |
+| POST | `/api/bulk-update-payment-status` | Массовая смена статуса оплаты (body: {ids, payment_status} — to_pay/paid/underpaid/null) |
+| GET | `/api/diagnostics` | Диагностика без токена: версия, колонка raw_text_ru, колонки v7/v19/v20, настроенные ключи |
+
+### Bank (банковские выписки, v24)
+| Method | Path | Описание |
+|---|---|---|
+| POST | `/api/import-bank-statement` | Импорт выписки .xlsx (multipart: statement). Парсинг формата Ruralvía, upsert по (iban, entry_number), затем runBankMatching — авто-привязка фактур к платежам |
+| GET | `/api/bank-movements` | Движения по счетам (до 1000, order operation_date desc). Совпадения фронт обогащает из своего state receipts |
 
 ### Objects (дома / недвижимость, v7)
 | Method | Path | Описание |
@@ -162,8 +169,20 @@ CREATE TABLE receipts (
   recognition_method TEXT,   -- какая модель распознавала (+ fallback info)
   recognized_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT NOW(),
-  owner_id TEXT, owner_name TEXT
+  owner_id TEXT, owner_name TEXT,
+  -- колонка v19 (миграция supabase-migration-v19.sql):
+  payment_status TEXT,         -- 'to_pay'|'paid'|'underpaid'|null — статус оплаты (ручной/авто по выписке)
+  -- колонки v20 (миграция supabase-migration-v20.sql):
+  bank_movement_id BIGINT,     -- привязка к строке банковской выписки (bank_movements.id)
+  paid_date DATE               -- фактическая дата оплаты (из выписки)
 );
+
+-- таблица банковских движений (v20, миграция supabase-migration-v20.sql):
+-- id, owner_id, iban, account_name, operation_date, value_date, prefix, concept, counterparty,
+-- amount NUMERIC(14,2) NOT NULL, balance, entry_number, import_batch,
+-- matched_receipt_id BIGINT (без FK), match_status DEFAULT 'unmatched', match_score, matched_at, created_at
+-- уникальный индекс: (iban, entry_number) — дедуп при повторном импорте
+CREATE TABLE bank_movements (...);
 
 -- таблица объектов (v7): id, name UNIQUE, address, notes, created_at
 -- сидится из distinct receipts.object; object_id бэкфиллится по имени
@@ -282,7 +301,23 @@ Bucket: `receipt-images` (public, policies SELECT/INSERT/DELETE).
 
 ## 14. Changelog
 
-**2026-08-04 (текущая финальная версия, v23.2 — карточка: только значок оплаты; новая вкладка «Анализ»)**
+**2026-08-04 (текущая финальная версия, v24 — банковские выписки: импорт Excel + автопривязка фактур к платежам во вкладке «Анализ»)**
+- ТРЕБУЕТ миграцию supabase-migration-v20.sql (таблица bank_movements + receipts.bank_movement_id/paid_date; notify pgrst)
+- Бэкенд (версия 2026-08-04.22):
+  - POST /api/import-bank-statement (requireAuth, upload.single('statement')): парсит выписку Ruralvía .xlsx (Nombre/IBAN в первых 8 строках; строка заголовка «Fecha de la operación/Importe»; excelDateToIso для дат; prefix/concept из «rcbo: CONTRATO…»); дедуп upsert onConflict 'iban,entry_number' (повторный импорт не затирает совпадения); после вставки — runBankMatching; ответ {imported, account, iban, autoMatched, unmatchedPayments}
+  - GET /api/bank-movements — до 1000 движений, order operation_date desc
+  - runBankMatching(ownerId, iban): только расходные движения (amount<0) без привязки × чеки без bank_movement_id; скоринг: сумма exact ±0.01 (гейт +50) + counterpartySim (containment токенов, NFD-strip, стоп-слова incl. sa/sl/sau/bv/inc) max(store_name/store_name_ru/provider)×30 + окно дат (чек до платежа: −2..+45д = +15; −7..+75д = +8) + strong ID (№ фактуры/договора ≥5 цифр в concept) +40; auto если strong ИЛИ (≥80 с запасом ≥10 над 2-м кандидатом). Побочный эффект: movement matched_receipt_id/match_status 'auto'/match_score/matched_at + receipt payment_status 'paid', paid_date=operation_date, bank_movement_id; в одном прогоне чек не используется дважды (best.r.bank_movement_id помечается)
+  - withDbSchemaHint: подсказка миграции v20 для ошибок /bank_movements/i (v19 — для /payment_status/i)
+  - diagnostics: v20_receipts_bank_columns (bank_movement_id+paid_date), v20_bank_movements_table, fix_v20_if_false
+  - Unit-тест на реальной выписке movimientos-30.xlsx: 248/248 движений; авто-совпадения AXA→95б, Comunidad→88б, O2×2, Telefónica, AEAT (strong); поступления Booking/Airbnb игнорируются; платёж O2 44.42 НЕ привязан к чеку Plenitude (гейт по имени)
+- Фронт:
+  - Кнопка «🏦 Выписка банка» (зелёная #16a085) в тулбаре загрузки + hidden input accept .xlsx,.xls → handleStatementSelect (FormData 'statement', alert со статистикой, loadReceipts)
+  - Вкладка «📊 Анализ»: stats-карточки (движения/платежи/привязано/без фактуры/неоплаченные фактуры), фильтр (все/расходы/поступления/привязанные/без фактуры), поиск по concept/counterparty, кнопка 🔄 (loadBankMovements); строка движения: дата | concept+prefix | сумма (красная/зелёная) | 🟢 кнопка привязанного чека (match_score, → openReceiptById открывает модалку) или ⚪ «Без фактуры»
+  - Модалка документа: строка «Дата оплаты: … 🏦 по выписке» при paid_date (+ bank_movement_id)
+  - Watchdog-подстрочники подняты до 2026-08-04.22
+  - Список чеков снова только при activeTab 'list' (вкладка Анализ теперь своя вёрстка)
+
+**2026-08-04 (v23.2 — карточка: только значок оплаты; новая вкладка «Анализ»)**
 - Из списочной карточки УБРАНА текстовая плашка «🟢 Оплачено» под количеством товаров — остался только круглый значок оплаты в правом верхнем углу шапки (после бейджа типа): 🟢/🟠/🔴 с tooltip
 - Новая вкладка «📊 Анализ» в верхней навигации (рядом с «Загрузка» и «Чеки/фактуры»): дублирует окно чеков/фактур — активен при activeTab 'analysis', список рендерится при 'list' И 'analysis' (одна и та же вёрстка, отдельная точка входа; при переключении — loadReceipts). Дальше вкладку можно развивать независимо (графики/сводки)
 - Бэкенд без изменений (версия 2026-08-04.21)
