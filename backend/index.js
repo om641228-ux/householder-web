@@ -1362,32 +1362,108 @@ async function saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod) {
 // На одном изображении может быть НЕСКОЛЬКО чеков (скан с двумя чеками рядом).
 // Быстрый детектор на gemini-2.5-flash возвращает рамки; каждая область вырезается
 // и проходит обычный конвейер распознавания отдельно → отдельный документ в базе.
-async function detectMultipleReceipts(imageBuffer, mimeType = 'image/jpeg') {
-  if (!genAI) return null;
+// CV-эвристика БЕЗ AI: ищем две широкие зоны текста, разделённые пустым зазором
+// посередине изображения — признак двух чеков рядом (или друг под другом) на скане.
+// Сигнал — ДОЛЯ тёмных пикселей (<215) в колонке/строке, а не средняя яркость:
+// на чистом светлом скане текст разбавлен белым и средняя яркость почти не падает,
+// но тёмные точки текста всё равно присутствуют. Проверено на реальном скане:
+// левая зона 8–32% ширины, зазор ~5%, правая зона 38–65%.
+function hasCentralContentGap(profile) {
+  const N = profile.length;
+  const minZone = Math.round(N * 0.10);   // зона контента ≥10% длины профиля
+  const minGap  = Math.max(3, Math.round(N * 0.025)); // зазор ≥2.5%
+  // сглаживание окном 5 — сливает микро-пустоты внутри текста чека
+  const sm = new Float64Array(N);
+  for (let i = 0; i < N; i++) {
+    let s = 0, c = 0;
+    for (let k = -2; k <= 2; k++) { const j = i + k; if (j >= 0 && j < N) { s += profile[j]; c++; } }
+    sm[i] = s / c;
+  }
+  const zones = [];
+  let start = -1;
+  for (let i = 0; i < N; i++) {
+    if (sm[i] > 0.008) { if (start < 0) start = i; }
+    else if (start >= 0) { zones.push([start, i - 1]); start = -1; }
+  }
+  if (start >= 0) zones.push([start, N - 1]);
+  const big = zones.filter(z => z[1] - z[0] + 1 >= minZone);
+  for (let i = 0; i < big.length - 1; i++) {
+    const gs = big[i][1] + 1, ge = big[i + 1][0] - 1;
+    const gw = ge - gs + 1;
+    const center = (gs + ge) / 2;
+    if (gw >= minGap && center >= N * 0.15 && center <= N * 0.85) return true;
+  }
+  return false;
+}
+
+async function suspectSideBySideLayout(imageBuffer) {
   try {
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-flash',
-      generationConfig: { maxOutputTokens: 1024, temperature: 0 }
-    });
-    const prompt = `На изображении может быть ОДИН документ или НЕСКОЛЬКО отдельных чеков/фактур (например, скан, где два чека лежат рядом на одной странице).
-Определи количество ОТДЕЛЬНЫХ чеков/фактур на изображении.
-ВАЖНО: один длинный чек — это ОДИН документ (шапка, фискальный блок и футер одного чека не делить). Два разных чека (разные магазины, разные итоги) — два документа.
-Верни СТРОГО JSON без пояснений:
+    const W = 200, H = 260;
+    const { data } = await sharp(imageBuffer)
+      .resize(W, H, { fit: 'fill' })
+      .greyscale()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const col = new Float64Array(W), row = new Float64Array(H);
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        if (data[y * W + x] < 215) { col[x]++; row[y]++; }
+      }
+    }
+    for (let x = 0; x < W; x++) col[x] /= H;
+    for (let y = 0; y < H; y++) row[y] /= W;
+    return hasCentralContentGap(col) || hasCentralContentGap(row); // рядом ИЛИ друг под другом
+  } catch {
+    return false;
+  }
+}
+
+async function askGeminiForReceiptBoxes(imageBuffer, mimeType, force) {
+  const model = genAI.getGenerativeModel({
+    model: 'gemini-2.5-flash',
+    generationConfig: { maxOutputTokens: 1024, temperature: 0, responseMimeType: 'application/json' }
+  });
+  const prompt = force
+    ? `Посмотри на это изображение ЕЩЁ РАЗ, очень внимательно. Анализ структуры страницы показывает: на скане ВОЗМОЖНО лежат ДВА отдельных чека/фактуры рядом (слева и справа или один под другим), разделённые пустым полем — у каждого своя шапка магазина, свой список товаров и свой ИТОГ.
+Внимательно сравни левую и правую (верхнюю и нижнюю) части: у них разные названия магазинов и разные итоговые суммы?
+Если это действительно ДВА отдельных документа — верни рамку каждого СТРОГО в JSON:
+{"count": N, "boxes": [[ymin, xmin, ymax, xmax], ...], "labels": ["кратко: магазин 1", "магазин 2"]}
+Координаты — целые числа 0..1000 (нормализованные), по одной рамке на каждый чек, с небольшим запасом по краям.
+Но если это ОДИН документ (шапка, товары и футер одного чека, просто с полями или в несколько колонок) — честно ответь {"count": 1}. Не выдумывай разделение.`
+    : `На изображении может быть ОДИН документ или НЕСКОЛЬКО отдельных чеков/фактур.
+Типичный случай нескольких: скан страницы, на которой ДВА чека лежат рядом (один слева, другой справа, между ними белое поле) или один под другим — у них разные магазины и разные итоги.
+ВАЖНО: один длинный чек — это ОДИН документ (шапку, фискальный блок и футер одного чека не делить).
+Определи количество ОТДЕЛЬНЫХ чеков/фактур и верни СТРОГО JSON без пояснений:
 {"count": 1}
 или, если отдельных документов несколько:
 {"count": N, "boxes": [[ymin, xmin, ymax, xmax], ...], "labels": ["кратко: магазин 1", "магазин 2"]}
 Координаты — целые числа 0..1000 (нормализованные к размеру изображения), по одной рамке на каждый отдельный чек, с небольшим запасом по краям.`;
-    const result = await model.generateContent([
-      { inlineData: { data: imageBuffer.toString('base64'), mimeType } },
-      prompt
-    ]);
-    const text = result.response.text();
-    const m = text.match(/\{[\s\S]*\}/);
-    if (!m) return null;
-    const parsed = JSON.parse(m[0]);
-    const count = parseInt(parsed.count, 10) || 1;
-    if (count < 2 || !Array.isArray(parsed.boxes) || parsed.boxes.length < 2) return null;
-    return { count, boxes: parsed.boxes.slice(0, count), labels: Array.isArray(parsed.labels) ? parsed.labels : [] };
+  const result = await model.generateContent([
+    { inlineData: { data: imageBuffer.toString('base64'), mimeType } },
+    prompt
+  ]);
+  const text = result.response.text();
+  const m = text.match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  const parsed = JSON.parse(m[0]);
+  const count = parseInt(parsed.count, 10) || 1;
+  if (count < 2 || !Array.isArray(parsed.boxes) || parsed.boxes.length < 2) return null;
+  return { count, boxes: parsed.boxes.slice(0, count), labels: Array.isArray(parsed.labels) ? parsed.labels : [] };
+}
+
+async function detectMultipleReceipts(imageBuffer, mimeType = 'image/jpeg') {
+  if (!genAI) return null;
+  try {
+    const first = await askGeminiForReceiptBoxes(imageBuffer, mimeType, false);
+    if (first) return first;
+    // Gemini ответил «один документ» — но если CV-эвристика видит две зоны текста,
+    // разделённые пустым зазором (два чека рядом/друг под другом) — переспрашиваем
+    // с подсказкой (честной: Gemini всё ещё может ответить count:1)
+    if (await suspectSideBySideLayout(imageBuffer)) {
+      console.log('Мульти-чек: эвристика видит две зоны текста — повторный запрос детектора с подсказкой');
+      return await askGeminiForReceiptBoxes(imageBuffer, mimeType, true);
+    }
+    return null;
   } catch (e) {
     console.warn('detectMultipleReceipts:', e.message);
     return null; // детектор не сработал — обычный путь (один документ)
