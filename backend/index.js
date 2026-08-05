@@ -1667,6 +1667,21 @@ app.get('/api/diagnostics', async (req, res) => {
       fix_v9_if_false: 'Выполни supabase-migration-v9.sql в Supabase SQL Editor',
       v19_payment_status_column: columns.includes('payment_status'),
       fix_v19_if_false: 'alter table receipts add column if not exists payment_status text; (или выполни supabase-migration-v19.sql)',
+      v20_receipts_bank_columns: ['bank_movement_id', 'paid_date'].every(c => columns.includes(c)),
+      fix_v20_if_false: 'Выполни supabase-migration-v20.sql в Supabase SQL Editor (ПРОЕКТ householder!)',
+      supabase_service_key_configured: !!supabaseServiceKey,
+      fix_service_key_if_false: 'Railway → householder-api → Variables → SUPABASE_SERVICE_ROLE_KEY = service_role key из Supabase → Settings → API (обходит RLS полностью)',
+      // Живой тест: реально пишем и удаляем строку — сразу видно, блокирует ли RLS запись
+      bank_movements_write_test: await (async () => {
+        try {
+          const probe = await supabaseAdmin.from('bank_movements')
+            .insert({ owner_id: '__diagnostics__', amount: 0, concept: '__write_test__' })
+            .select('id').single();
+          if (probe.error) return 'ОШИБКА: ' + probe.error.message;
+          await supabaseAdmin.from('bank_movements').delete().eq('id', probe.data.id);
+          return 'ok';
+        } catch (e) { return 'ОШИБКА: ' + e.message; }
+      })(),
       pdf_lib: hasPdfLib(),
       fix_pdf_lib_if_false: 'Добавь "pdf-lib": "^1.17.1" в dependencies backend/package.json и задеплой',
       providers_configured: {
@@ -1924,6 +1939,9 @@ function withDbSchemaHint(msg) {
   if (/bank_movements/i.test(m)) {
     m += ' | РЕШЕНИЕ: выполни supabase-migration-v20.sql в Supabase SQL Editor (ПРОЕКТ householder!) — таблица bank_movements + колонки receipts.bank_movement_id/paid_date; затем: notify pgrst, \'reload schema\';';
   }
+  if (/row-level security/i.test(m)) {
+    m += ' | РЕШЕНИЕ (RLS): в таблице включена Row-Level Security. Выполни supabase-migration-v20.sql ЦЕЛИКОМ в SQL Editor проекта householder (там есть alter table bank_movements disable row level security + разрешающая policy) — проверь проект по SUPABASE_URL в Railway → householder-api → Variables. Лучшее долгосрочное решение: добавь в Railway → householder-api → Variables переменную SUPABASE_SERVICE_ROLE_KEY (Supabase → Settings → API → service_role key) — с ней бэкенд обходит RLS полностью.';
+  }
   return m;
 }
 
@@ -1990,15 +2008,23 @@ function excelDateToIso(v) {
 // дата (счёт до платежа, окно −7…+75 дн) до +15; № фактуры/договора в концепте +40.
 // Авто: strong-ID, либо ≥80 баллов с отрывом ≥10 от второго кандидата. Побочный эффект: receipt → 🟢 paid + paid_date.
 async function runBankMatching(ownerId, iban) {
-  const { data: movements, error: e1 } = await supabaseAdmin.from('bank_movements')
-    .select('*').is('matched_receipt_id', null).lt('amount', 0).eq('iban', iban);
+  let mvQuery = supabaseAdmin.from('bank_movements')
+    .select('*').is('matched_receipt_id', null).lt('amount', 0);
+  if (iban) mvQuery = mvQuery.eq('iban', iban);
+  const { data: movements, error: e1 } = await mvQuery;
   if (e1) throw e1;
   if (!movements || !movements.length) return { matched: 0, candidates: 0 };
 
-  const { data: receipts, error: e2 } = await supabaseAdmin.from('receipts')
+  const { data: receiptsRaw, error: e2 } = await supabaseAdmin.from('receipts')
     .select('id, store_name, store_name_ru, provider, receipt_date, total_amount, invoice_number, contract_number, payment_status')
     .is('bank_movement_id', null).not('total_amount', 'is', null);
   if (e2) throw e2;
+  // Исключаем фактуры, у которых уже есть ЛЮБАЯ привязка (matched_receipt_id в движениях) —
+  // важно для разбитой оплаты: там bank_movement_id = null, но привязки уже есть
+  const { data: usedLinks } = await supabaseAdmin.from('bank_movements')
+    .select('matched_receipt_id').not('matched_receipt_id', 'is', null);
+  const usedIds = new Set((usedLinks || []).map(l => l.matched_receipt_id));
+  const receipts = (receiptsRaw || []).filter(r => !usedIds.has(r.id) && r.payment_status !== 'paid');
 
   let matched = 0;
   for (const mv of movements) {
@@ -2099,28 +2125,33 @@ app.post('/api/import-bank-statement', requireAuth, upload.single('statement'), 
     }
     if (!rows.length) return res.status(400).json({ error: 'В файле не найдено ни одного движения' });
 
-    // upsert по (iban, entry_number): повторный импорт того же файла не плодит дубли;
-    // matched_receipt_id в payload отсутствует → при конфликте привязки сохраняются
+    // ДОГРУЗКА: сравниваем с уже загруженными движениями этого счёта и вставляем ТОЛЬКО новые.
+    // Ключ 1: (iban, entry_number = Nro. Apunte). Ключ 2 (если апунте нет): дата + сумма + concept.
+    // Существующие строки (и их привязки к фактурам) не трогаем вообще.
+    const { data: existingRows } = await supabaseAdmin.from('bank_movements')
+      .select('entry_number, operation_date, amount, concept')
+      .eq('iban', iban || '');
+    const existingKeys = new Set((existingRows || []).filter(e => e.entry_number != null).map(e => String(e.entry_number)));
+    const existingSigs = new Set((existingRows || []).map(e =>
+      `${e.operation_date}|${(Number(e.amount) || 0).toFixed(2)}|${String(e.concept || '').slice(0, 80)}`));
+    const newRows = rows.filter(r =>
+      r.entry_number != null
+        ? !existingKeys.has(String(r.entry_number))
+        : !existingSigs.has(`${r.operation_date}|${(Number(r.amount) || 0).toFixed(2)}|${String(r.concept || '').slice(0, 80)}`));
+    const skipped = rows.length - newRows.length;
+
     let written = 0;
-    const withKey = rows.filter(r => r.iban && r.entry_number != null);
-    const noKey = rows.filter(r => !(r.iban && r.entry_number != null));
-    for (let i = 0; i < withKey.length; i += 200) {
-      const chunk = withKey.slice(i, i + 200);
-      const { error } = await supabaseAdmin.from('bank_movements').upsert(chunk, { onConflict: 'iban,entry_number' });
+    for (let i = 0; i < newRows.length; i += 200) {
+      const chunk = newRows.slice(i, i + 200);
+      const { error } = await supabaseAdmin.from('bank_movements').insert(chunk);
       if (error) throw error;
       written += chunk.length;
     }
-    if (noKey.length) {
-      const { error } = await supabaseAdmin.from('bank_movements').insert(noKey);
-      if (error) throw error;
-      written += noKey.length;
-      console.warn(`import-bank-statement: ${noKey.length} движений без ключа (iban/entry_number) — вставлены без дедупликации`);
-    }
 
     const matchRes = await runBankMatching(req.user?.id, iban);
-    console.log(`Выписка ${accountName || iban}: ${written} движений, автопривязка ${matchRes.matched}/${matchRes.candidates}`);
+    console.log(`Выписка ${accountName || iban}: новых ${written}, пропущено дублей ${skipped}, автопривязка ${matchRes.matched}/${matchRes.candidates}`);
     res.json({
-      success: true, imported: rows.length, account: accountName, iban,
+      success: true, imported: written, skipped, totalInFile: rows.length, account: accountName, iban,
       autoMatched: matchRes.matched, unmatchedPayments: matchRes.candidates - matchRes.matched
     });
   } catch (e) {
@@ -2138,6 +2169,84 @@ app.get('/api/bank-movements', requireAuth, async (req, res) => {
       .limit(1000);
     if (error) throw error;
     res.json({ movements: data || [] });
+  } catch (e) {
+    res.status(500).json({ error: withDbSchemaHint(e.message) });
+  }
+});
+
+// Пересчёт статуса оплаты фактуры по ВСЕМ привязанным к ней движениям (авто + ручные).
+// Поддерживает разбитую оплату: одна фактура ← несколько платежей.
+// Сумма платежей < суммы фактуры → 'underpaid'; >= → 'paid'; привязок нет → статус снимается.
+async function recomputeReceiptPayment(receiptId) {
+  try {
+    const { data: r } = await supabaseAdmin.from('receipts')
+      .select('id, total_amount').eq('id', receiptId).single();
+    if (!r) return;
+    const { data: linked } = await supabaseAdmin.from('bank_movements')
+      .select('id, amount, operation_date').eq('matched_receipt_id', receiptId);
+    const list = linked || [];
+    const paidSum = list.reduce((s, m) => s + Math.abs(Number(m.amount) || 0), 0);
+    const total = Math.abs(Number(r.total_amount) || 0);
+    const lastDate = list.map(m => m.operation_date).filter(Boolean).sort().pop() || null;
+    const patch = {
+      paid_date: list.length ? lastDate : null,
+      bank_movement_id: list.length === 1 ? list[0].id : null
+    };
+    if (!list.length) patch.payment_status = null;
+    else if (total > 0 && paidSum + 0.01 < total) patch.payment_status = 'underpaid';
+    else patch.payment_status = 'paid';
+    await supabaseAdmin.from('receipts').update(patch).eq('id', receiptId);
+  } catch (e) {
+    console.error('recomputeReceiptPayment:', e.message);
+  }
+}
+
+// Ручная привязка движения к фактуре (вкладка «Анализ»). Повторная привязка других
+// движений к той же фактуре = разбитая оплата — статус пересчитается по сумме.
+app.post('/api/link-bank-movement', requireAuth, async (req, res) => {
+  try {
+    const { movement_id, receipt_id } = req.body || {};
+    if (!movement_id || !receipt_id) return res.status(400).json({ error: 'Нужны movement_id и receipt_id' });
+    const { data: mv } = await supabaseAdmin.from('bank_movements')
+      .select('id, matched_receipt_id').eq('id', movement_id).single();
+    if (!mv) return res.status(404).json({ error: 'Движение не найдено' });
+    const { error } = await supabaseAdmin.from('bank_movements')
+      .update({ matched_receipt_id: receipt_id, match_status: 'manual', match_score: 100, matched_at: new Date().toISOString() })
+      .eq('id', movement_id);
+    if (error) throw error;
+    if (mv.matched_receipt_id && mv.matched_receipt_id !== receipt_id) await recomputeReceiptPayment(mv.matched_receipt_id);
+    await recomputeReceiptPayment(receipt_id);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: withDbSchemaHint(e.message) });
+  }
+});
+
+// Отвязка движения от фактуры
+app.post('/api/unlink-bank-movement', requireAuth, async (req, res) => {
+  try {
+    const { movement_id } = req.body || {};
+    if (!movement_id) return res.status(400).json({ error: 'Нужен movement_id' });
+    const { data: mv } = await supabaseAdmin.from('bank_movements')
+      .select('id, matched_receipt_id').eq('id', movement_id).single();
+    if (!mv) return res.status(404).json({ error: 'Движение не найдено' });
+    const oldReceipt = mv.matched_receipt_id;
+    const { error } = await supabaseAdmin.from('bank_movements')
+      .update({ matched_receipt_id: null, match_status: 'unmatched', match_score: null, matched_at: null })
+      .eq('id', movement_id);
+    if (error) throw error;
+    if (oldReceipt) await recomputeReceiptPayment(oldReceipt);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: withDbSchemaHint(e.message) });
+  }
+});
+
+// Повторный запуск автопривязки (по кнопке во фронте — после загрузки новых фактур)
+app.post('/api/rematch-bank', requireAuth, async (req, res) => {
+  try {
+    const matchRes = await runBankMatching(req.user?.id, req.body?.iban || undefined);
+    res.json({ success: true, autoMatched: matchRes.matched, unmatchedPayments: matchRes.candidates - matchRes.matched });
   } catch (e) {
     res.status(500).json({ error: withDbSchemaHint(e.message) });
   }

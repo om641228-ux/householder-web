@@ -468,6 +468,11 @@ function App() {
   const [bankLoading, setBankLoading] = useState(false);
   const [bankFilter, setBankFilter] = useState('all'); // all | out | in | matched | unmatched
   const [bankSearch, setBankSearch] = useState('');
+  const [bankDateFrom, setBankDateFrom] = useState(''); // фильтр по дате операции: с
+  const [bankDateTo, setBankDateTo] = useState('');     // фильтр по дате операции: по
+  const [linkPicker, setLinkPicker] = useState(null);   // движение, для которого открыт выбор фактуры
+  const [linkSearch, setLinkSearch] = useState('');
+  const [linkSaving, setLinkSaving] = useState(false);
   const [filterDiffs, setFilterDiffs] = useState([]); // фильтр по разнице Δ (итог чека vs сумма товаров)
   const [searchQuery, setSearchQuery] = useState('');
   const [itemsPerPage, setItemsPerPage] = useState(20);
@@ -1394,8 +1399,10 @@ function App() {
       const res = await fetch(`${API_URL}/api/import-bank-statement?token=${token}`, { method: 'POST', body: formData });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      alert(`🏦 Выписка импортирована: ${data.imported} движений (${data.account || data.iban || 'счёт'})\n\n✅ Привязано автоматически: ${data.autoMatched}\n⚪ Платежей без пары: ${data.unmatchedPayments}\n\nОткройте вкладку «📊 Анализ» — там все движения и привязки.`);
+      const skipLine = data.skipped ? `\n⏭ Пропущено уже загруженных: ${data.skipped}` : '';
+      alert(`🏦 Выписка обработана (${data.account || data.iban || 'счёт'})\n\n📥 Новых движений: ${data.imported}${skipLine}\n✅ Привязано автоматически: ${data.autoMatched}\n⚪ Платежей без пары: ${data.unmatchedPayments}\n\nОткройте вкладку «📊 Анализ» — там все движения и привязки.`);
       loadReceipts(); // статусы оплаты привязанных фактур изменились на «Оплачено»
+      loadBankMovements();
     } catch (err) {
       alert('Ошибка импорта выписки: ' + err.message);
     } finally { setLoading(false); }
@@ -1406,6 +1413,53 @@ function App() {
     const r = receipts.find(x => String(x.id) === String(id));
     if (r) setViewModal(r);
     else alert('Документ не найден в загруженном списке — обновите «Чеки/фактуры» и попробуйте снова');
+  };
+
+  // Ручная привязка платежа к фактуре (можно несколько платежей к одной фактуре — разбитая оплата)
+  const linkMovement = async (movementId, receiptId) => {
+    setLinkSaving(true);
+    try {
+      const res = await fetch(`${API_URL}/api/link-bank-movement?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ movement_id: movementId, receipt_id: receiptId })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setLinkPicker(null);
+      await loadBankMovements();
+      await loadReceipts();
+    } catch (err) { alert('Ошибка привязки: ' + err.message); }
+    finally { setLinkSaving(false); }
+  };
+
+  // Отвязка платежа от фактуры
+  const unlinkMovement = async (movementId) => {
+    try {
+      const res = await fetch(`${API_URL}/api/unlink-bank-movement?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ movement_id: movementId })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      await loadBankMovements();
+      await loadReceipts();
+    } catch (err) { alert('Ошибка отвязки: ' + err.message); }
+  };
+
+  // Повторный запуск автопривязки (после загрузки новых фактур)
+  const rematchBank = async () => {
+    setBankLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/rematch-bank?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      alert(`🔁 Автопривязка выполнена\n\n✅ Новых совпадений: ${data.autoMatched}\n⚪ Осталось без пары: ${data.unmatchedPayments}`);
+      await loadBankMovements();
+      await loadReceipts();
+    } catch (err) { alert('Ошибка автопривязки: ' + err.message); }
+    finally { setBankLoading(false); }
   };
 
   const bulkChangeSubtype = async (newSubtype) => {
@@ -2841,14 +2895,29 @@ function App() {
               </div>
             );
             const q = bankSearch.trim().toLowerCase();
+            const linkedReceiptOf = m => m.matched_receipt_id ? receipts.find(r => String(r.id) === String(m.matched_receipt_id)) : null;
             const visible = bankMovements.filter(m => {
               if (bankFilter === 'out' && !isOut(m)) return false;
               if (bankFilter === 'in' && isOut(m)) return false;
               if (bankFilter === 'matched' && !m.matched_receipt_id) return false;
               if (bankFilter === 'unmatched' && (!isOut(m) || m.matched_receipt_id)) return false;
-              if (q && !String(m.concept || '').toLowerCase().includes(q) && !String(m.counterparty || '').toLowerCase().includes(q)) return false;
+              if (bankDateFrom && (!m.operation_date || m.operation_date < bankDateFrom)) return false;
+              if (bankDateTo && (!m.operation_date || m.operation_date > bankDateTo)) return false;
+              if (q) {
+                const linked = linkedReceiptOf(m);
+                const hay = [m.concept, m.counterparty, m.prefix, m.account_name, m.iban, m.amount, m.balance,
+                  linked && linked.store_name, linked && linked.store_name_ru, linked && linked.provider, linked && linked.invoice_number]
+                  .map(v => String(v == null ? '' : v).toLowerCase()).join(' ');
+                if (!hay.includes(q)) return false;
+              }
               return true;
             });
+            const sumOf = list => ({
+              out: list.filter(isOut).reduce((s, m) => s + Math.abs(Number(m.amount) || 0), 0),
+              inc: list.filter(m => !isOut(m)).reduce((s, m) => s + Math.abs(Number(m.amount) || 0), 0)
+            });
+            const sumAll = sumOf(bankMovements);
+            const sumVis = sumOf(visible);
             return (
               <>
                 <h3 style={{ margin: '4px 0 10px' }}>🏦 Банковская выписка — привязка платежей к фактурам</h3>
@@ -2863,7 +2932,7 @@ function App() {
                   {stat('Платежи без фактуры', unmatchedOut.length, '#e67e22', '#fdf2e3')}
                   {stat('Счета без платежа в банке', unpaidBills.length, '#e74c3c', '#fdecea')}
                 </div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 6 }}>
                   <select value={bankFilter} onChange={e => setBankFilter(e.target.value)} style={{ padding: '6px 10px', borderRadius: 6 }}>
                     <option value="all">Все движения</option>
                     <option value="out">Только платежи</option>
@@ -2871,12 +2940,21 @@ function App() {
                     <option value="matched">Привязанные</option>
                     <option value="unmatched">Платежи без пары</option>
                   </select>
-                  <input value={bankSearch} onChange={e => setBankSearch(e.target.value)} placeholder="Поиск по концепту…" style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ddd', flex: '1 1 200px' }} />
+                  <input type="date" value={bankDateFrom} onChange={e => setBankDateFrom(e.target.value)} title="С даты" style={{ padding: '5px 8px', borderRadius: 6, border: '1px solid #ddd' }} />
+                  <span style={{ color: '#95a5a6' }}>—</span>
+                  <input type="date" value={bankDateTo} onChange={e => setBankDateTo(e.target.value)} title="По дату" style={{ padding: '5px 8px', borderRadius: 6, border: '1px solid #ddd' }} />
+                  <input value={bankSearch} onChange={e => setBankSearch(e.target.value)} placeholder="Поиск по всем полям…" style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ddd', flex: '1 1 200px' }} />
+                  <button onClick={rematchBank} title="Повторно запустить автопривязку (после загрузки новых фактур)" style={{ padding: '6px 12px', borderRadius: 6, border: 'none', background: '#8e44ad', color: '#fff', cursor: 'pointer' }}>🔁 Автопривязка</button>
                   <button onClick={loadBankMovements} style={{ padding: '6px 12px', borderRadius: 6, border: 'none', background: '#3498db', color: '#fff', cursor: 'pointer' }}>🔄 Обновить</button>
+                </div>
+                <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12, color: '#555', marginBottom: 10, background: '#f4f6f7', borderRadius: 8, padding: '6px 10px' }}>
+                  <span>Показано строк: <b>{visible.length}</b> из {bankMovements.length}</span>
+                  <span>Σ по фильтру: <b style={{ color: '#e74c3c' }}>−{formatAmount(sumVis.out, 'EUR')}</b> / <b style={{ color: '#27ae60' }}>+{formatAmount(sumVis.inc, 'EUR')}</b></span>
+                  <span>Σ всей выписки: <b style={{ color: '#e74c3c' }}>−{formatAmount(sumAll.out, 'EUR')}</b> / <b style={{ color: '#27ae60' }}>+{formatAmount(sumAll.inc, 'EUR')}</b></span>
                 </div>
                 {bankLoading && <div className="loading-center"><div className="spinner"></div><p>Загрузка движений...</p></div>}
                 {!bankLoading && visible.map(m => {
-                  const linked = m.matched_receipt_id ? receipts.find(r => String(r.id) === String(m.matched_receipt_id)) : null;
+                  const linked = linkedReceiptOf(m);
                   return (
                     <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 6, boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
                       <span style={{ flex: '0 0 86px', color: '#7f8c8d', fontSize: 13 }}>{formatDate(m.operation_date)}</span>
@@ -2884,15 +2962,28 @@ function App() {
                         <b>{m.concept || '—'}</b>
                         {m.prefix && <span style={{ marginLeft: 6, fontSize: 11, color: '#95a5a6' }}>{m.prefix}</span>}
                       </span>
-                      <span style={{ flex: '0 0 110px', textAlign: 'right', fontWeight: 700, color: isOut(m) ? '#e74c3c' : '#27ae60' }}>
-                        {isOut(m) ? '−' : '+'}{formatAmount(Math.abs(Number(m.amount)), 'EUR')}
+                      <span style={{ flex: '0 0 130px', textAlign: 'right' }}>
+                        <span style={{ fontWeight: 700, color: isOut(m) ? '#e74c3c' : '#27ae60' }}>
+                          {isOut(m) ? '−' : '+'}{formatAmount(Math.abs(Number(m.amount)), 'EUR')}
+                        </span>
+                        {m.balance != null && (
+                          <div style={{ fontSize: 10, color: '#95a5a6', fontWeight: 400 }}>остаток {formatAmount(Number(m.balance), 'EUR')}</div>
+                        )}
                       </span>
                       {m.matched_receipt_id ? (
-                        <button onClick={() => openReceiptById(m.matched_receipt_id)} title={linked ? `Открыть: ${linked.store_name || linked.store_name_ru || 'документ'}` : 'Открыть документ'} style={{ flex: '0 0 auto', border: '1px solid #27ae60', background: '#e8f8ef', color: '#27ae60', borderRadius: 10, padding: '3px 10px', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
-                          🟢 {linked ? (linked.store_name || linked.store_name_ru || 'Документ') : `Чек #${m.matched_receipt_id}`}{m.match_score ? ` · ${m.match_score}б` : ''}
-                        </button>
+                        <>
+                          <button onClick={() => openReceiptById(m.matched_receipt_id)} title={linked ? `Открыть: ${linked.store_name || linked.store_name_ru || 'документ'}` : 'Открыть документ'} style={{ flex: '0 0 auto', border: '1px solid #27ae60', background: '#e8f8ef', color: '#27ae60', borderRadius: 10, padding: '3px 10px', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
+                            🟢 {linked ? (linked.store_name || linked.store_name_ru || 'Документ') : `Чек #${m.matched_receipt_id}`}{m.match_status === 'manual' ? ' · ✋' : (m.match_score ? ` · ${m.match_score}б` : '')}
+                          </button>
+                          <button onClick={() => unlinkMovement(m.id)} title="Отвязать платёж от фактуры" style={{ flex: '0 0 auto', border: '1px solid #e74c3c', background: '#fff', color: '#e74c3c', borderRadius: 10, padding: '3px 8px', fontSize: 12, cursor: 'pointer' }}>✖</button>
+                        </>
                       ) : (
-                        isOut(m) && <span style={{ flex: '0 0 auto', fontSize: 12, color: '#e67e22', background: '#fdf2e3', borderRadius: 10, padding: '3px 10px', fontWeight: 700 }}>⚪ Без фактуры</span>
+                        isOut(m) && (
+                          <>
+                            <span style={{ flex: '0 0 auto', fontSize: 12, color: '#e67e22', background: '#fdf2e3', borderRadius: 10, padding: '3px 10px', fontWeight: 700 }}>⚪ Без фактуры</span>
+                            <button onClick={() => { setLinkPicker(m); setLinkSearch(''); }} title="Привязать платёж к фактуре вручную" style={{ flex: '0 0 auto', border: 'none', background: '#8e44ad', color: '#fff', borderRadius: 10, padding: '3px 10px', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>🔗 Привязать</button>
+                          </>
+                        )
                       )}
                     </div>
                   );
@@ -2900,6 +2991,51 @@ function App() {
                 {!bankLoading && bankMovements.length > 0 && visible.length === 0 && (
                   <p style={{ color: '#95a5a6' }}>Ничего не найдено по текущему фильтру.</p>
                 )}
+                {linkPicker && (() => {
+                  const mvAmt = Math.abs(Number(linkPicker.amount) || 0);
+                  const lq = linkSearch.trim().toLowerCase();
+                  const candidates = receipts
+                    .filter(r => !lq || [r.store_name, r.store_name_ru, r.provider, r.invoice_number, r.contract_number, r.total_amount]
+                      .some(v => String(v == null ? '' : v).toLowerCase().includes(lq)))
+                    .map(r => ({ r, exact: Math.abs(Math.abs(Number(r.total_amount) || 0) - mvAmt) < 0.01 }))
+                    .sort((a, b) =>
+                      (b.exact - a.exact) ||
+                      ((a.r.payment_status === 'paid' ? 1 : 0) - (b.r.payment_status === 'paid' ? 1 : 0)) ||
+                      (Math.abs(Math.abs(Number(a.r.total_amount) || 0) - mvAmt) - Math.abs(Math.abs(Number(b.r.total_amount) || 0) - mvAmt)))
+                    .slice(0, 50);
+                  return (
+                    <div className="modal-overlay" onClick={() => !linkSaving && setLinkPicker(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+                      <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 12, padding: 18, width: '100%', maxWidth: 560, maxHeight: '80vh', overflowY: 'auto' }}>
+                        <h3 style={{ marginTop: 0 }}>🔗 Привязать платёж к фактуре</h3>
+                        <div style={{ background: '#f4f6f7', borderRadius: 8, padding: '8px 12px', marginBottom: 10, fontSize: 13 }}>
+                          <b>{linkPicker.concept || '—'}</b><br />
+                          {formatDate(linkPicker.operation_date)} · <b style={{ color: '#e74c3c' }}>−{formatAmount(mvAmt, 'EUR')}</b>
+                          <div style={{ fontSize: 12, color: '#7f8c8d', marginTop: 4 }}>
+                            Если оплата разбита на части — привяжите каждый платёж к одной и той же фактуре: статус станет «Недоплачено», а когда сумма платежей покроет фактуру — «Оплачено».
+                          </div>
+                        </div>
+                        <input autoFocus value={linkSearch} onChange={e => setLinkSearch(e.target.value)} placeholder="Поиск фактуры: название, поставщик, № фактуры, сумма…" style={{ width: '100%', boxSizing: 'border-box', padding: '7px 10px', borderRadius: 6, border: '1px solid #ddd', marginBottom: 10 }} />
+                        {candidates.length === 0 && <p style={{ color: '#95a5a6' }}>Фактуры не найдены.</p>}
+                        {candidates.map(({ r, exact }) => (
+                          <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 8px', borderRadius: 8, marginBottom: 4, background: exact ? '#e8f8ef' : '#fafafa', border: exact ? '1px solid #27ae60' : '1px solid #eee' }}>
+                            <span style={{ flex: '1 1 auto', minWidth: 0, overflowWrap: 'break-word', fontSize: 14 }}>
+                              <b>{r.store_name || r.store_name_ru || 'Без названия'}</b>{exact && <span style={{ marginLeft: 6, fontSize: 11, color: '#27ae60', fontWeight: 700 }}>сумма совпадает</span>}
+                              <span style={{ marginLeft: 8, fontSize: 12, color: '#7f8c8d' }}>{formatDate(r.receipt_date)}</span>
+                              {r.payment_status && PAYMENT_STATUS_META[r.payment_status] && (
+                                <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: PAYMENT_STATUS_META[r.payment_status].color }}>{PAYMENT_STATUS_META[r.payment_status].short} {PAYMENT_STATUS_META[r.payment_status].label}</span>
+                              )}
+                            </span>
+                            <span style={{ flex: '0 0 auto', fontWeight: 700, fontSize: 13 }}>{formatAmount(r.total_amount, r.currency || 'EUR')}</span>
+                            <button disabled={linkSaving} onClick={() => linkMovement(linkPicker.id, r.id)} style={{ flex: '0 0 auto', border: 'none', background: '#27ae60', color: '#fff', borderRadius: 8, padding: '5px 12px', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
+                              {linkSaving ? '…' : 'Привязать'}
+                            </button>
+                          </div>
+                        ))}
+                        <button onClick={() => setLinkPicker(null)} disabled={linkSaving} style={{ marginTop: 10, width: '100%', padding: '8px', borderRadius: 8, border: '1px solid #ddd', background: '#fff', cursor: 'pointer' }}>Отмена</button>
+                      </div>
+                    </div>
+                  );
+                })()}
               </>
             );
           })()}

@@ -301,8 +301,19 @@ Bucket: `receipt-images` (public, policies SELECT/INSERT/DELETE).
 
 ## 14. Changelog
 
-**2026-08-04 (текущая финальная версия, v24 — банковские выписки: импорт Excel + автопривязка фактур к платежам во вкладке «Анализ»)**
+**2026-08-05 (текущая финальная версия, v25 — догрузка выписки, фильтры/суммы в «Анализе», ручная привязка и разбитая оплата)**
+- Импорт = ДОГРУЗКА: перед вставкой движения сравниваются с уже загруженными по счёту (ключ 1: entry_number; ключ 2: дата+сумма+concept) — вставляются ТОЛЬКО новые строки, существующие и их привязки не трогаются; ответ +{skipped, totalInFile}; алерт показывает «Новых/Пропущено дублей». upsert заменён на insert новых (дедуп на нашей стороне)
+- Ручная привязка: POST /api/link-bank-movement {movement_id, receipt_id} (match_status 'manual', score 100) + POST /api/unlink-bank-movement {movement_id}. Разбитая оплата: несколько платежей к одной фактуре — recomputeReceiptPayment(receiptId) пересчитывает по ВСЕМ движениям с matched_receipt_id=receipt: сумма<фактуры → 'underpaid', >= → 'paid', нет привязок → null; paid_date = дата последнего платежа; bank_movement_id заполняется только при единственной привязке
+- POST /api/rematch-bank — повторный прогон автопривязки (кнопка «🔁 Автопривязка»); runBankMatching: iban опционален; исключает фактуры с ЛЮБОЙ привязкой (usedIds из bank_movements) и payment_status 'paid' — иначе разбитые оплаты (bank_movement_id=null) матчились бы повторно
+- «Анализ»: фильтр по дате (с/по, date inputs); поиск по ВСЕМ полям (concept, counterparty, prefix, iban, account, сумма, остаток + имя/поставщик/№ привязанной фактуры); остаток на счёте мелким шрифтом под суммой (balance); строка сумм: «Показано N из M · Σ по фильтру −out/+inc · Σ всей выписки −out/+inc»; у привязанных — ✖ отвязка и метка ✋ (manual) вместо баллов; у непривязанных платежей — кнопка «🔗 Привязать»
+- Модалка выбора фактуры (linkPicker): поиск по названию/поставщику/№/сумме, сортировка — точное совпадение суммы (подсвечено зелёным) → неоплаченные → ближайшая сумма, до 50 шт; привязка одним кликом, потом loadBankMovements+loadReceipts
+- Бэкенд без смены версии (остаётся 2026-08-04.22 — watchdog не трогаем); SQL-миграций не требуется
+
+**2026-08-04 (v24 — банковские выписки: импорт Excel + автопривязка фактур к платежам во вкладке «Анализ»)**
 - ТРЕБУЕТ миграцию supabase-migration-v20.sql (таблица bank_movements + receipts.bank_movement_id/paid_date; notify pgrst)
+- RLS-ПРОБЛЕМА (скриншоты 2026-08-05): импорт падает с «new row violates row-level security policy for table bank_movements». Причина: банковские эндпоинты ходят через supabaseAdmin, но SUPABASE_SERVICE_ROLE_KEY в Railway НЕ задан → фактически анонимный ключ → RLS блокирует запись. РЕШЕНИЕ (двойное): 1) миграция v20 теперь содержит `alter table bank_movements disable row level security;` + grant'ы + разрешающую policy bank_movements_all (страховка, если RLS включится снова); 2) РЕКОМЕНДУЕТСЯ задать SUPABASE_SERVICE_ROLE_KEY в Railway → householder-api → Variables (Supabase → Settings → API → service_role) — service-ключ обходит RLS полностью
+- Diagnostics: + v20_receipts_bank_columns, supabase_service_key_configured, bank_movements_write_test (живой insert+delete — сразу видно, блокирует ли RLS запись); withDbSchemaHint дополнен RLS-подсказкой (срабатывает по /row-level security/i)
+- Миграция v20: проверочный select начинается с receipts_count (~42 у householder) — однозначно показывает, в ТОМ ли проекте выполнен SQL (у пользователя два проекта: householder и recept!)
 - Бэкенд (версия 2026-08-04.22):
   - POST /api/import-bank-statement (requireAuth, upload.single('statement')): парсит выписку Ruralvía .xlsx (Nombre/IBAN в первых 8 строках; строка заголовка «Fecha de la operación/Importe»; excelDateToIso для дат; prefix/concept из «rcbo: CONTRATO…»); дедуп upsert onConflict 'iban,entry_number' (повторный импорт не затирает совпадения); после вставки — runBankMatching; ответ {imported, account, iban, autoMatched, unmatchedPayments}
   - GET /api/bank-movements — до 1000 движений, order operation_date desc
