@@ -5,7 +5,7 @@ import { Capacitor, registerPlugin } from '@capacitor/core';
 const API_URL = 'https://householder-api-production.up.railway.app';
 
 // Запасной список объектов на случай недоступности API (основной источник — GET /api/objects)
-const DEFAULT_OBJECTS = ['other', 'Duqe', 'Maria', 'Kit', 'Dubai', 'Tich'];
+const DEFAULT_OBJECTS = ['other', 'Duqe', 'Maria', 'Kit', 'Dubai', 'Tich', 'Иссера', 'Игорь', 'Лиза', 'Алехандро'];
 // Подтипы услуг/документов (счета, страховки, договоры)
 const SUBTYPE_LABELS = {
   electricity: '⚡ Электричество',
@@ -470,7 +470,7 @@ function App() {
   const [bankSearch, setBankSearch] = useState('');
   const [bankDateFrom, setBankDateFrom] = useState(''); // фильтр по дате операции: с
   const [bankDateTo, setBankDateTo] = useState('');     // фильтр по дате операции: по
-  const [bankCounterparty, setBankCounterparty] = useState(''); // фильтр по контрагенту
+  const [bankCpFilter, setBankCpFilter] = useState([]); // фильтр по контрагентам (множественный выбор, Excel-стиль)
   const [linkPicker, setLinkPicker] = useState(null);   // движение, для которого открыт выбор фактуры
   const [linkSearch, setLinkSearch] = useState('');
   const [linkSaving, setLinkSaving] = useState(false);
@@ -951,7 +951,9 @@ function App() {
       .then(r => (r.ok ? r.json() : null))
       .then(data => {
         const names = (data?.objects || []).map(o => o.name).filter(Boolean);
-        if (names.length) setObjectsList(names);
+        // объединяем с запасным списком — объекты из DEFAULT_OBJECTS видны всегда, даже если их нет в таблице objects
+        const merged = [...new Set([...names, ...DEFAULT_OBJECTS])];
+        if (merged.length) setObjectsList(merged);
       })
       .catch(() => {});
   }, [token]);
@@ -2904,10 +2906,10 @@ function App() {
               if (cp) counterpartyCounts[cp] = (counterpartyCounts[cp] || 0) + 1;
             });
             const counterparties = Object.entries(counterpartyCounts).sort((a, b) => b[1] - a[1]);
-            const resetBankFilters = () => { setBankFilter('all'); setBankSearch(''); setBankDateFrom(''); setBankDateTo(''); setBankCounterparty(''); };
-            const hasActiveFilters = bankFilter !== 'all' || bankSearch || bankDateFrom || bankDateTo || bankCounterparty;
+            const resetBankFilters = () => { setBankFilter('all'); setBankSearch(''); setBankDateFrom(''); setBankDateTo(''); setBankCpFilter([]); };
+            const hasActiveFilters = bankFilter !== 'all' || bankSearch || bankDateFrom || bankDateTo || bankCpFilter.length > 0;
             const visible = bankMovements.filter(m => {
-              if (bankCounterparty && String(m.counterparty || '').trim() !== bankCounterparty) return false;
+              if (bankCpFilter.length && !bankCpFilter.includes(String(m.counterparty || '').trim())) return false;
               if (bankFilter === 'out' && !isOut(m)) return false;
               if (bankFilter === 'in' && isOut(m)) return false;
               if (bankFilter === 'matched' && !m.matched_receipt_id) return false;
@@ -2954,10 +2956,7 @@ function App() {
                   <input type="date" value={bankDateFrom} onChange={e => setBankDateFrom(e.target.value)} title="С даты" style={{ padding: '5px 8px', borderRadius: 6, border: '1px solid #ddd' }} />
                   <span style={{ color: '#95a5a6' }}>—</span>
                   <input type="date" value={bankDateTo} onChange={e => setBankDateTo(e.target.value)} title="По дату" style={{ padding: '5px 8px', borderRadius: 6, border: '1px solid #ddd' }} />
-                  <select value={bankCounterparty} onChange={e => setBankCounterparty(e.target.value)} title="Фильтр по контрагенту" style={{ padding: '6px 10px', borderRadius: 6, maxWidth: 220 }}>
-                    <option value="">Все контрагенты</option>
-                    {counterparties.map(([cp, cnt]) => <option key={cp} value={cp}>{cp} ({cnt})</option>)}
-                  </select>
+                  <ExcelFilter label="Контрагент" options={counterparties.map(([cp, cnt]) => ({ value: cp, label: `${cp} (${cnt})` }))} selected={bankCpFilter} onChange={setBankCpFilter} />
                   <input value={bankSearch} onChange={e => setBankSearch(e.target.value)} placeholder="Поиск по всем полям…" style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ddd', flex: '1 1 200px' }} />
                   {hasActiveFilters && (
                     <button onClick={resetBankFilters} title="Сбросить все фильтры" style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid #e74c3c', background: '#fff', color: '#e74c3c', cursor: 'pointer', fontWeight: 700 }}>✖ Сброс</button>
