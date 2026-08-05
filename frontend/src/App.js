@@ -270,7 +270,7 @@ function extractRawPage(rawText, pageNum) {
   return '';
 }
 
-async function convertPdfToImages(pdfFile) {
+async function convertPdfToImages(pdfFile, onProgress) {
   const pdfjsLib = await loadPdfJs();
   const data = await pdfFile.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data }).promise;
@@ -279,6 +279,7 @@ async function convertPdfToImages(pdfFile) {
   // До 60 страниц = лимит бэкенда upload.array('pages', 60); раньше было 10 — длинные договоры обрезались
   const maxPages = Math.min(pdf.numPages, 60);
   for (let p = 1; p <= maxPages; p++) {
+    if (onProgress) onProgress(pdfFile.name || 'document.pdf', p, maxPages);
     const page = await pdf.getPage(p);
     // scale 2.5: плотные таблицы (коммерческие предложения, сметы) с мелким текстом —
     // при 2.0 модель теряла содержимое ячеек и возвращала пустую сетку таблицы
@@ -295,12 +296,12 @@ async function convertPdfToImages(pdfFile) {
 }
 
 // PDF превращаем в изображения страниц — дальше работают ВСЕ модели распознавания
-async function expandFilesWithPdf(files) {
+async function expandFilesWithPdf(files, onPdfProgress) {
   const result = [];
   for (const f of files) {
     if (isPdfFile(f)) {
       try {
-        result.push(...await convertPdfToImages(f));
+        result.push(...await convertPdfToImages(f, onPdfProgress));
       } catch (e) {
         console.error('PDF convert error:', e);
         alert(`Не удалось прочитать PDF «${f.name}»: ${e.message}`);
@@ -1007,63 +1008,79 @@ function App() {
     handleCameraClick();
   };
 
-  const handleFolderSelect = async (e) => {
-    const picked = Array.from(e.target.files).filter(f => f.type.startsWith('image/') || isPdfFile(f));
-    e.target.value = ''; // иначе повторный выбор той же папки не сработает (onChange не сработает)
-    if (picked.length === 0) {
-      alert('В папке не найдено изображений или PDF');
+  // Общая обработка набора файлов папки (используется обоими путями выбора папки)
+  const processFolderFiles = async (picked) => {
+    // Фаза 1 — конвертация PDF в изображения страниц: показываем в UI (раньше шла «вслепую», только console.log)
+    setFolderProgress({ active: true, phase: 'converting', convertFile: '', convertPage: 0, convertTotal: 0, current: 0, total: 0, success: 0, errors: 0, retries: 0, currentFile: '', fileRatio: 0 });
+    setFolderResults([]);
+    const allFiles = await expandFilesWithPdf(picked, (name, page, total) => {
+      setFolderProgress(prev => ({ ...prev, phase: 'converting', convertFile: name, convertPage: page, convertTotal: total }));
+    });
+    if (allFiles.length === 0) {
+      setFolderProgress(prev => ({ ...prev, active: false }));
       return;
     }
-    const allFiles = await expandFilesWithPdf(picked);
-    if (allFiles.length === 0) return;
-    setFolderProgress({ active: true, current: 0, total: allFiles.length, success: 0, errors: 0, currentFile: '', fileRatio: 0 });
-    setFolderResults([]);
+    // Фаза 2 — распознавание
+    setFolderProgress(prev => ({ ...prev, phase: 'recognizing', current: 0, total: allFiles.length, fileRatio: 0 }));
     setRecognizing(true);
     const results = [];
     for (let i = 0; i < allFiles.length; i++) {
       const file = allFiles[i];
-      setFolderProgress(prev => ({ ...prev, current: i + 1, currentFile: file.name, fileRatio: 0 }));
-      try {
-        let fileToUpload = file;
-        if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-          fileToUpload = await compressImageFile(file);
-        }
-        const formData = new FormData();
-        formData.append('image', fileToUpload);
-        formData.append('model', selectedModel);
-        formData.append('currency', currency);
-        formData.append('docType', docType);
-        formData.append('subtype', subtype);
-        formData.append('payment_status', paymentStatus);
-        formData.append('object', object);
-        formData.append('token', token);
-        let creepTimer = null;
-        const res = await uploadWithProgress(`${API_URL}/api/upload-receipt?token=${token}`, formData, (ratio) => {
-          setFolderProgress(prev => ({ ...prev, fileRatio: ratio * 0.5 }));
-          if (ratio >= 1 && !creepTimer) {
-            // Файл ушёл, сервер распознаёт — ползём 50→95% текущего файла
-            let p = 0.5;
-            creepTimer = setInterval(() => {
-              p = Math.min(0.95, p + (0.95 - p) * 0.05);
-              setFolderProgress(prev => ({ ...prev, fileRatio: p }));
-            }, 600);
+      setFolderProgress(prev => ({ ...prev, current: i + 1, currentFile: file.name, fileRatio: 0, retryNote: '' }));
+      let lastErr = null;
+      let done = false;
+      // До 2 попыток на файл: разовые 502 Bad Gateway (прокси Railway) / обрывы сети самозалечиваются повтором
+      for (let attempt = 1; attempt <= 2 && !done; attempt++) {
+        try {
+          let fileToUpload = file;
+          if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+            fileToUpload = await compressImageFile(file);
           }
-        });
-        if (creepTimer) clearInterval(creepTimer);
-        setFolderProgress(prev => ({ ...prev, fileRatio: 1 }));
-        const text = res.text;
-        let data;
-        try { data = JSON.parse(text); } catch { throw new Error(`Сервер вернул ${res.status}`); }
-        if (!res.ok || (!data.success && !data.id)) {
-          throw new Error(data.error || `Ошибка сервера: ${res.status}`);
+          const formData = new FormData();
+          formData.append('image', fileToUpload);
+          formData.append('model', selectedModel);
+          formData.append('currency', currency);
+          formData.append('docType', docType);
+          formData.append('subtype', subtype);
+          formData.append('payment_status', paymentStatus);
+          formData.append('object', object);
+          formData.append('token', token);
+          let creepTimer = null;
+          const res = await uploadWithProgress(`${API_URL}/api/upload-receipt?token=${token}`, formData, (ratio) => {
+            setFolderProgress(prev => ({ ...prev, fileRatio: ratio * 0.5 }));
+            if (ratio >= 1 && !creepTimer) {
+              // Файл ушёл, сервер распознаёт — ползём 50→95% текущего файла
+              let p = 0.5;
+              creepTimer = setInterval(() => {
+                p = Math.min(0.95, p + (0.95 - p) * 0.05);
+                setFolderProgress(prev => ({ ...prev, fileRatio: p }));
+              }, 600);
+            }
+          });
+          if (creepTimer) clearInterval(creepTimer);
+          setFolderProgress(prev => ({ ...prev, fileRatio: 1 }));
+          const text = res.text;
+          let data;
+          try { data = JSON.parse(text); } catch { throw new Error(`Сервер вернул ${res.status}`); }
+          if (!res.ok || (!data.success && !data.id)) {
+            throw new Error(data.error || `Ошибка сервера: ${res.status}`);
+          }
+          const receiptData = data.data || data;
+          if (receiptData.image_url) receiptData.image_url = fixImageUrl(receiptData.image_url);
+          results.push({ file: file.name, status: 'success', receipt: receiptData });
+          setFolderProgress(prev => ({ ...prev, success: prev.success + 1 }));
+          done = true;
+        } catch (err) {
+          lastErr = err;
+          if (attempt < 2) {
+            setFolderProgress(prev => ({ ...prev, retries: (prev.retries || 0) + 1, retryNote: ' — сбой сети, повтор…', fileRatio: 0 }));
+            await new Promise(r => setTimeout(r, 3000)); // пауза перед повтором — прокси успевает «отойти»
+          }
         }
-        const receiptData = data.data || data;
-        if (receiptData.image_url) receiptData.image_url = fixImageUrl(receiptData.image_url);
-        results.push({ file: file.name, status: 'success', receipt: receiptData });
-        setFolderProgress(prev => ({ ...prev, success: prev.success + 1 }));
-      } catch (err) {
-        console.error(`Folder upload error for ${file.name}:`, err);
-        results.push({ file: file.name, status: 'error', error: err.message });
+      }
+      if (!done) {
+        console.error(`Folder upload error for ${file.name}:`, lastErr);
+        results.push({ file: file.name, status: 'error', error: lastErr ? lastErr.message : 'неизвестная ошибка' });
         setFolderProgress(prev => ({ ...prev, errors: prev.errors + 1 }));
       }
     }
@@ -1078,6 +1095,48 @@ function App() {
     } else {
       alert(`✅ Успешно: ${successCount}\n❌ Ошибок: ${errorCount}\n\nСмотрите детали ниже.`);
     }
+  };
+
+  // ПУТЬ 1 (Chrome/Edge): системный диалог ВЫБОРА ПАПКИ через File System Access API —
+  // файлы внутри физически невозможно выбрать, только папка целиком (как раньше)
+  const pickFolderNative = async (e) => {
+    if (!window.showDirectoryPicker) return; // Safari — fallback на скрытый input ниже
+    e.preventDefault();
+    try {
+      const dir = await window.showDirectoryPicker();
+      const files = [];
+      const walk = async (h) => {
+        for await (const entry of h.values()) {
+          if (entry.kind === 'file') {
+            const f = await entry.getFile();
+            if (f.type.startsWith('image/') || isPdfFile(f)) files.push(f);
+          } else if (entry.kind === 'directory') {
+            await walk(entry); // вложенные папки тоже собираем
+          }
+        }
+      };
+      await walk(dir);
+      if (!files.length) { alert('В папке не найдено изображений или PDF'); return; }
+      await processFolderFiles(files);
+    } catch (err) {
+      if (err.name !== 'AbortError') alert('Не удалось открыть папку: ' + err.message);
+    }
+  };
+
+  // ПУТЬ 2 (Safari и др.): скрытый input с webkitdirectory
+  const handleFolderSelect = async (e) => {
+    const files = Array.from(e.target.files);
+    e.target.value = ''; // иначе повторный выбор той же папки не сработает (onChange не сработает)
+    const picked = files.filter(f => f.type.startsWith('image/') || isPdfFile(f));
+    if (picked.length === 0) {
+      alert('В папке не найдено изображений или PDF');
+      return;
+    }
+    // Пользователь выбрал отдельные файлы, а не папку (нет относительных путей) — подсказываем
+    if (files.length && files.every(f => !f.webkitRelativePath)) {
+      alert('Вы выбрали отдельные файлы. Чтобы распознать папку — в диалоге нажмите на ПАПКУ целиком и кнопку «Выбрать», файлы внутри открывать не нужно.\n\nВыбранные файлы всё равно будут обработаны.');
+    }
+    await processFolderFiles(picked);
   };
 
   const deleteReceipt = async (id) => {
@@ -2341,7 +2400,7 @@ function App() {
             <label htmlFor="file-input" className="btn-file">
               📁 Выбрать файл
             </label>
-            <label htmlFor="folder-input" className="btn-folder">
+            <label htmlFor="folder-input" className="btn-folder" onClick={pickFolderNative}>
               📁 Распознать папку
             </label>
             <label htmlFor="statement-input" className="btn-folder" style={{ background: '#16a085' }} title="Excel-выписка банка (.xlsx): фактуры автоматически привяжутся к платежам">
@@ -2540,25 +2599,51 @@ function App() {
 
           {folderProgress.active && (
             <div className="folder-progress">
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                <strong> Распознавание папки...</strong>
-                <span>{folderProgress.current} / {folderProgress.total} · {folderProgress.total > 0 ? Math.round(((folderProgress.current - 1 + (folderProgress.fileRatio || 0)) / folderProgress.total) * 100) : 0}%</span>
-              </div>
-              <div className="folder-progress-bar">
-                <div style={{
-                  width: `${folderProgress.total > 0 ? ((folderProgress.current - 1 + (folderProgress.fileRatio || 0)) / folderProgress.total * 100) : 0}%`,
-                  transition: 'width 0.5s ease'
-                }} />
-              </div>
-              <p style={{ fontSize: 12, color: '#555', marginTop: 6 }}>
-                {folderProgress.currentFile}
-                {(folderProgress.fileRatio || 0) > 0 && (folderProgress.fileRatio || 0) < 0.5 && ` — загрузка ${Math.round((folderProgress.fileRatio || 0) * 200)}%`}
-                {(folderProgress.fileRatio || 0) >= 0.5 && (folderProgress.fileRatio || 0) < 1 && ' — распознаётся AI…'}
-              </p>
-              <p style={{ fontSize: 13, color: '#27ae60', marginTop: 4 }}>
-                Успешно: {folderProgress.success} &nbsp;|&nbsp;
-                <span style={{ color: '#e74c3c' }}>❌ Ошибок: {folderProgress.errors}</span>
-              </p>
+              {folderProgress.phase === 'converting' ? (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <strong>📄 Конвертация PDF в изображения...</strong>
+                    {folderProgress.convertTotal > 0 && <span>стр. {folderProgress.convertPage} / {folderProgress.convertTotal}</span>}
+                  </div>
+                  <div className="folder-progress-bar">
+                    <div style={{
+                      width: `${folderProgress.convertTotal > 0 ? (folderProgress.convertPage / folderProgress.convertTotal * 100) : 5}%`,
+                      transition: 'width 0.3s ease'
+                    }} />
+                  </div>
+                  <p style={{ fontSize: 12, color: '#555', marginTop: 6 }}>
+                    {folderProgress.convertFile || 'Подготовка…'}
+                    {folderProgress.convertTotal > 0 && ` — страница ${folderProgress.convertPage} из ${folderProgress.convertTotal}`}
+                  </p>
+                  <p style={{ fontSize: 12, color: '#7f8c8d', marginTop: 4 }}>
+                    Многостраничные PDF раскладываются по страницам — каждая станет отдельным документом. Дальше начнётся распознавание.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <strong> Распознавание папки...</strong>
+                    <span>{folderProgress.current} / {folderProgress.total} · {folderProgress.total > 0 ? Math.round(((folderProgress.current - 1 + (folderProgress.fileRatio || 0)) / folderProgress.total) * 100) : 0}%</span>
+                  </div>
+                  <div className="folder-progress-bar">
+                    <div style={{
+                      width: `${folderProgress.total > 0 ? ((folderProgress.current - 1 + (folderProgress.fileRatio || 0)) / folderProgress.total * 100) : 0}%`,
+                      transition: 'width 0.5s ease'
+                    }} />
+                  </div>
+                  <p style={{ fontSize: 12, color: '#555', marginTop: 6 }}>
+                    {folderProgress.currentFile}
+                    {folderProgress.retryNote || ''}
+                    {!folderProgress.retryNote && (folderProgress.fileRatio || 0) > 0 && (folderProgress.fileRatio || 0) < 0.5 && ` — загрузка ${Math.round((folderProgress.fileRatio || 0) * 200)}%`}
+                    {!folderProgress.retryNote && (folderProgress.fileRatio || 0) >= 0.5 && (folderProgress.fileRatio || 0) < 1 && ' — распознаётся AI…'}
+                  </p>
+                  <p style={{ fontSize: 13, color: '#27ae60', marginTop: 4 }}>
+                    Успешно: {folderProgress.success} &nbsp;|&nbsp;
+                    <span style={{ color: '#e74c3c' }}>❌ Ошибок: {folderProgress.errors}</span>
+                    {(folderProgress.retries || 0) > 0 && <span style={{ color: '#7f8c8d' }}> &nbsp;|&nbsp; 🔁 повторов после сбоев сети: {folderProgress.retries}</span>}
+                  </p>
+                </>
+              )}
             </div>
           )}
 
