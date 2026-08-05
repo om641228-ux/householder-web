@@ -110,7 +110,14 @@ Node.js >= 20.0.0. Supabase подключён с `realtime.transport: ws` (об
 | POST | `/api/reprocess-receipt` | Перераспознавание |
 | POST | `/api/translate-receipt` | Перевод raw_text существующего чека (без перераспознавания) |
 | POST | `/api/export-excel` | Экспорт Excel (.xlsx) |
-| GET | `/api/diagnostics` | Диагностика без токена: версия, колонка raw_text_ru, колонки v7, настроенные ключи |
+| POST | `/api/bulk-update-payment-status` | Массовая смена статуса оплаты (body: {ids, payment_status} — to_pay/paid/underpaid/null) |
+| GET | `/api/diagnostics` | Диагностика без токена: версия, колонка raw_text_ru, колонки v7/v19/v20, настроенные ключи |
+
+### Bank (банковские выписки, v24)
+| Method | Path | Описание |
+|---|---|---|
+| POST | `/api/import-bank-statement` | Импорт выписки .xlsx (multipart: statement). Парсинг формата Ruralvía, upsert по (iban, entry_number), затем runBankMatching — авто-привязка фактур к платежам |
+| GET | `/api/bank-movements` | Движения по счетам (до 1000, order operation_date desc). Совпадения фронт обогащает из своего state receipts |
 
 ### Objects (дома / недвижимость, v7)
 | Method | Path | Описание |
@@ -162,8 +169,20 @@ CREATE TABLE receipts (
   recognition_method TEXT,   -- какая модель распознавала (+ fallback info)
   recognized_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT NOW(),
-  owner_id TEXT, owner_name TEXT
+  owner_id TEXT, owner_name TEXT,
+  -- колонка v19 (миграция supabase-migration-v19.sql):
+  payment_status TEXT,         -- 'to_pay'|'paid'|'underpaid'|null — статус оплаты (ручной/авто по выписке)
+  -- колонки v20 (миграция supabase-migration-v20.sql):
+  bank_movement_id BIGINT,     -- привязка к строке банковской выписки (bank_movements.id)
+  paid_date DATE               -- фактическая дата оплаты (из выписки)
 );
+
+-- таблица банковских движений (v20, миграция supabase-migration-v20.sql):
+-- id, owner_id, iban, account_name, operation_date, value_date, prefix, concept, counterparty,
+-- amount NUMERIC(14,2) NOT NULL, balance, entry_number, import_batch,
+-- matched_receipt_id BIGINT (без FK), match_status DEFAULT 'unmatched', match_score, matched_at, created_at
+-- уникальный индекс: (iban, entry_number) — дедуп при повторном импорте
+CREATE TABLE bank_movements (...);
 
 -- таблица объектов (v7): id, name UNIQUE, address, notes, created_at
 -- сидится из distinct receipts.object; object_id бэкфиллится по имени
@@ -282,7 +301,68 @@ Bucket: `receipt-images` (public, policies SELECT/INSERT/DELETE).
 
 ## 14. Changelog
 
-**2026-08-03 (текущая финальная версия, v21 — починка распознавания плотных таблиц / коммерческих предложений)**
+**2026-08-05 (текущая финальная версия, v25.1 — фильтр по контрагенту + сброс фильтров в «Анализе»)**
+- Выпадающий фильтр «Все контрагенты» — уникальные counterparty из загруженных движений с количеством в скобках, сортировка по убыванию частоты (bankCounterparty)
+- Кнопка «✖ Сброс» — очищает ВСЕ фильтры разом (тип, даты, контрагент, поиск); видна только когда хоть один фильтр активен (hasActiveFilters)
+- Только App.js, бэкенд не тронут
+
+**2026-08-05 (v25 — догрузка выписки, фильтры/суммы в «Анализе», ручная привязка и разбитая оплата)**
+- Импорт = ДОГРУЗКА: перед вставкой движения сравниваются с уже загруженными по счёту (ключ 1: entry_number; ключ 2: дата+сумма+concept) — вставляются ТОЛЬКО новые строки, существующие и их привязки не трогаются; ответ +{skipped, totalInFile}; алерт показывает «Новых/Пропущено дублей». upsert заменён на insert новых (дедуп на нашей стороне)
+- Ручная привязка: POST /api/link-bank-movement {movement_id, receipt_id} (match_status 'manual', score 100) + POST /api/unlink-bank-movement {movement_id}. Разбитая оплата: несколько платежей к одной фактуре — recomputeReceiptPayment(receiptId) пересчитывает по ВСЕМ движениям с matched_receipt_id=receipt: сумма<фактуры → 'underpaid', >= → 'paid', нет привязок → null; paid_date = дата последнего платежа; bank_movement_id заполняется только при единственной привязке
+- POST /api/rematch-bank — повторный прогон автопривязки (кнопка «🔁 Автопривязка»); runBankMatching: iban опционален; исключает фактуры с ЛЮБОЙ привязкой (usedIds из bank_movements) и payment_status 'paid' — иначе разбитые оплаты (bank_movement_id=null) матчились бы повторно
+- «Анализ»: фильтр по дате (с/по, date inputs); поиск по ВСЕМ полям (concept, counterparty, prefix, iban, account, сумма, остаток + имя/поставщик/№ привязанной фактуры); остаток на счёте мелким шрифтом под суммой (balance); строка сумм: «Показано N из M · Σ по фильтру −out/+inc · Σ всей выписки −out/+inc»; у привязанных — ✖ отвязка и метка ✋ (manual) вместо баллов; у непривязанных платежей — кнопка «🔗 Привязать»
+- Модалка выбора фактуры (linkPicker): поиск по названию/поставщику/№/сумме, сортировка — точное совпадение суммы (подсвечено зелёным) → неоплаченные → ближайшая сумма, до 50 шт; привязка одним кликом, потом loadBankMovements+loadReceipts
+- Бэкенд без смены версии (остаётся 2026-08-04.22 — watchdog не трогаем); SQL-миграций не требуется
+
+**2026-08-04 (v24 — банковские выписки: импорт Excel + автопривязка фактур к платежам во вкладке «Анализ»)**
+- ТРЕБУЕТ миграцию supabase-migration-v20.sql (таблица bank_movements + receipts.bank_movement_id/paid_date; notify pgrst)
+- RLS-ПРОБЛЕМА (скриншоты 2026-08-05): импорт падает с «new row violates row-level security policy for table bank_movements». Причина: банковские эндпоинты ходят через supabaseAdmin, но SUPABASE_SERVICE_ROLE_KEY в Railway НЕ задан → фактически анонимный ключ → RLS блокирует запись. РЕШЕНИЕ (двойное): 1) миграция v20 теперь содержит `alter table bank_movements disable row level security;` + grant'ы + разрешающую policy bank_movements_all (страховка, если RLS включится снова); 2) РЕКОМЕНДУЕТСЯ задать SUPABASE_SERVICE_ROLE_KEY в Railway → householder-api → Variables (Supabase → Settings → API → service_role) — service-ключ обходит RLS полностью
+- Diagnostics: + v20_receipts_bank_columns, supabase_service_key_configured, bank_movements_write_test (живой insert+delete — сразу видно, блокирует ли RLS запись); withDbSchemaHint дополнен RLS-подсказкой (срабатывает по /row-level security/i)
+- Миграция v20: проверочный select начинается с receipts_count (~42 у householder) — однозначно показывает, в ТОМ ли проекте выполнен SQL (у пользователя два проекта: householder и recept!)
+- Бэкенд (версия 2026-08-04.22):
+  - POST /api/import-bank-statement (requireAuth, upload.single('statement')): парсит выписку Ruralvía .xlsx (Nombre/IBAN в первых 8 строках; строка заголовка «Fecha de la operación/Importe»; excelDateToIso для дат; prefix/concept из «rcbo: CONTRATO…»); дедуп upsert onConflict 'iban,entry_number' (повторный импорт не затирает совпадения); после вставки — runBankMatching; ответ {imported, account, iban, autoMatched, unmatchedPayments}
+  - GET /api/bank-movements — до 1000 движений, order operation_date desc
+  - runBankMatching(ownerId, iban): только расходные движения (amount<0) без привязки × чеки без bank_movement_id; скоринг: сумма exact ±0.01 (гейт +50) + counterpartySim (containment токенов, NFD-strip, стоп-слова incl. sa/sl/sau/bv/inc) max(store_name/store_name_ru/provider)×30 + окно дат (чек до платежа: −2..+45д = +15; −7..+75д = +8) + strong ID (№ фактуры/договора ≥5 цифр в concept) +40; auto если strong ИЛИ (≥80 с запасом ≥10 над 2-м кандидатом). Побочный эффект: movement matched_receipt_id/match_status 'auto'/match_score/matched_at + receipt payment_status 'paid', paid_date=operation_date, bank_movement_id; в одном прогоне чек не используется дважды (best.r.bank_movement_id помечается)
+  - withDbSchemaHint: подсказка миграции v20 для ошибок /bank_movements/i (v19 — для /payment_status/i)
+  - diagnostics: v20_receipts_bank_columns (bank_movement_id+paid_date), v20_bank_movements_table, fix_v20_if_false
+  - Unit-тест на реальной выписке movimientos-30.xlsx: 248/248 движений; авто-совпадения AXA→95б, Comunidad→88б, O2×2, Telefónica, AEAT (strong); поступления Booking/Airbnb игнорируются; платёж O2 44.42 НЕ привязан к чеку Plenitude (гейт по имени)
+- Фронт:
+  - Кнопка «🏦 Выписка банка» (зелёная #16a085) в тулбаре загрузки + hidden input accept .xlsx,.xls → handleStatementSelect (FormData 'statement', alert со статистикой, loadReceipts)
+  - Вкладка «📊 Анализ»: stats-карточки (движения/платежи/привязано/без фактуры/неоплаченные фактуры), фильтр (все/расходы/поступления/привязанные/без фактуры), поиск по concept/counterparty, кнопка 🔄 (loadBankMovements); строка движения: дата | concept+prefix | сумма (красная/зелёная) | 🟢 кнопка привязанного чека (match_score, → openReceiptById открывает модалку) или ⚪ «Без фактуры»
+  - Модалка документа: строка «Дата оплаты: … 🏦 по выписке» при paid_date (+ bank_movement_id)
+  - Watchdog-подстрочники подняты до 2026-08-04.22
+  - Список чеков снова только при activeTab 'list' (вкладка Анализ теперь своя вёрстка)
+
+**2026-08-04 (v23.2 — карточка: только значок оплаты; новая вкладка «Анализ»)**
+- Из списочной карточки УБРАНА текстовая плашка «🟢 Оплачено» под количеством товаров — остался только круглый значок оплаты в правом верхнем углу шапки (после бейджа типа): 🟢/🟠/🔴 с tooltip
+- Новая вкладка «📊 Анализ» в верхней навигации (рядом с «Загрузка» и «Чеки/фактуры»): дублирует окно чеков/фактур — активен при activeTab 'analysis', список рендерится при 'list' И 'analysis' (одна и та же вёрстка, отдельная точка входа; при переключении — loadReceipts). Дальше вкладку можно развивать независимо (графики/сводки)
+- Бэкенд без изменений (версия 2026-08-04.21)
+
+**2026-08-04 (v23.1 — диагностика ошибки «payment_status column … schema cache»)**
+- ПРОБЛЕМА (скриншот): массовая смена оплаты падает с ошибкой Supabase «Could not find the 'payment_status' column of 'receipts' in the schema cache», метки оплаты в карточках нет — колонки payment_status в БД НЕТ: миграция v19 не выполнена / выполнена не в том проекте Supabase (у пользователя ДВА проекта: householder и recept!) / PostgREST держит старый кэш схемы после ALTER TABLE
+- РЕШЕНИЕ для пользователя: выполнить supabase-migration-v19.sql в SQL Editor ПРОЕКТА householder (хост = SUPABASE_URL в Railway Variables householder-api); файл теперь содержит `notify pgrst, 'reload schema';` (принудительное обновление кэша PostgREST) + проверочный select (0 строк = не тот проект)
+- Backend: withPaymentStatusHint — к любой ошибке, где фигурирует payment_status (PUT /api/receipts/:id, bulk-update-payment-status), добавляется понятное РЕШЕНИЕ прямо в текст ошибки; filterRecordByColumns — громкое console.warn, если статус отброшен из-за отсутствия колонки (раньше терялся молча)
+- Версия бэкенда: 2026-08-04.21 (watchdog обновлён синхронно)
+
+**2026-08-04 (v23 — значок оплаты в углу карточки + быстрая менюшка оплаты + массовая смена)**
+- Списочная карточка: в правом верхнем углу (в шапке, сразу после бейджа типа) круглый значок статуса оплаты — 🟢 Оплачено / 🟠 К оплате / 🔴 Недоплачено (PAYMENT_STATUS_META.short), цветная рамка+фон, tooltip с полным названием; показывается только если статус задан
+- Модалка (просмотр): вместо статичного бейджа — МЕНЮШКА «Оплата:» (select, окрашен по текущему статусу): меняет статус СРАЗУ без режима редактирования — quickSavePaymentStatus: оптимистичное обновление UI + PUT /api/receipts/:id { payment_status }, при ошибке alert + перезагрузка списка (откат)
+- Массовые действия: селект «Сменить оплату...» (после «Сменить подтип...») — три статуса + «✖ Очистить статус» (__clear → null); backend POST /api/bulk-update-payment-status { ids, payment_status } — валидация sanitizePaymentStatus, пустое значение = очистка
+- Версия бэкенда: 2026-08-04.20 (watchdog обновлён синхронно)
+
+**2026-08-04 (v22 — статус оплаты документа: к оплате / оплачено / недоплачено)**
+- Новое поле receipts.payment_status (text): 'to_pay' = 🟠 К оплате, 'paid' = 🟢 Оплачено, 'underpaid' = 🔴 Недоплачено, null = не указан. Это ОТДЕЛЬНОЕ поле, НЕ часть subtype (подтип — услуга: electricity/water/..., его определяет AI; статус оплаты — только ручной выбор, AI его не трогает)
+- МИГРАЦИЯ: supabase-migration-v19.sql — `alter table receipts add column if not exists payment_status text;` (выполнить в Supabase SQL Editor; diagnostics → v19_payment_status_column + fix_v19_if_false). Без миграции статус молча не сохранится (filterRecordByColumns отсечёт)
+- Backend: sanitizePaymentStatus (только 3 значения, иначе null); saveReceiptToDB + оба upload-эндпоинта (upload-receipt, upload-document-pages — paymentStatusOverride из формы); PUT /api/receipts/:id — payment_status в EDITABLE; fallback-списки колонок дополнены
+- Frontend: PAYMENT_STATUS_META (label/цвет/фон); селект «Оплата:» в форме загрузки (между Подтип и Объект, по умолчанию «— Не указан», уходит как payment_status во всех трёх загрузках); карточка-просмотр — строка «Оплата:» с цветным бейджем; карточка-редактирование — селект «Статус оплаты»; список — цветной бейдж под количеством товаров
+- Версия бэкенда: 2026-08-04.19 (watchdog обновлён синхронно)
+
+**2026-08-03 (v21.1 — вёрстка карточки: заголовок больше не рвётся по 3 буквы)**
+- ПРОБЛЕМА (мобильный скриншот «исправь верстку»): в шапке карточки чекбокс + заголовок + бейдж типа стоят в одной flex-строке без переноса; длинный бейдж «🤝 КОММ. ПРЕДЛОЖЕНИЕ» (~200px) на узком экране оставлял заголовку ~100px → «Conf/ort/de/Tener/ife/Sur»; wordBreak:'break-word' дополнительно рвал слова посередине
+- РЕШЕНИЕ (frontend, receipt-header): flexWrap:'wrap' + заголовок flex:'1 1 180px' (гарантированный минимум — при нехватке места бейдж переносится ПОД заголовок, прижимаясь вправо marginLeft:'auto'); h3: overflowWrap:'break-word' вместо wordBreak — перенос по словам, разрыв только при крайней необходимости. На десктопе раскладка визуально прежняя
+- Бэкенд без изменений (версия 2026-08-03.18)
+
+**2026-08-03 (v21 — починка распознавания плотных таблиц / коммерческих предложений)**
 - ПРОБЛЕМА (скриншоты «не сработало распознавание», 2-стр. коммерческое предложение Confort de Tenerife Sur — смета с мелким текстом): постраничное OCR вернуло ПУСТУЮ СЕТКУ таблицы (рамка из | и -, содержимое ячеек потеряно) → перевод честно перевёл пустоту (панель «Перевод» = пустые строки таблицы) → сводке не из чего было извлечь поля: «Без названия», без суммы, «1 товар». Тип proposal сработал только потому, что выбран вручную при загрузке
 - Дополнительно найдено: правка v20 со списком из 10 типов в buildDocumentSummaryPrompt (страничный режим) была потеряна при хотфиксе «мусорного хвоста» — восстановлена (document_type из [bill, invoice, contract, insurance, bank, receipt, municipality, tax, proposal, other] с пояснениями + framing с Ayuntamiento/AEAT/presupuesto)
 - РЕШЕНИЕ (backend): 1) looksLikeEmptySkeleton(text) — детектор пустой сетки: ≥4 строк только из [|_\-—–+\s.:] и ≥50% строк, либо <40 видимых знаков; маркеры «(…)» не считаются; 2) extractPageTextWithGemini — промпт с жёсткими правилами таблиц (КАЖДАЯ строка построчно, ячейки через « | », нечитаемое → [неразборчиво], пустая рамка ЗАПРЕЩЕНА) + ОДИН повтор с усиленным промптом (16384 токена, temperature 0), если результат похож на скелет; берётся лучший/длиннейший результат; 3) buildTranslatePrompt: «если текст УЖЕ на русском — верни без изменений», «таблицы переводи построчно, пустая сетка запрещена»; 4) finalizeDocumentFromPageTexts: перевод пуст/скелет при содержательном оригинале → показываем ОРИГИНАЛ (содержимое важнее языка); 5) запасные поля после сводки: store_name из первых содержательных строк 1-й страницы (до 90 зн.), total_amount — regex по «Общая сумма/Итого/Total factura/importe total/precio de compraventa…» + parseAmountLike (форматы 60 736,00 / 60.736,00 / 60,736.00 / 60736)
