@@ -1656,6 +1656,81 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
   }
 });
 
+// ========== CLASSIFY PAGES (каждая страница — отдельный документ или части одного?) ==========
+// Gemini смотрит весь набор страниц и для КАЖДОЙ решает: standalone (чек/фактура/
+// альбаран/подтверждение перевода — есть своя шапка и завершение) или continuation
+// (страница договора/эскритуры/отчёта). Если ВСЕ страницы standalone — фронт сохраняет
+// каждую в свою карточку; иначе — старый путь «страницы одного документа».
+async function classifyPagesWithGemini(pageBuffers, mimeTypes) {
+  if (!genAI) throw new Error('GEMINI_API_KEY не задан');
+  const BATCH = 8; // страниц в одном запросе — чтобы не раздувать контекст
+  const out = [];
+  for (let from = 0; from < pageBuffers.length; from += BATCH) {
+    const batch = pageBuffers.slice(from, from + BATCH);
+    const model = genAI.getGenerativeModel({
+      model: DEFAULT_GEMINI_MODEL,
+      generationConfig: { maxOutputTokens: 2048, temperature: 0, responseMimeType: 'application/json' }
+    });
+    const prompt = `Тебе переданы ${batch.length} страниц (это страницы ${from + 1}–${from + batch.length} общего набора), в порядке следования.
+Для КАЖДОЙ страницы определи: это САМОСТОЯТЕЛЬНЫЙ завершённый документ или ЧАСТЬ многостраничного документа.
+Самостоятельный (standalone=true): у страницы есть СОБСТВЕННАЯ шапка (продавец/организация/логотип) И завершение (итог/total/подпись/футер) — чек, фактура, альбаран, квитанция, подтверждение банковского перевода, одностраничный акт.
+Часть документа (standalone=false): страница договора/эскритуры/отчёта — нет собственной шапки или нет завершения, текст начинается/обрывается «с середины», нумерация страниц сквозная.
+Верни СТРОГО JSON без пояснений:
+{"pages":[{"page":${from + 1},"standalone":true,"kind":"receipt|invoice|delivery_note|bank_confirmation|contract|other","title":"2-4 слова: магазин/тип"},{"page":${from + 2},"standalone":false,...},...]}
+Номера page — АБСОЛЮТНЫЕ (${from + 1}..${from + batch.length}), ровно по одной записи на каждую переданную страницу.`;
+    const parts = batch.map((buf, i) => ({ inlineData: { data: buf.toString('base64'), mimeType: mimeTypes[from + i] || 'image/jpeg' } }));
+    const result = await model.generateContent([...parts, prompt]);
+    const text = result.response.text();
+    const m = text.match(/\{[\s\S]*\}/);
+    if (!m) throw new Error('classify-pages: модель вернула не-JSON');
+    const parsed = JSON.parse(m[0]);
+    const pages = Array.isArray(parsed.pages) ? parsed.pages : [];
+    for (const p of pages) {
+      out.push({
+        page: parseInt(p.page, 10),
+        standalone: !!p.standalone,
+        kind: String(p.kind || 'other'),
+        title: String(p.title || '')
+      });
+    }
+  }
+  // Нормализация: ровно одна запись на страницу; пропущенную моделью страницу считаем
+  // ЧАСТЬЮ документа (standalone=false) — безопасный дефолт: старый путь «один документ»
+  const byPage = new Map(out.filter(p => p.page >= 1).map(p => [p.page, p]));
+  const normalized = [];
+  for (let i = 1; i <= pageBuffers.length; i++) {
+    normalized.push(byPage.get(i) || { page: i, standalone: false, kind: 'other', title: '' });
+  }
+  return normalized;
+}
+
+app.post('/api/classify-pages', upload.array('pages', 60), async (req, res) => {
+  try {
+    const token = req.query.token || req.body.token;
+    const user = tokens.get(token);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ error: 'No page files provided' });
+    const buffers = [];
+    const mimes = [];
+    for (const f of files) {
+      const isPdf = f.mimetype === 'application/pdf' || /\.pdf$/i.test(f.originalname || '');
+      // для классификации достаточно уменьшенной копии — быстрее и дешевле
+      buffers.push(isPdf ? f.buffer : await sharp(f.buffer)
+        .resize(1400, 1400, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 70 }).toBuffer());
+      mimes.push(isPdf ? 'application/pdf' : 'image/jpeg');
+    }
+    const pages = await classifyPagesWithGemini(buffers, mimes);
+    const allStandalone = pages.length > 1 && pages.every(p => p.standalone);
+    console.log(`classify-pages: ${pages.length} стр., allStandalone=${allStandalone} (${pages.map(p => `${p.page}:${p.standalone ? 'doc' : 'part'}`).join(' ')})`);
+    res.json({ success: true, pages, allStandalone });
+  } catch (e) {
+    console.error('classify-pages error:', e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // ========== UPLOAD DOCUMENT PAGES (несколько файлов = страницы ОДНОГО документа) ==========
 // Фронт отправляет все выбранные файлы как 'pages' — они собираются в один документ
 // с модулями ══════ СТРАНИЦА N ══════ (тот же конвейер, что у длинных PDF)

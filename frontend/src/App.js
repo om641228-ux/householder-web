@@ -841,9 +841,10 @@ function App() {
   });
 
   const recognizeAndSave = async (fileArg) => {
-    // Без явного файла и при выбранных нескольких — это страницы одного документа
+    // Без явного файла и при выбранных нескольких — умный разбор: AI решает,
+    // отдельные это документы (каждый в свою карточку) или страницы одного
     if (!(fileArg instanceof File) && selectedFiles.length > 1) {
-      return recognizeDocumentPages(selectedFiles);
+      return recognizeSelectedFilesSmart(selectedFiles);
     }
     const file = (fileArg instanceof File) ? fileArg : selectedFiles[currentFileIndex];
     if (!file) return;
@@ -1016,19 +1017,11 @@ function App() {
     handleCameraClick();
   };
 
-  // Общая обработка набора файлов папки (используется обоими путями выбора папки)
-  const processFolderFiles = async (picked) => {
-    // Фаза 1 — конвертация PDF в изображения страниц: показываем в UI (раньше шла «вслепую», только console.log)
-    setFolderProgress({ active: true, phase: 'converting', convertFile: '', convertPage: 0, convertTotal: 0, current: 0, total: 0, success: 0, errors: 0, retries: 0, currentFile: '', fileRatio: 0 });
-    setFolderResults([]);
-    const allFiles = await expandFilesWithPdf(picked, (name, page, total) => {
-      setFolderProgress(prev => ({ ...prev, phase: 'converting', convertFile: name, convertPage: page, convertTotal: total }));
-    });
-    if (allFiles.length === 0) {
-      setFolderProgress(prev => ({ ...prev, active: false }));
-      return;
-    }
-    // Фаза 2 — распознавание
+  // Общий цикл последовательного распознавания файлов (папка; многостраничный PDF,
+  // где каждая страница — отдельный документ): каждый файл → /api/upload-receipt
+  // (сервер сам разрезает мульти-чеки на скане), до 2 попыток на файл,
+  // прогресс — в folderProgress, итог — folderResults
+  const recognizeFilesSequentially = async (allFiles) => {
     setFolderProgress(prev => ({ ...prev, phase: 'recognizing', current: 0, total: allFiles.length, fileRatio: 0 }));
     setRecognizing(true);
     const results = [];
@@ -1104,6 +1097,23 @@ function App() {
     setFolderProgress(prev => ({ ...prev, active: false, currentFile: '' }));
     setRecognizing(false);
     loadReceipts();
+    return results;
+  };
+
+  // Общая обработка набора файлов папки (используется обоими путями выбора папки)
+  const processFolderFiles = async (picked) => {
+    // Фаза 1 — конвертация PDF в изображения страниц: показываем в UI (раньше шла «вслепую», только console.log)
+    setFolderProgress({ active: true, phase: 'converting', convertFile: '', convertPage: 0, convertTotal: 0, current: 0, total: 0, success: 0, errors: 0, retries: 0, currentFile: '', fileRatio: 0 });
+    setFolderResults([]);
+    const allFiles = await expandFilesWithPdf(picked, (name, page, total) => {
+      setFolderProgress(prev => ({ ...prev, phase: 'converting', convertFile: name, convertPage: page, convertTotal: total }));
+    });
+    if (allFiles.length === 0) {
+      setFolderProgress(prev => ({ ...prev, active: false }));
+      return;
+    }
+    // Фаза 2 — распознавание
+    const results = await recognizeFilesSequentially(allFiles);
     const successCount = results.filter(r => r.status === 'success').length;
     const errorCount = results.filter(r => r.status === 'error').length;
     if (errorCount === 0) {
@@ -1111,6 +1121,50 @@ function App() {
     } else {
       alert(`✅ Успешно: ${successCount}\n❌ Ошибок: ${errorCount}\n\nСмотрите детали ниже.`);
     }
+  };
+
+  // УМНЫЙ разбор нескольких страниц (многостраничный PDF или несколько выбранных файлов):
+  // 1) /api/classify-pages — AI смотрит каждую страницу: самостоятельный документ
+  //    (чек/фактура/альбаран/подтверждение перевода) или часть одного документа;
+  // 2) ВСЕ страницы самостоятельные → каждая распознаётся и сохраняется В СВОЮ карточку
+  //    (страница с двумя чеками дополнительно разрежется сервером — мульти-чек);
+  // 3) хотя бы одна страница — продолжение → старый путь: страницы собираются в ОДИН документ;
+  // 4) сбой классификатора → тоже старый путь (безопасный дефолт)
+  const recognizeSelectedFilesSmart = async (files) => {
+    setProgressStage('analyze');
+    setUploadProgress(10);
+    setRecognizing(true);
+    let cls = null;
+    try {
+      const formData = new FormData();
+      for (const f of files) formData.append('pages', f);
+      formData.append('token', token);
+      const res = await fetch(`${API_URL}/api/classify-pages?token=${token}`, { method: 'POST', body: formData });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success && Array.isArray(data.pages)) cls = data;
+      else console.warn('classify-pages:', data.error || `HTTP ${res.status}`);
+    } catch (e) {
+      console.warn('classify-pages сбой (старый путь «один документ»):', e.message);
+    }
+    setRecognizing(false);
+    setProgressStage(null);
+    setUploadProgress(0);
+
+    if (cls && cls.allStandalone) {
+      const titles = cls.pages.map(p => `стр.${p.page}: ${p.title || p.kind}`).join(', ');
+      console.log(`Каждая страница — отдельный документ (${titles}) — сохраняем по отдельности`);
+      setFolderProgress({ active: true, phase: 'recognizing', current: 0, total: files.length, success: 0, errors: 0, retries: 0, currentFile: '', fileRatio: 0 });
+      setFolderResults([]);
+      const results = await recognizeFilesSequentially(files);
+      const okCount = results.filter(r => r.status === 'success').length;
+      const errCount = results.filter(r => r.status === 'error').length;
+      alert(`📄 Каждая страница — отдельный документ:\n${titles}\n\n✅ Сохранено карточек: ${okCount}` + (errCount ? `\n❌ Ошибок: ${errCount}` : ''));
+      return;
+    }
+    if (cls) {
+      console.log('Страницы — части одного документа:', cls.pages.map(p => `стр.${p.page}:${p.standalone ? 'док' : 'часть'}`).join(', '));
+    }
+    await recognizeDocumentPages(files);
   };
 
   // ПУТЬ 1 (Chrome/Edge): системный диалог ВЫБОРА ПАПКИ через File System Access API —
@@ -2488,13 +2542,15 @@ function App() {
                   <span style={{ position: 'relative', zIndex: 1 }}>
                     {progressStage === 'upload'
                       ? `⬆️ Загрузка… ${uploadProgress}%`
-                      : `🤖 Распознавание AI… ${uploadProgress}%`}
+                      : progressStage === 'analyze'
+                        ? '🔍 Анализирую страницы…'
+                        : `🤖 Распознавание AI… ${uploadProgress}%`}
                   </span>
                 </>
               ) : recognizing ? (
                 '⏳ Идёт загрузка папки…'
               ) : selectedFiles.length > 1 ? (
-                `📄 Распознать ${selectedFiles.length} страниц как один документ`
+                `📄 Распознать ${selectedFiles.length} стр. (AI разберёт: отдельно или как один)`
               ) : 'Распознать и сохранить'}
             </button>
           </div>
@@ -2638,7 +2694,7 @@ function App() {
               ) : (
                 <>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                    <strong> Распознавание папки...</strong>
+                    <strong> Распознавание файлов...</strong>
                     <span>{folderProgress.current} / {folderProgress.total} · {folderProgress.total > 0 ? Math.round(((folderProgress.current - 1 + (folderProgress.fileRatio || 0)) / folderProgress.total) * 100) : 0}%</span>
                   </div>
                   <div className="folder-progress-bar">
@@ -2665,7 +2721,7 @@ function App() {
 
           {folderResults.length > 0 && !folderProgress.active && (
             <div style={{ marginTop: 15, padding: 15, background: '#e8f5e9', borderRadius: 8, maxHeight: 300, overflowY: 'auto' }}>
-              <h4 style={{ margin: '0 0 10px 0' }}>📁 Результаты загрузки папки</h4>
+              <h4 style={{ margin: '0 0 10px 0' }}>📁 Результаты загрузки</h4>
               {folderResults.map((res, idx) => (
                 <div key={idx} style={{
                   padding: '6px 10px',
