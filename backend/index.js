@@ -1731,6 +1731,74 @@ app.post('/api/classify-pages', upload.array('pages', 60), async (req, res) => {
   }
 });
 
+// ========== UPLOAD OCR TEXT (текст распознан ЛОКАЛЬНЫМ OCR на машине пользователя) ==========
+// Кнопка «Локально» на фронте: браузер прогоняет страницы через Unlimited-OCR
+// (llama-server пользователя, 127.0.0.1:8080 — бесплатно, без облака) и присылает
+// markdown-текст каждой страницы + сами изображения. Бэкенд чистит служебные токены
+// Unlimited-OCR и собирает карточку тем же конвейером (finalizeDocumentFromPageTexts:
+// JSON-сводка полей + перевод), сохраняет как обычный документ.
+function cleanLocalOcrTokens(text) {
+  if (!text) return '';
+  let t = String(text);
+  t = t.replace(/<\|ref\|>([\s\S]*?)<\|\/ref\|>/g, '$1'); // <|ref|>текст<|/ref|> → оставить текст
+  t = t.replace(/<\|det\|>[\s\S]*?<\|\/det\|>/g, '');     // координатные блоки — выбросить целиком
+  t = t.replace(/<\|[^|]+\|>/g, '');                      // прочие служебные токены модели
+  return t.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+app.post('/api/upload-ocr-text', upload.array('pages', 60), async (req, res) => {
+  try {
+    const token = req.query.token || req.body.token;
+    const user = tokens.get(token);
+    if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+    // Тексты страниц: ocr_texts (JSON-массив) или одиночный ocr_text
+    let pageTexts = [];
+    try { pageTexts = JSON.parse(req.body.ocr_texts || '[]'); } catch { pageTexts = []; }
+    if ((!Array.isArray(pageTexts) || !pageTexts.length) && req.body.ocr_text) pageTexts = [req.body.ocr_text];
+    if (!Array.isArray(pageTexts)) pageTexts = [];
+    pageTexts = pageTexts.map(t => cleanLocalOcrTokens(t)).filter(Boolean);
+    if (!pageTexts.length) {
+      return res.status(400).json({ error: 'Пустой OCR-текст — локальная модель ничего не вернула' });
+    }
+
+    const currency = req.body.currency || 'auto';
+    const docType = req.body.docType || 'auto';
+    const object = req.body.object || 'other';
+    const subtypeOverride = req.body.subtype && req.body.subtype !== 'auto' ? req.body.subtype : null;
+    const paymentStatusOverride = sanitizePaymentStatus(req.body.payment_status);
+
+    // Карточка из текстов тем же конвейером: JSON-сводка полей + перевод по страницам
+    const receiptData = await finalizeDocumentFromPageTexts(pageTexts, currency, docType);
+    receiptData.docType = docType === 'auto' ? (receiptData.document_type || 'receipt') : docType;
+    receiptData.object = (object && object !== 'other') ? object : (receiptData.object || 'other');
+    if (subtypeOverride) receiptData.subtype = subtypeOverride;
+    if (paymentStatusOverride) receiptData.payment_status = paymentStatusOverride;
+
+    // Изображения страниц в Storage (фото документа в карточке + page_urls)
+    const files = req.files || [];
+    let imageUrl = null;
+    if (files.length) {
+      const pageBuffers = [];
+      const mimeTypes = [];
+      for (const f of files) {
+        const isPdf = f.mimetype === 'application/pdf' || /\.pdf$/i.test(f.originalname || '');
+        pageBuffers.push(isPdf ? f.buffer : await processImage(f.buffer));
+        mimeTypes.push(isPdf ? 'application/pdf' : 'image/jpeg');
+      }
+      const urls = await uploadPagesToStorage(pageBuffers, mimeTypes, user.id, 'local-ocr');
+      receiptData.page_urls = urls;
+      imageUrl = urls[0] || null;
+    }
+
+    const saved = await saveReceiptToDB(receiptData, imageUrl, user, `local-uocr (unlimited-ocr, ${pageTexts.length} стр.)`);
+    res.json({ success: true, id: saved.id, ...saved, image_url: imageUrl });
+  } catch (e) {
+    console.error('upload-ocr-text error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ========== UPLOAD DOCUMENT PAGES (несколько файлов = страницы ОДНОГО документа) ==========
 // Фронт отправляет все выбранные файлы как 'pages' — они собираются в один документ
 // с модулями ══════ СТРАНИЦА N ══════ (тот же конвейер, что у длинных PDF)

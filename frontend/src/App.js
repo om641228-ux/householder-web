@@ -3,6 +3,10 @@ import './App.css';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 
 const API_URL = 'https://householder-api-production.up.railway.app';
+// Локальный OCR (Unlimited-OCR на llama-server пользователя): браузер обращается к нему
+// НАПРЯМУЮ — сервер и браузер на одном ноутбуке. localhost для браузера — доверенный
+// контекст, поэтому запросы с HTTPS-сайта на http://127.0.0.1 разрешены
+const LOCAL_OCR_URL = 'http://127.0.0.1:8080';
 
 // Запасной список объектов на случай недоступности API (основной источник — GET /api/objects)
 const DEFAULT_OBJECTS = ['other', 'Duqe', 'Maria', 'Kit', 'Dubai', 'Tich', 'Иссера', 'Игорь', 'Лиза', 'Алехандро'];
@@ -839,6 +843,108 @@ function App() {
       }
     }, 4000);
   });
+
+  // ========== ЛОКАЛЬНЫЙ OCR (кнопка «Локально») ==========
+  // Страницы распознаются Unlimited-OCR на ноутбуке пользователя (llama-server :8080,
+  // бесплатно и без облака), затем текст + изображения уходят на бэкенд Railway —
+  // он структурирует карточку и сохраняет в базу. Несколько выбранных файлов =
+  // страницы ОДНОГО документа (как «Распознать N стр.» до v27).
+  const fileToDataUrl = (file) => new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(new Error('Не удалось прочитать файл'));
+    r.readAsDataURL(file);
+  });
+
+  const ocrPageLocal = async (file) => {
+    const dataUrl = await fileToDataUrl(file);
+    const res = await fetch(`${LOCAL_OCR_URL}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        temperature: 0, // рецепт модели: temp 0 + промпт с <|grounding|> — иначе пустой вывод
+        max_tokens: 8192,
+        messages: [{ role: 'user', content: [
+          { type: 'text', text: '<|grounding|>Convert the document to markdown.' },
+          { type: 'image_url', image_url: { url: dataUrl } }
+        ]}]
+      })
+    });
+    if (!res.ok) throw new Error(`локальный сервер ответил HTTP ${res.status}`);
+    const data = await res.json();
+    const text = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
+    if (!text.trim()) throw new Error('локальная модель вернула пустой текст');
+    return text;
+  };
+
+  const recognizeLocal = async () => {
+    if (!selectedFiles.length || recognizing) return;
+    setRecognizing(true);
+    setLastSavedReceipt(null);
+    setFolderResults([]);
+    let creepTimer = null;
+    try {
+      // 0. Локальный сервер жив? (короткий таймаут — не ждём вечно)
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 4000);
+        await fetch(`${LOCAL_OCR_URL}/health`, { signal: ctrl.signal });
+        clearTimeout(t);
+      } catch {
+        throw new Error('не отвечает на 127.0.0.1:8080.\n\nЗапустите llama-server:\n./build/bin/llama-server -m ./uocr/Unlimited-OCR-Q4_K_M.gguf --mmproj ./uocr/mmproj-Unlimited-OCR-F16.gguf -c 8192 --host 127.0.0.1 --port 8080\n\nЕсли Chrome блокирует запрос к локальному серверу — откройте сайт в Safari.');
+      }
+      // 1. OCR каждой страницы — локально (0–70% прогресса)
+      const texts = [];
+      const uploadFiles = [];
+      for (let i = 0; i < selectedFiles.length; i++) {
+        setProgressStage('local');
+        setUploadProgress(Math.round((i / selectedFiles.length) * 70));
+        let f = selectedFiles[i];
+        if (f.size > MAX_FILE_SIZE_MB * 1024 * 1024) f = await compressImageFile(f);
+        texts.push(await ocrPageLocal(f));
+        uploadFiles.push(f);
+      }
+      setUploadProgress(70);
+      // 2. Текст + изображения на бэкенд: структурирование карточки и сохранение (70–100%)
+      const formData = new FormData();
+      for (const f of uploadFiles) formData.append('pages', f);
+      formData.append('ocr_texts', JSON.stringify(texts));
+      formData.append('currency', currency);
+      formData.append('docType', docType);
+      formData.append('subtype', subtype);
+      formData.append('payment_status', paymentStatus);
+      formData.append('object', object);
+      formData.append('token', token);
+      setProgressStage('recognize');
+      const res = await uploadWithProgress(`${API_URL}/api/upload-ocr-text?token=${token}`, formData, (ratio) => {
+        setUploadProgress(70 + Math.round(ratio * 15));
+        if (ratio >= 1 && !creepTimer) {
+          let p = 85;
+          creepTimer = setInterval(() => {
+            p = Math.min(95, p + Math.max(0.4, (95 - p) * 0.05));
+            setUploadProgress(Math.round(p));
+          }, 500);
+        }
+      });
+      if (creepTimer) clearInterval(creepTimer);
+      setUploadProgress(100);
+      const text = res.text;
+      let data;
+      try { data = JSON.parse(text); } catch { throw new Error(`Сервер вернул ${res.status}: ${text.slice(0, 200)}`); }
+      if (!res.ok) throw new Error(data.error || `Ошибка сервера: ${res.status}`);
+      if (!data.success && !data.id) throw new Error(data.error || 'Сохранение не удалось');
+      const receiptData = data.data || data;
+      if (receiptData.image_url) receiptData.image_url = fixImageUrl(receiptData.image_url);
+      setLastSavedReceipt(receiptData);
+      loadReceipts();
+    } catch (e) {
+      console.error('Локальный OCR:', e);
+      alert('🖥 Локальный OCR: ' + e.message);
+    }
+    setRecognizing(false);
+    setProgressStage(null);
+    setUploadProgress(0);
+  };
 
   const recognizeAndSave = async (fileArg) => {
     // Без явного файла и при выбранных нескольких — умный разбор: AI решает,
@@ -2544,7 +2650,9 @@ function App() {
                       ? `⬆️ Загрузка… ${uploadProgress}%`
                       : progressStage === 'analyze'
                         ? '🔍 Анализирую страницы…'
-                        : `🤖 Распознавание AI… ${uploadProgress}%`}
+                        : progressStage === 'local'
+                          ? `🖥 Локальный OCR… ${uploadProgress}%`
+                          : `🤖 Распознавание AI… ${uploadProgress}%`}
                   </span>
                 </>
               ) : recognizing ? (
@@ -2552,6 +2660,19 @@ function App() {
               ) : selectedFiles.length > 1 ? (
                 `📄 Распознать ${selectedFiles.length} стр. (AI разберёт: отдельно или как один)`
               ) : 'Распознать и сохранить'}
+            </button>
+            <button
+              onClick={recognizeLocal}
+              disabled={!selectedFiles.length || recognizing}
+              title="Бесплатный OCR на вашем Mac (Unlimited-OCR, llama-server 127.0.0.1:8080). Текст распознаётся локально, карточку собирает и сохраняет сервер. Несколько выбранных страниц = один документ"
+              style={{
+                marginTop: 8, width: '100%', padding: '12px', fontSize: 15, fontWeight: 600,
+                borderRadius: 10, border: '1.5px solid #27ae60', background: '#f0faf4', color: '#1e8449',
+                cursor: (!selectedFiles.length || recognizing) ? 'not-allowed' : 'pointer',
+                opacity: (!selectedFiles.length || recognizing) ? 0.55 : 1
+              }}
+            >
+              🖥 Локально (Unlimited-OCR, бесплатно)
             </button>
           </div>
 
