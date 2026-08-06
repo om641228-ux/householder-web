@@ -5,8 +5,10 @@ import { Capacitor, registerPlugin } from '@capacitor/core';
 const API_URL = 'https://householder-api-production.up.railway.app';
 // Локальный OCR (Unlimited-OCR на llama-server пользователя): браузер обращается к нему
 // НАПРЯМУЮ — сервер и браузер на одном ноутбуке. localhost для браузера — доверенный
-// контекст, поэтому запросы с HTTPS-сайта на http://127.0.0.1 разрешены
-const LOCAL_OCR_URL = 'http://127.0.0.1:8080';
+// контекст, поэтому запросы с HTTPS-сайта на http://127.0.0.1 разрешены.
+// Порядок: 8081 = uocr-proxy.py (добавляет CORS/Private-Network-Access заголовки,
+// которых нет у llama-server — без них Chrome/Safari блокируют fetch), 8080 = напрямую
+const LOCAL_OCR_URLS = ['http://127.0.0.1:8081', 'http://127.0.0.1:8080'];
 
 // Запасной список объектов на случай недоступности API (основной источник — GET /api/objects)
 const DEFAULT_OBJECTS = ['other', 'Duqe', 'Maria', 'Kit', 'Dubai', 'Tich', 'Иссера', 'Игорь', 'Лиза', 'Алехандро'];
@@ -856,9 +858,9 @@ function App() {
     r.readAsDataURL(file);
   });
 
-  const ocrPageLocal = async (file) => {
+  const ocrPageLocal = async (file, baseUrl) => {
     const dataUrl = await fileToDataUrl(file);
-    const res = await fetch(`${LOCAL_OCR_URL}/v1/chat/completions`, {
+    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -884,14 +886,20 @@ function App() {
     setFolderResults([]);
     let creepTimer = null;
     try {
-      // 0. Локальный сервер жив? (короткий таймаут — не ждём вечно)
-      try {
-        const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 4000);
-        await fetch(`${LOCAL_OCR_URL}/health`, { signal: ctrl.signal });
-        clearTimeout(t);
-      } catch {
-        throw new Error('не отвечает на 127.0.0.1:8080.\n\nЗапустите llama-server:\n./build/bin/llama-server -m ./uocr/Unlimited-OCR-Q4_K_M.gguf --mmproj ./uocr/mmproj-Unlimited-OCR-F16.gguf -c 8192 --host 127.0.0.1 --port 8080\n\nЕсли Chrome блокирует запрос к локальному серверу — откройте сайт в Safari.');
+      // 0. Ищем живой локальный сервер: сначала прокси (8081), потом напрямую (8080)
+      let localBase = null;
+      for (const url of LOCAL_OCR_URLS) {
+        try {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 4000);
+          await fetch(`${url}/health`, { signal: ctrl.signal });
+          clearTimeout(t);
+          localBase = url;
+          break;
+        } catch { /* пробуем следующий адрес */ }
+      }
+      if (!localBase) {
+        throw new Error('не отвечает на 127.0.0.1:8081 и :8080.\n\n1) Запустите llama-server:\n./build/bin/llama-server -m ./uocr/Unlimited-OCR-Q4_K_M.gguf --mmproj ./uocr/mmproj-Unlimited-OCR-F16.gguf -c 8192 --host 127.0.0.1 --port 8080\n\n2) Если сервер запущен, а ошибка остаётся (браузер блокирует запрос) — во втором окне терминала запустите прокси:\npython3 uocr-proxy.py');
       }
       // 1. OCR каждой страницы — локально (0–70% прогресса)
       const texts = [];
@@ -901,7 +909,7 @@ function App() {
         setUploadProgress(Math.round((i / selectedFiles.length) * 70));
         let f = selectedFiles[i];
         if (f.size > MAX_FILE_SIZE_MB * 1024 * 1024) f = await compressImageFile(f);
-        texts.push(await ocrPageLocal(f));
+        texts.push(await ocrPageLocal(f, localBase));
         uploadFiles.push(f);
       }
       setUploadProgress(70);
@@ -2676,7 +2684,7 @@ function App() {
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-06 · v28 · локальный OCR
+              сборка 2026-08-06 · v28.1 · локальный OCR
             </div>
           </div>
 
