@@ -2674,6 +2674,10 @@ function App() {
             >
               🖥 Локально (Unlimited-OCR, бесплатно)
             </button>
+            {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
+            <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
+              сборка 2026-08-06 · v28 · локальный OCR
+            </div>
           </div>
 
           <div className="upload-layout">
