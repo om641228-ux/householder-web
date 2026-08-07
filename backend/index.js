@@ -1860,6 +1860,8 @@ app.post('/api/classify-pages', upload.array('pages', 60), async (req, res) => {
 // markdown-текст каждой страницы + сами изображения. Бэкенд чистит служебные токены
 // Unlimited-OCR и собирает карточку тем же конвейером (finalizeDocumentFromPageTexts:
 // JSON-сводка полей + перевод), сохраняет как обычный документ.
+// Общий regex «голых» координат grounding (v28.5): чистка и страж используют один шаблон
+const LOCAL_OCR_COORD_RE = /\b(?:title|sub_title|subtitle|text|image|img|table|figure|chart|caption|header|footer|footnote|code|formula|equation|list|item|section|paragraph|page|line|word|logo|stamp|barcode|qrcode|doc_title)\s*\[{1,2}\s*\d[\d\s,.]*,[\d\s,.]*\]{1,2}/gi;
 function cleanLocalOcrTokens(text) {
   if (!text) return '';
   let t = String(text);
@@ -1868,9 +1870,8 @@ function cleanLocalOcrTokens(text) {
   t = t.replace(/<\|[^|]+\|>/g, '');                      // прочие служебные токены модели
   // «Голые» координаты grounding (v28.5): llama.cpp вырезает спец-токены, остаётся
   // "title [362, 86, 624, 119]MediaMarkt" — убираем префикс "<тип> [числа]", текст сохраняем
-  const coordRe = /\b(?:title|sub_title|subtitle|text|image|img|table|figure|chart|caption|header|footer|footnote|code|formula|equation|list|item|section|paragraph|page|line|word|logo|stamp|barcode|qrcode|doc_title)\s*\[{1,2}\s*\d[\d\s,.]*,[\d\s,.]*\]{1,2}/gi;
   let prevT;
-  do { prevT = t; t = t.replace(coordRe, ''); } while (t !== prevT);
+  do { prevT = t; t = t.replace(LOCAL_OCR_COORD_RE, ''); } while (t !== prevT);
   t = t.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   // Схлопывание зациклившихся повторов: подряд идущие одинаковые строки — не больше двух
   const lines = t.split('\n');
@@ -1900,8 +1901,14 @@ function cleanLocalOcrTokens(text) {
 
 // Признак «мусорного» OCR: модель зациклилась — почти все строки одинаковые
 // (кейс 2026-08-07: «(1) 1 января 2017 г.» × 30 на фото чека Media Markt)
+// v28.6: НЕ считаем контентом строки чистой табличной разметки («|---|», «|  |  |») —
+// табличный документ (альбаран с пустой сеткой) законно даёт много одинаковых пустых строк;
+// координатные префиксы снимаем, чтобы повтор фразы с разными координатами тоже ловился
 function isDegenerateOcrText(t) {
-  const lines = String(t).split('\n').map(l => l.trim()).filter(l => l.length > 3);
+  const lines = String(t).replace(LOCAL_OCR_COORD_RE, '').split('\n')
+    .map(l => l.trim())
+    .filter(l => l.length > 3)
+    .filter(l => !/^[|:\-\s+*_=~.]+$/.test(l));
   if (lines.length < 15) return false;
   const uniq = new Set(lines).size;
   return uniq / lines.length < 0.35;
@@ -1920,15 +1927,23 @@ app.post('/api/upload-ocr-text', upload.array('pages', 60), async (req, res) => 
     if (!Array.isArray(rawTexts)) rawTexts = [];
     // Защита от карточки-мусора: проверяем СЫРОЙ текст ДО схлопывания повторов
     // (иначе схлопывание уничтожит «улики» зацикливания)
+    // v28.6: зациклившиеся страницы ПРОПУСКАЕМ, а не отклоняем весь документ;
+    // 422 — только если плохие ВСЕ страницы
     const badPages = rawTexts
       .map((t, i) => isDegenerateOcrText(String(t || '').replace(/<\|det\|>[\s\S]*?<\|\/det\|>/g, '')) ? i + 1 : 0)
       .filter(Boolean);
-    if (badPages.length) {
+    if (badPages.length && badPages.length === rawTexts.length) {
       return res.status(422).json({
         error: `Локальный OCR зациклился на стр. ${badPages.join(', ')} — в тексте одни повторы. ` +
           'Сфотографируйте документ крупнее (чек — во весь кадр), при хорошем свете и без лишних предметов рядом, ' +
           'или используйте облачную кнопку распознавания.'
       });
+    }
+    if (badPages.length) {
+      console.warn(`upload-ocr-text: стр. ${badPages.join(', ')} пропущены (OCR зациклился), осталось ${rawTexts.length - badPages.length}`);
+      const badSet = new Set(badPages);
+      rawTexts = rawTexts.filter((_, i) => !badSet.has(i + 1));
+      if (Array.isArray(req.files)) req.files = req.files.filter((_, i) => !badSet.has(i + 1));
     }
     const pageTexts = rawTexts.map(t => cleanLocalOcrTokens(t)).filter(Boolean);
     if (!pageTexts.length) {
@@ -1950,6 +1965,12 @@ app.post('/api/upload-ocr-text', upload.array('pages', 60), async (req, res) => 
     receiptData.object = (object && object !== 'other') ? object : (receiptData.object || 'other');
     if (subtypeOverride) receiptData.subtype = subtypeOverride;
     if (paymentStatusOverride) receiptData.payment_status = paymentStatusOverride;
+    // Пометка в тексте карточки о пропущенных страницах (v28.6)
+    if (badPages.length) {
+      const skipNote = `\n\n══════ ПРОПУЩЕНЫ СТРАНИЦЫ ══════\nСтр. ${badPages.join(', ')}: локальный OCR зациклился (одни повторы) — страница не вошла в карточку. Переснимите её крупнее или распознайте облачной кнопкой.`;
+      receiptData.raw_text = (receiptData.raw_text || '') + skipNote;
+      receiptData.raw_text_ru = (receiptData.raw_text_ru || '') + skipNote;
+    }
 
     // Изображения страниц в Storage (фото документа в карточке + page_urls)
     const files = req.files || [];
@@ -1967,8 +1988,10 @@ app.post('/api/upload-ocr-text', upload.array('pages', 60), async (req, res) => 
       imageUrl = urls[0] || null;
     }
 
-    const saved = await saveReceiptToDB(receiptData, imageUrl, user, `local-uocr (unlimited-ocr, ${pageTexts.length} стр.)`);
-    res.json({ success: true, id: saved.id, ...saved, image_url: imageUrl });
+    const methodLabel = `local-uocr (unlimited-ocr, ${pageTexts.length} стр.` +
+      (badPages.length ? `, пропущено: ${badPages.join(',')}` : '') + ')';
+    const saved = await saveReceiptToDB(receiptData, imageUrl, user, methodLabel);
+    res.json({ success: true, id: saved.id, ...saved, image_url: imageUrl, skipped_pages: badPages });
   } catch (e) {
     console.error('upload-ocr-text error:', e);
     res.status(500).json({ error: e.message });
