@@ -497,6 +497,8 @@ function App() {
   const [sortDir, setSortDir] = useState('desc');
   // Режим поиска дубликатов
   const [showDuplicates, setShowDuplicates] = useState(false);
+  // Фокус на группе дубликатов ОДНОЙ выбранной карточки (кнопка «Показать копии»)
+  const [dupFocusId, setDupFocusId] = useState(null);
 
   const [selectedReceiptIds, setSelectedReceiptIds] = useState(new Set());
   const [viewModal, setViewModal] = useState(null);
@@ -2027,10 +2029,16 @@ function App() {
   const dupAllIds = new Set(dupGroups.flat().map(r => r.id));           // все участники групп дубликатов
   const dupCopyIds = new Set(dupGroups.flatMap(g => g.slice(1)).map(r => r.id)); // копии (все, кроме оригинала)
 
-  // В режиме дубликатов показываем только чеки из групп дубликатов
-  const visibleReceipts = showDuplicates
-    ? filteredReceipts.filter(r => dupAllIds.has(r.id))
-    : filteredReceipts;
+  // Группа дубликатов выбранной карточки (режим «Показать копии»)
+  const dupFocusGroup = dupFocusId ? (dupGroups.find(g => g.some(r => r.id === dupFocusId)) || null) : null;
+  const dupFocusReceipt = dupFocusId ? receipts.find(r => r.id === dupFocusId) : null;
+
+  // Фокус на одной группе важнее общего режима дубликатов
+  const visibleReceipts = dupFocusGroup
+    ? filteredReceipts.filter(r => dupFocusGroup.some(g => g.id === r.id))
+    : showDuplicates
+      ? filteredReceipts.filter(r => dupAllIds.has(r.id))
+      : filteredReceipts;
 
   // Дата для сортировки/группировки в зависимости от режима:
   // 'receipt' — дата с чека (receipt_date), 'recognized' — дата распознавания (recognized_at)
@@ -2729,7 +2737,7 @@ function App() {
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-07 · v28.4 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
+              сборка 2026-08-08 · v29 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
               <button
                 onClick={configureLocalOcr}
                 title="Задать адрес локального OCR (HTTPS-туннель cloudflared)"
@@ -2964,7 +2972,7 @@ function App() {
             <button onClick={() => exportExcel()} style={{ padding: '6px 12px', fontSize: 13 }}>📊 Excel (все)</button>
             <button onClick={() => loadReceipts()} style={{ padding: '6px 12px', fontSize: 13 }}>🔄 Обновить</button>
             <button
-              onClick={() => { setShowDuplicates(v => !v); setCurrentPage(1); setSelectedReceiptIds(new Set()); }}
+              onClick={() => { setShowDuplicates(v => !v); setDupFocusId(null); setCurrentPage(1); setSelectedReceiptIds(new Set()); }}
               style={{
                 padding: '6px 12px', fontSize: 13, cursor: 'pointer',
                 border: showDuplicates ? '1px solid #e74c3c' : '1px solid #ccc',
@@ -3027,6 +3035,25 @@ function App() {
                 <option value="USD">USD</option>
                 <option value="RUB">RUB</option>
               </select>
+              {selectedReceiptIds.size === 1 && (() => {
+                const selId = [...selectedReceiptIds][0];
+                const grp = dupGroups.find(g => g.some(r => r.id === selId));
+                return (
+                  <button
+                    onClick={() => {
+                      if (!grp) { alert('У выбранной карточки нет копий — дубликаты не найдены (совпадение ищется по названию + дате + сумме).'); return; }
+                      setDupFocusId(selId); setShowDuplicates(false); setCurrentPage(1);
+                    }}
+                    disabled={!grp}
+                    title={grp
+                      ? `Показать группу дубликатов этой карточки: ${grp.length} шт. (оригинал + копии)`
+                      : 'У выбранной карточки нет копий'}
+                    style={{ background: grp ? '#e67e22' : '#bdc3c7', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: grp ? 'pointer' : 'not-allowed' }}
+                  >
+                    👯 Показать копии{grp ? ` (${grp.length})` : ''}
+                  </button>
+                );
+              })()}
               <button onClick={deselectAll} style={{ background: '#95a5a6', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}>Сбросить</button>
             </div>
           )}
@@ -3091,6 +3118,29 @@ function App() {
               )}
               <button
                 onClick={() => { setShowDuplicates(false); setCurrentPage(1); }}
+                style={{ background: '#95a5a6', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}
+              >
+                Показать все
+              </button>
+            </div>
+          )}
+
+          {dupFocusGroup && (
+            <div style={{ background: '#fdf2e3', border: '1px solid #f0c987', padding: '10px 15px', borderRadius: 8, marginBottom: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 14 }}>
+              <span>
+                👯 Дубликаты карточки <strong>«{(dupFocusReceipt && (dupFocusReceipt.store_name || dupFocusReceipt.store_name_ru)) || 'Без названия'}»</strong>: <strong>{dupFocusGroup.length}</strong> шт.
+                <span style={{ color: '#7f8c8d' }}> — оригинал помечен зелёным, копии красным</span>
+              </span>
+              {dupFocusGroup.length > 1 && (
+                <button
+                  onClick={() => setSelectedReceiptIds(new Set(dupFocusGroup.slice(1).map(r => r.id)))}
+                  style={{ background: '#e74c3c', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}
+                >
+                  Выбрать копии ({dupFocusGroup.length - 1})
+                </button>
+              )}
+              <button
+                onClick={() => { setDupFocusId(null); setCurrentPage(1); }}
                 style={{ background: '#95a5a6', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}
               >
                 Показать все
