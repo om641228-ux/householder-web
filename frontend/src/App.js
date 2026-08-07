@@ -911,6 +911,16 @@ function App() {
     setFolderResults([]);
     let creepTimer = null;
     try {
+      // -1. Сессия на бэкенде жива? (токены в памяти — перезапуск Railway их стирает;
+      // без проверки мы бы зря гоняли локальный OCR по минуте, а сохранение упало бы с 401)
+      try {
+        const me = await fetch(`${API_URL}/api/me?token=${token}`);
+        if (me.status === 401) {
+          alert('🖥 Локальный OCR: сессия на сервере истекла (backend перезапускался — сессии хранятся в памяти).\n\nНажмите «Выйти» и войдите заново, затем повторите.');
+          setRecognizing(false);
+          return;
+        }
+      } catch { /* сеть мигнула — продолжаем, сохранение само покажет ошибку */ }
       // 0. Ищем живой локальный сервер: свой URL (туннель) → прокси (8081) → напрямую (8080)
       const candidates = [...new Set([localOcrUrl, ...LOCAL_OCR_FALLBACK_URLS].filter(Boolean))];
       let localBase = null;
@@ -965,7 +975,16 @@ function App() {
       const text = res.text;
       let data;
       try { data = JSON.parse(text); } catch { throw new Error(`Сервер вернул ${res.status}: ${text.slice(0, 200)}`); }
-      if (!res.ok) throw new Error(data.error || `Ошибка сервера: ${res.status}`);
+      if (!res.ok) {
+        if (res.status === 401) {
+          alert('🖥 Локальный OCR: сессия на сервере истекла (backend перезапускался).\n\nНажмите «Выйти», войдите заново и повторите — локальный OCR уже отработал, осталось сохранить.');
+          setRecognizing(false);
+          setProgressStage(null);
+          setUploadProgress(0);
+          return;
+        }
+        throw new Error(data.error || `Ошибка сервера: ${res.status}`);
+      }
       if (!data.success && !data.id) throw new Error(data.error || 'Сохранение не удалось');
       const receiptData = data.data || data;
       if (receiptData.image_url) receiptData.image_url = fixImageUrl(receiptData.image_url);
@@ -2710,7 +2729,7 @@ function App() {
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-07 · v28.3 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
+              сборка 2026-08-07 · v28.4 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
               <button
                 onClick={configureLocalOcr}
                 title="Задать адрес локального OCR (HTTPS-туннель cloudflared)"
