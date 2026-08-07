@@ -1743,7 +1743,32 @@ function cleanLocalOcrTokens(text) {
   t = t.replace(/<\|ref\|>([\s\S]*?)<\|\/ref\|>/g, '$1'); // <|ref|>текст<|/ref|> → оставить текст
   t = t.replace(/<\|det\|>[\s\S]*?<\|\/det\|>/g, '');     // координатные блоки — выбросить целиком
   t = t.replace(/<\|[^|]+\|>/g, '');                      // прочие служебные токены модели
-  return t.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  t = t.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  // Схлопывание зациклившихся повторов: подряд идущие одинаковые строки — не больше двух
+  const lines = t.split('\n');
+  const out = [];
+  let prev = null, dups = 0;
+  for (const line of lines) {
+    const key = line.trim();
+    if (key && key === prev) {
+      dups++;
+      if (dups > 1) continue; // третью и дальше копию строки выбрасываем
+    } else {
+      dups = 0;
+      if (key) prev = key;
+    }
+    out.push(line);
+  }
+  return out.join('\n').trim();
+}
+
+// Признак «мусорного» OCR: модель зациклилась — почти все строки одинаковые
+// (кейс 2026-08-07: «(1) 1 января 2017 г.» × 30 на фото чека Media Markt)
+function isDegenerateOcrText(t) {
+  const lines = String(t).split('\n').map(l => l.trim()).filter(l => l.length > 3);
+  if (lines.length < 15) return false;
+  const uniq = new Set(lines).size;
+  return uniq / lines.length < 0.35;
 }
 
 app.post('/api/upload-ocr-text', upload.array('pages', 60), async (req, res) => {
@@ -1753,11 +1778,23 @@ app.post('/api/upload-ocr-text', upload.array('pages', 60), async (req, res) => 
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
     // Тексты страниц: ocr_texts (JSON-массив) или одиночный ocr_text
-    let pageTexts = [];
-    try { pageTexts = JSON.parse(req.body.ocr_texts || '[]'); } catch { pageTexts = []; }
-    if ((!Array.isArray(pageTexts) || !pageTexts.length) && req.body.ocr_text) pageTexts = [req.body.ocr_text];
-    if (!Array.isArray(pageTexts)) pageTexts = [];
-    pageTexts = pageTexts.map(t => cleanLocalOcrTokens(t)).filter(Boolean);
+    let rawTexts = [];
+    try { rawTexts = JSON.parse(req.body.ocr_texts || '[]'); } catch { rawTexts = []; }
+    if ((!Array.isArray(rawTexts) || !rawTexts.length) && req.body.ocr_text) rawTexts = [req.body.ocr_text];
+    if (!Array.isArray(rawTexts)) rawTexts = [];
+    // Защита от карточки-мусора: проверяем СЫРОЙ текст ДО схлопывания повторов
+    // (иначе схлопывание уничтожит «улики» зацикливания)
+    const badPages = rawTexts
+      .map((t, i) => isDegenerateOcrText(String(t || '').replace(/<\|det\|>[\s\S]*?<\|\/det\|>/g, '')) ? i + 1 : 0)
+      .filter(Boolean);
+    if (badPages.length) {
+      return res.status(422).json({
+        error: `Локальный OCR зациклился на стр. ${badPages.join(', ')} — в тексте одни повторы. ` +
+          'Сфотографируйте документ крупнее (чек — во весь кадр), при хорошем свете и без лишних предметов рядом, ' +
+          'или используйте облачную кнопку распознавания.'
+      });
+    }
+    const pageTexts = rawTexts.map(t => cleanLocalOcrTokens(t)).filter(Boolean);
     if (!pageTexts.length) {
       return res.status(400).json({ error: 'Пустой OCR-текст — локальная модель ничего не вернула' });
     }

@@ -7,8 +7,11 @@ const API_URL = 'https://householder-api-production.up.railway.app';
 // НАПРЯМУЮ — сервер и браузер на одном ноутбуке. localhost для браузера — доверенный
 // контекст, поэтому запросы с HTTPS-сайта на http://127.0.0.1 разрешены.
 // Порядок: 8081 = uocr-proxy.py (добавляет CORS/Private-Network-Access заголовки,
-// которых нет у llama-server — без них Chrome/Safari блокируют fetch), 8080 = напрямую
-const LOCAL_OCR_URLS = ['http://127.0.0.1:8081', 'http://127.0.0.1:8080'];
+// которых нет у llama-server — без них Chrome/Safari блокируют fetch), 8080 = напрямую.
+// Если браузер режет и это (Safari/Chrome блокируют HTTP с HTTPS-страницы даже на
+// 127.0.0.1) — пользователь поднимает HTTPS-туннель (cloudflared → прокси :8081) и
+// вставляет его URL через ⚙ рядом с кнопкой (хранится в localStorage 'localOcrUrl')
+const LOCAL_OCR_FALLBACK_URLS = ['http://127.0.0.1:8081', 'http://127.0.0.1:8080'];
 
 // Запасной список объектов на случай недоступности API (основной источник — GET /api/objects)
 const DEFAULT_OBJECTS = ['other', 'Duqe', 'Maria', 'Kit', 'Dubai', 'Tich', 'Иссера', 'Игорь', 'Лиза', 'Алехандро'];
@@ -443,6 +446,20 @@ function App() {
   const [scanResultOpen, setScanResultOpen] = useState(false);
   // По умолчанию — Kimi K3 (бывший дефолт Groq Llama 4 Scout снят Groq с поддержки)
   const [selectedModel, setSelectedModel] = useState('kimi-kimi-k3');
+  // Свой URL локального OCR (HTTPS-туннель cloudflared); пусто = авто 8081→8080
+  const [localOcrUrl, setLocalOcrUrl] = useState(() => {
+    try { return localStorage.getItem('localOcrUrl') || ''; } catch { return ''; }
+  });
+  const configureLocalOcr = () => {
+    const url = window.prompt(
+      'Адрес локального OCR-сервера.\n\nПусто = авто (прокси 127.0.0.1:8081 → llama-server :8080).\nЕсли браузер блокирует http://127.0.0.1 — поднимите HTTPS-туннель:\nbrew install cloudflared\ncloudflared tunnel --url http://127.0.0.1:8081\nи вставьте сюда выданный https://….trycloudflare.com',
+      localOcrUrl
+    );
+    if (url === null) return;
+    const v = url.trim().replace(/\/+$/, '');
+    try { v ? localStorage.setItem('localOcrUrl', v) : localStorage.removeItem('localOcrUrl'); } catch { /* приватный режим */ }
+    setLocalOcrUrl(v);
+  };
   const [currency, setCurrency] = useState('auto');
   const [docType, setDocType] = useState('auto');
   const [subtype, setSubtype] = useState('auto');
@@ -866,6 +883,14 @@ function App() {
       body: JSON.stringify({
         temperature: 0, // рецепт модели: temp 0 + промпт с <|grounding|> — иначе пустой вывод
         max_tokens: 8192,
+        // Анти-зацикливание: в vLLM-рецепте это n-gram logits processor (ngram 35/128),
+        // в llama.cpp его нет — ближайший аналог DRY: штрафует повторы длинных фрагментов,
+        // короткие легальные повторы чека (цены, «EUR») не страдают
+        repeat_penalty: 1.05,
+        dry_multiplier: 0.8,
+        dry_base: 1.75,
+        dry_allowed_length: 4,
+        dry_sequence_breakers: ['\n', ':', '"', ' '],
         messages: [{ role: 'user', content: [
           { type: 'text', text: '<|grounding|>Convert the document to markdown.' },
           { type: 'image_url', image_url: { url: dataUrl } }
@@ -886,9 +911,10 @@ function App() {
     setFolderResults([]);
     let creepTimer = null;
     try {
-      // 0. Ищем живой локальный сервер: сначала прокси (8081), потом напрямую (8080)
+      // 0. Ищем живой локальный сервер: свой URL (туннель) → прокси (8081) → напрямую (8080)
+      const candidates = [...new Set([localOcrUrl, ...LOCAL_OCR_FALLBACK_URLS].filter(Boolean))];
       let localBase = null;
-      for (const url of LOCAL_OCR_URLS) {
+      for (const url of candidates) {
         try {
           const ctrl = new AbortController();
           const t = setTimeout(() => ctrl.abort(), 4000);
@@ -899,7 +925,7 @@ function App() {
         } catch { /* пробуем следующий адрес */ }
       }
       if (!localBase) {
-        throw new Error('не отвечает на 127.0.0.1:8081 и :8080.\n\n1) Запустите llama-server:\n./build/bin/llama-server -m ./uocr/Unlimited-OCR-Q4_K_M.gguf --mmproj ./uocr/mmproj-Unlimited-OCR-F16.gguf -c 8192 --host 127.0.0.1 --port 8080\n\n2) Если сервер запущен, а ошибка остаётся (браузер блокирует запрос) — во втором окне терминала запустите прокси:\npython3 uocr-proxy.py');
+        throw new Error(`не отвечает (${candidates.join(', ')}).\n\n1) Запустите llama-server:\n./build/bin/llama-server -m ./uocr/Unlimited-OCR-Q4_K_M.gguf --mmproj ./uocr/mmproj-Unlimited-OCR-F16.gguf -c 8192 --host 127.0.0.1 --port 8080\n\n2) Во втором окне — прокси:\npython3 uocr-proxy.py\n\n3) Оба запущены, а ошибка остаётся (браузер режет http с HTTPS-страницы)? Поднимите HTTPS-туннель:\nbrew install cloudflared\ncloudflared tunnel --url http://127.0.0.1:8081\nи вставьте выданный https://….trycloudflare.com через ⚙ под кнопкой «Локально»`);
       }
       // 1. OCR каждой страницы — локально (0–70% прогресса)
       const texts = [];
@@ -2684,7 +2710,12 @@ function App() {
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-06 · v28.1 · локальный OCR
+              сборка 2026-08-07 · v28.3 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
+              <button
+                onClick={configureLocalOcr}
+                title="Задать адрес локального OCR (HTTPS-туннель cloudflared)"
+                style={{ marginLeft: 6, border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, padding: 0 }}
+              >⚙</button>
             </div>
           </div>
 
