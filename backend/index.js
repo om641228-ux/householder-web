@@ -763,6 +763,129 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
   return data;
 }
 
+// ========== ЧЕК/ФАКТУРА из готового OCR-текста (локальный OCR, v28.5) ==========
+// В отличие от buildDocumentSummaryPrompt (многостраничные документы, items: []),
+// здесь извлекаем ТОВАРЫ, дату, итог и все чековые поля — как vision-промпт buildReceiptPrompt.
+function buildReceiptTextPrompt(text, currency, docType) {
+  const currencyHint = currency === 'auto'
+    ? `Определи валюту АВТОМАТИЧЕСКИ: символы € → EUR, $ → USD, £ → GBP, ₽/руб → RUB, د.إ/Dhs → AED;
+       страна/адрес: Испания/Европа → EUR, ОАЭ → AED, США → USD, Россия → RUB; слова "IVA"/"IGIC" → EUR.
+       Верни ISO-код валюты.`
+    : `Валюта: ${currency}.`;
+  const docTypeHint = docType === 'auto'
+    ? 'Определи тип САМ по содержимому документа.'
+    : `Пользователь указал тип "${docType}" — но если по содержимому явно видно другое, укажи правильный.`;
+
+  return `Ты — эксперт по распознаванию чеков и фактур. Ниже дан ТЕКСТ документа, полученный OCR.
+Текст может содержать ошибки OCR и случайные повторы фрагментов — игнорируй дубликаты, восстанавливай смысл.
+Извлеки ВСЕ данные в строгом JSON формате.
+
+ВАЖНЫЕ ПРАВИЛА:
+1. Найди магазин (store_name — ВСЕГДА оригинальное название как напечатано, без перевода; перевод — в store_name_ru), дату (receipt_date в формате YYYY-MM-DD), время (receipt_time), итоговую сумму (total_amount).
+2. Найди ВСЕ товары — каждый товар это объект: name (оригинал), name_ru (перевод на русский), quantity (количество, если не указано — 1), price (цена за единицу), total (сумма за товар). Выведи КАЖДЫЙ товар, без пропусков.
+3. ${currencyHint}
+4. Если не уверен в значении — используй null, НЕ используй "Unknown" или 0 без причины.
+5. Дата: "20/03/2026" или "20.03.2026" → "2026-03-20". Суммы — точные числа без символов валют.
+6. Подытог (subtotal), налог (tax_amount), способ оплаты (payment_method), страна (country) — если есть.
+7. document_type — ОБЯЗАТЕЛЬНО одно из значений:
+   - "receipt" — кассовый чек, ticket, recibo, слип оплаты без юр. реквизитов.
+   - "invoice" — фактура: FACTURA / INVOICE, номер фактуры, NIF/VAT продавца. FACTURA SIMPLIFICADA — тоже "invoice".
+   - "bill" — периодический счёт за услуги: коммуналка (electricidad, agua, gas, basura), comunidad, телефон/интернет, подписки, аренда (даже если заголовок FACTURA — Iberdrola, Endesa, Telefónica...).
+   - "insurance" — страховка (póliza, recibo de seguro). "bank" — банковская выписка/перевод/комиссия.
+   - "contract" — договор. "municipality" — документы мэрии (Ayuntamiento). "tax" — налоговая (AEAT/Hacienda: IBI, IAE, modelo 303...).
+   - "proposal" — коммерческое предложение (presupuesto, oferta, cotización). "other" — всё остальное.
+   ${docTypeHint}
+8. Для bill / insurance / bank / contract / municipality / tax / proposal дополнительно:
+   - subtype — одно из: electricity, water, gas, internet, phone, comunidad, rent, waste, insurance_home, insurance_car, insurance_health, tax, other. Для receipt — null. AQUALIA / муниципальная вода → water; IBERDROLA / ENDESA / PODO / GEO Alternativa → electricity.
+   - provider — компания-поставщик/эмитент. valid_from / valid_to — период действия/счёта YYYY-MM-DD или null.
+   - invoice_number — номер фактуры/документа; contract_number — номер договора; supply_address — адрес поставки как напечатан; cups — код CUPS (ES0031...) или null; meter_number — номер счётчика или null; consumption — потребление ЧИСЛОМ или null; consumption_unit — "kWh"/"m3" или null.
+9. Объект недвижимости (object) по адресу поставки: "Reykjavik" → "Duqe"; "Callao" → "Maria"; "Alcojora" → "Kit"; обычный чек из магазина → null.
+
+ТЕКСТ ДОКУМЕНТА:
+"""
+${text}
+"""
+
+Верни ТОЛЬКО JSON, без markdown, без объяснений:
+{
+  "store_name": "MediaMarkt",
+  "store_name_ru": "МедиаМаркт",
+  "receipt_date": "2026-03-20",
+  "receipt_time": "15:14",
+  "total_amount": 944.96,
+  "subtotal": null,
+  "tax_amount": null,
+  "tax_rate": null,
+  "currency": "EUR",
+  "payment_method": null,
+  "country": "Spain",
+  "document_type": "invoice",
+  "subtype": null,
+  "provider": null,
+  "valid_from": null,
+  "valid_to": null,
+  "invoice_number": "FS E327-10/00110217",
+  "contract_number": null,
+  "supply_address": null,
+  "cups": null,
+  "meter_number": null,
+  "consumption": null,
+  "consumption_unit": null,
+  "object": null,
+  "items": [
+    { "name": "BROTHER MFD LASER MONO", "name_ru": "МФУ Brother лазерное", "quantity": 1, "price": 399.00, "total": 399.00 }
+  ]
+}`;
+}
+
+// Карточка чека/фактуры из готовых OCR-текстов страниц (v28.5):
+// чековая схема (с товарами) + те же запасные варианты, что у документного конвейера
+async function finalizeReceiptFromPageTexts(pageTexts, currency, docType) {
+  const pageCount = pageTexts.length;
+  const raw_text = pageCount > 1
+    ? pageTexts.map((t, i) => `══════ СТРАНИЦА ${i + 1} из ${pageCount} ══════\n${t}`).join('\n\n')
+    : pageTexts[0];
+
+  const ruTexts = await runWithConcurrency(pageTexts, async (t) => {
+    const ru = await translateRawText(t);
+    if (!ru || (looksLikeEmptySkeleton(ru) && !looksLikeEmptySkeleton(t))) return t;
+    return ru;
+  }, 3);
+  const raw_text_ru = pageCount > 1
+    ? ruTexts.map((t, i) => `══════ СТРАНИЦА ${i + 1} из ${pageCount} ══════\n${t}`).join('\n\n')
+    : ruTexts[0];
+
+  let data;
+  try {
+    data = parseAIResponse(await callTextChain(buildReceiptTextPrompt(raw_text.slice(0, 16000), currency, docType)));
+  } catch (e) {
+    console.error('Структурирование чека из OCR-текста не удалось:', e.message);
+    data = parseAIResponse('{}');
+  }
+  if (!data || typeof data !== 'object') data = {};
+  data.raw_text = raw_text;
+  data.raw_text_ru = raw_text_ru;
+  if (!data.object) data.object = detectObjectByAddress(data.supply_address, raw_text);
+  if (!Array.isArray(data.items)) data.items = [];
+  if (!data.store_name) {
+    const firstLines = String(pageTexts[0] || '').split('\n')
+      .map(l => l.trim())
+      .filter(l => l.length >= 4 && !l.startsWith('(') && !/^[|_\-—–+\s.:═]*$/.test(l))
+      .slice(0, 2);
+    if (firstLines.length) data.store_name = firstLines.join(' — ').slice(0, 90);
+  }
+  if (data.total_amount == null) {
+    const m = String(raw_text).match(/(?:общая\s+сумма|итого|всего\s+к\s+оплате|suma\s+total|importe\s+total|total\s+(?:a\s+pagar|factura|presupuesto)|total)\s*[:.\-]?\s*(\d[\d\s ]*[.,]\d{1,2}|\d[\d\s ]{1,12}\d)/i);
+    if (m) {
+      const n = parseAmountLike(m[1]);
+      if (n != null && n > 0 && n < 1e9) data.total_amount = n;
+    }
+  }
+  if (docType && docType !== 'auto') data.document_type = docType;
+  else if (!data.document_type) data.document_type = 'receipt';
+  return data;
+}
+
 // Общая сборка многостраничного документа из буферов страниц (PDF-страницы или изображения):
 // каждая страница — отдельный vision-запрос, затем общая финализация.
 // Если передан userId — все страницы также сохраняются в Storage (page_urls).
@@ -1743,6 +1866,11 @@ function cleanLocalOcrTokens(text) {
   t = t.replace(/<\|ref\|>([\s\S]*?)<\|\/ref\|>/g, '$1'); // <|ref|>текст<|/ref|> → оставить текст
   t = t.replace(/<\|det\|>[\s\S]*?<\|\/det\|>/g, '');     // координатные блоки — выбросить целиком
   t = t.replace(/<\|[^|]+\|>/g, '');                      // прочие служебные токены модели
+  // «Голые» координаты grounding (v28.5): llama.cpp вырезает спец-токены, остаётся
+  // "title [362, 86, 624, 119]MediaMarkt" — убираем префикс "<тип> [числа]", текст сохраняем
+  const coordRe = /\b(?:title|sub_title|subtitle|text|image|img|table|figure|chart|caption|header|footer|footnote|code|formula|equation|list|item|section|paragraph|page|line|word|logo|stamp|barcode|qrcode|doc_title)\s*\[{1,2}\s*\d[\d\s,.]*,[\d\s,.]*\]{1,2}/gi;
+  let prevT;
+  do { prevT = t; t = t.replace(coordRe, ''); } while (t !== prevT);
   t = t.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
   // Схлопывание зациклившихся повторов: подряд идущие одинаковые строки — не больше двух
   const lines = t.split('\n');
@@ -1759,7 +1887,15 @@ function cleanLocalOcrTokens(text) {
     }
     out.push(line);
   }
-  return out.join('\n').trim();
+  // Зацикленные БЛОКИ (v28.5): длинная строка (>=15 симв.), встретившаяся в тексте >2 раз, режется
+  // (кейс: шапка чека MediaMarkt продублирована моделью 5 раз с промежутками)
+  const seen = {};
+  return out.map(l => l.trimEnd()).filter(l => {
+    const s = l.trim();
+    if (!s || s.length < 15) return true;
+    seen[s] = (seen[s] || 0) + 1;
+    return seen[s] <= 2;
+  }).join('\n').trim();
 }
 
 // Признак «мусорного» OCR: модель зациклилась — почти все строки одинаковые
@@ -1805,8 +1941,11 @@ app.post('/api/upload-ocr-text', upload.array('pages', 60), async (req, res) => 
     const subtypeOverride = req.body.subtype && req.body.subtype !== 'auto' ? req.body.subtype : null;
     const paymentStatusOverride = sanitizePaymentStatus(req.body.payment_status);
 
-    // Карточка из текстов тем же конвейером: JSON-сводка полей + перевод по страницам
-    const receiptData = await finalizeDocumentFromPageTexts(pageTexts, currency, docType);
+    // Карточка из текстов (v28.5): 1-2 страницы — почти всегда чек/фактура → чековая схема
+    // С ТОВАРАМИ; 3+ страниц — документный конвейер (сводка полей без позиций)
+    const receiptData = pageTexts.length <= 2
+      ? await finalizeReceiptFromPageTexts(pageTexts, currency, docType)
+      : await finalizeDocumentFromPageTexts(pageTexts, currency, docType);
     receiptData.docType = docType === 'auto' ? (receiptData.document_type || 'receipt') : docType;
     receiptData.object = (object && object !== 'other') ? object : (receiptData.object || 'other');
     if (subtypeOverride) receiptData.subtype = subtypeOverride;
