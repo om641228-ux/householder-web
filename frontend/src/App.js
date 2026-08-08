@@ -708,6 +708,7 @@ function App() {
     return `${now.getFullYear()}-${Math.floor(now.getMonth() / 3) + 1}T`;
   });
   const [taxDraft, setTaxDraft] = useState(null);
+  const [taxFormPopup, setTaxFormPopup] = useState(null); // {form:'420'|'130', q:<квартал из taxDraft>} — попап заполненной модели (v30.2)
   const [taxShowOptional, setTaxShowOptional] = useState(false);
   // Диапазон кварталов для автозаполнения форм (v30.1): «с … по …»
   const [taxQFrom, setTaxQFrom] = useState('2025-1T');
@@ -2102,6 +2103,7 @@ function App() {
       const result420 = r2(igicRepercutido - igicSoportado);
       // Modelo 130 — нарастающим итогом с 1 января минус авансы прошлых кварталов
       const rendCum = r2(cum.ingresos - cum.gastos);
+      const cumIngresos = r2(cum.ingresos), cumGastos = r2(cum.gastos);
       const pagoCum = r2(Math.max(0, rendCum) * 0.20);
       const prev130 = paid130ByYear[y] || 0;
       const result130raw = r2(pagoCum - prev130);
@@ -2118,14 +2120,16 @@ function App() {
       const base420 = Math.max(0, result420), base130 = result130;
       const recargo = r2((base420 + base130) * recargoRate);
       const intereses = interestDays > 0 ? r2((base420 + base130) * 0.040625 * interestDays / 365) : 0;
-      return { y, q, key: `${y}-${q}T`, from, to, ingresos, gastos, igicSoportado, igicRepercutido, result420, rendCum, pagoCum, prev130, result130, dl, isLate, monthsLate, recargoRate, recargo, intereses, counts: quarter };
+      return { y, q, key: `${y}-${q}T`, from, to, ingresos, gastos, igicSoportado, igicRepercutido, result420, cumIngresos, cumGastos, rendCum, pagoCum, prev130, result130, dl, isLate, monthsLate, recargoRate, recargo, intereses, counts: quarter };
     });
     const tot = (f) => r2(quarters.reduce((s, x) => s + (x[f] || 0), 0));
+    const total420 = tot('result420'), total130 = tot('result130');
+    const totalRecargo = tot('recargo'), totalIntereses = tot('intereses');
     return {
       fromKey, toKey, igicRate: rate, quarters,
-      total420: tot('result420'), total130: tot('result130'),
-      totalRecargo: tot('recargo'), totalIntereses: tot('intereses'),
-      grandTotal: r2(tot('result420') + tot('result130') + tot('recargo') + tot('intereses')),
+      total420, total130, totalRecargo, totalIntereses,
+      // Отрицательный результат 420 — это «к компенсации», а не к оплате: в итог к оплате идут только положительные суммы
+      grandTotal: r2(Math.max(0, total420) + total130 + totalRecargo + totalIntereses),
       lateCount: quarters.filter(x => x.isLate && (x.result420 > 0 || x.result130 > 0)).length
     };
   };
@@ -2151,6 +2155,45 @@ function App() {
     lines.push(`  ══ ВСЕГО К ОПЛАТЕ:               ${f(d.grandTotal)} € ══`);
     if (d.lateCount) lines.push(`  (просрочено кварталов: ${d.lateCount}; расчёт санкций — при добровольной подаче ДО требования AEAT; при требовании штраф 50–150%)`);
     return lines.join('\n');
+  };
+
+  // Текст ОДНОЙ заполненной модели (420 или 130) за конкретный квартал — для попапа и скачивания (v30.2)
+  const buildSingleTaxFormText = (form, x, d) => {
+    const f = n => Number(n || 0).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const lines = [`MODELO ${form} — ${form === '420' ? 'IGIC' : 'IRPF'} · ${x.key} — автозаполнено из банка (${new Date().toLocaleString('ru-RU')})`,
+      `(движения ${x.from}…${x.to}: ${x.counts.incCount} поступлений, ${x.counts.outInvCount} расходов с фактурой из ${x.counts.outCount})`,
+      '(Помощник для переноса цифр в веб-форму — НЕ официальный документ. Проверьте цифры!)', ''];
+    if (form === '420') {
+      lines.push(`  Casilla 01 — Налогооблагаемая база (Base imponible), тип ${d.igicRate}%:  ${f(x.ingresos)}`);
+      lines.push(`  Casilla 06 — Начисленный сбор (Cuota devengada):                          ${f(x.igicRepercutido)}`);
+      lines.push(`  Casilla 11 — Всего начислено (Total devengado):                          ${f(x.igicRepercutido)}`);
+      lines.push(`  Casilla 12 — IGIC к вычету по фактурам (IGIC deducible):               ${f(x.igicSoportado)}`);
+      lines.push(`  Casilla 17 — Всего к вычету (Total a deducir):                         ${f(x.igicSoportado)}`);
+      lines.push(`  Casilla 18 — Разница (Diferencia):                                     ${f(x.result420)}`);
+      lines.push(`  Casilla 20 — Результат (Resultado):                                    ${f(x.result420)}`);
+      lines.push(x.result420 >= 0 ? `  → К УПЛАТЕ (A INGRESAR): ${f(x.result420)} €` : `  → К КОМПЕНСАЦИИ в следующих кварталах (A COMPENSAR): ${f(Math.abs(x.result420))} €`);
+    } else {
+      lines.push(`  (нарастающим итогом с 1 января ${x.y} — при необходимости поправьте!)`);
+      lines.push(`  Casilla 01 — Облагаемые доходы (Ingresos computables):       ${f(x.cumIngresos)}`);
+      lines.push(`  Casilla 02 — Вычитаемые расходы (Gastos deducibles):         ${f(x.cumGastos)}`);
+      lines.push(`  Casilla 03 — Чистый доход (Rendimiento neto):                ${f(x.rendCum)}`);
+      lines.push(`  Casilla 04 — 20%:                                            ${f(x.pagoCum)}`);
+      lines.push(`  Casilla 05 — Авансы прошлых кварталов (Pagos anteriores):    ${f(x.prev130)}`);
+      lines.push(`  Casilla 07 — Результат (Resultado):                          ${f(x.result130)}`);
+      lines.push(`  → К УПЛАТЕ (A INGRESAR): ${f(x.result130)} €`);
+    }
+    if (x.isLate && (x.result420 > 0 || x.result130 > 0)) {
+      lines.push('');
+      lines.push(`  ⚠ ПРОСРОЧЕНО (дедлайн ${x.dl.toLocaleDateString('ru-RU')}, ${x.monthsLate} мес.): надбавка recargo ${(x.recargoRate * 100).toFixed(0)}% = ${f(x.recargo)} · пени intereses = ${f(x.intereses)}`);
+    }
+    return lines.join('\n');
+  };
+
+  // Галка «есть фактура» внутри модалки черновика: сохраняем и сразу пересчитываем весь диапазон (v30.2)
+  const toggleInvoiceFlagAndRecalc = async (m) => {
+    await toggleInvoiceFlag(m);
+    const mvts = await loadBankMovements();
+    if (mvts && mvts.length) setTaxDraft(prev => prev ? computeTaxRange(prev.fromKey, prev.toKey, prev, mvts) : prev);
   };
 
   const bulkChangeSubtype = async (newSubtype) => {
@@ -3156,7 +3199,7 @@ function App() {
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-08 · v30.1 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
+              сборка 2026-08-08 · v30.2 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
               <button
                 onClick={configureLocalOcr}
                 title="Задать адрес локального OCR (HTTPS-туннель cloudflared)"
@@ -4060,12 +4103,45 @@ function App() {
                           ))}
                         </div>
                         <div style={{ fontSize: 13, lineHeight: 1.5 }}>
-                          <div>📄 <strong>Modelo 420</strong> (IGIC): cuota {formatAmount(x.igicRepercutido, 'EUR')} − deducible {formatAmount(x.igicSoportado, 'EUR')} = <strong>{formatAmount(x.result420, 'EUR')}</strong></div>
-                          <div>📄 <strong>Modelo 130</strong> (IRPF, нарастающим): рендимьенто {formatAmount(x.rendCum, 'EUR')} × 20% − авансы {formatAmount(x.prev130, 'EUR')} = <strong>{formatAmount(x.result130, 'EUR')}</strong></div>
+                          <div role="button" onClick={() => setTaxFormPopup({ form: '420', q: x })} title="Открыть заполненную modelo 420"
+                            style={{ cursor: 'pointer', borderRadius: 6, padding: '3px 6px', marginLeft: -6 }}
+                            onMouseEnter={e => e.currentTarget.style.background = '#f4ecf7'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                            📄 <strong style={{ color: '#8e44ad', textDecoration: 'underline dotted' }}>Modelo 420</strong> (IGIC): cuota {formatAmount(x.igicRepercutido, 'EUR')} − deducible {formatAmount(x.igicSoportado, 'EUR')} = <strong>{formatAmount(x.result420, 'EUR')}</strong>
+                            {x.result420 < 0 && <span style={{ fontSize: 12, color: '#1e8449' }}> → к компенсации</span>}
+                          </div>
+                          <div role="button" onClick={() => setTaxFormPopup({ form: '130', q: x })} title="Открыть заполненную modelo 130"
+                            style={{ cursor: 'pointer', borderRadius: 6, padding: '3px 6px', marginLeft: -6 }}
+                            onMouseEnter={e => e.currentTarget.style.background = '#f4ecf7'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                            📄 <strong style={{ color: '#8e44ad', textDecoration: 'underline dotted' }}>Modelo 130</strong> (IRPF, нарастающим): рендимьенто {formatAmount(x.rendCum, 'EUR')} × 20% − авансы {formatAmount(x.prev130, 'EUR')} = <strong>{formatAmount(x.result130, 'EUR')}</strong>
+                          </div>
                           {late && (
                             <div style={{ color: '#c0392b', fontWeight: 700, background: '#fdecea', borderRadius: 6, padding: '6px 8px', marginTop: 6 }}>
                               ⚠ ПРОСРОЧЕНО (дедлайн {x.dl.toLocaleDateString('ru-RU')}, {x.monthsLate} мес.): штраф-надбавка recargo {(x.recargoRate * 100).toFixed(0)}% = {formatAmount(x.recargo, 'EUR')}{x.intereses > 0 ? ` + пени intereses = ${formatAmount(x.intereses, 'EUR')}` : ' (пени начнутся с 13-го месяца просрочки)'}
                             </div>
+                          )}
+                          {/* Галки «есть фактура» по платежам ЭТОГО квартала — прямо в модалке (v30.2) */}
+                          {x.counts.outCount > 0 && (
+                            <details style={{ marginTop: 8 }}>
+                              <summary style={{ cursor: 'pointer', fontSize: 13, color: '#555' }}>
+                                💶 Платежи квартала — отметьте, по каким есть фактура ({x.counts.outInvCount} из {x.counts.outCount})
+                              </summary>
+                              <div style={{ marginTop: 4, maxHeight: 220, overflow: 'auto', border: '1px solid #eee', borderRadius: 6, padding: '4px 8px' }}>
+                                {bankMovements
+                                  .filter(m => Number(m.amount) < 0 && m.operation_date && m.operation_date >= x.from && m.operation_date <= x.to)
+                                  .map(m => (
+                                    <div key={m.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '4px 0', borderBottom: '1px solid #f5f5f5', fontSize: 12, flexWrap: 'wrap' }}>
+                                      <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontWeight: 700, color: m.has_invoice ? '#1e8449' : '#95a5a6' }}>
+                                        <input type="checkbox" checked={!!m.has_invoice} onChange={() => toggleInvoiceFlagAndRecalc(m)} />
+                                        📄 фактура
+                                      </label>
+                                      <span style={{ color: '#7f8c8d', minWidth: 86 }}>{m.operation_date}</span>
+                                      <span style={{ flex: '1 1 160px' }}>{m.counterparty || m.concept || '—'}</span>
+                                      <span style={{ fontWeight: 700, color: '#c0392b' }}>{formatAmount(Math.abs(Number(m.amount)), 'EUR')}</span>
+                                    </div>
+                                  ))}
+                                <div style={{ fontSize: 11, color: '#95a5a6', padding: '4px 0' }}>Галка сразу сохраняется и пересчитывает весь черновик.</div>
+                              </div>
+                            </details>
                           )}
                         </div>
                       </div>
@@ -4075,7 +4151,9 @@ function App() {
                   {/* СУММА К ОПЛАТЕ — отдельный красный блок */}
                   <div style={{ background: '#fdecea', border: '2px solid #c0392b', borderRadius: 10, padding: '12px 16px', marginBottom: 12 }}>
                     <div style={{ fontSize: 14, display: 'grid', gap: 4 }}>
-                      <div>IGIC (modelo 420) к оплате: <strong>{formatAmount(taxDraft.total420, 'EUR')}</strong></div>
+                      <div>IGIC (modelo 420) к оплате: <strong>{formatAmount(Math.max(0, taxDraft.total420), 'EUR')}</strong>
+                        {taxDraft.total420 < 0 && <span style={{ fontSize: 12, color: '#1e8449' }}> (ещё {formatAmount(Math.abs(taxDraft.total420), 'EUR')} к компенсации в следующих кварталах — a compensar)</span>}
+                      </div>
                       <div>IRPF (modelo 130) к оплате: <strong>{formatAmount(taxDraft.total130, 'EUR')}</strong></div>
                       <div>Штраф-надбавка (recargo): <strong style={{ color: taxDraft.totalRecargo > 0 ? '#c0392b' : 'inherit' }}>{formatAmount(taxDraft.totalRecargo, 'EUR')}</strong></div>
                       <div>Пени (intereses de demora): <strong style={{ color: taxDraft.totalIntereses > 0 ? '#c0392b' : 'inherit' }}>{formatAmount(taxDraft.totalIntereses, 'EUR')}</strong></div>
@@ -4102,6 +4180,40 @@ function App() {
                 </div>
               </div>
             )}
+
+            {/* ПОПАП ОДНОЙ ЗАПОЛНЕННОЙ МОДЕЛИ (клик по «Modelo 420/130» в карточке квартала, v30.2) */}
+            {taxFormPopup && taxDraft && (() => {
+              // после пересчёта (галка «фактура») берём свежий объект квартала из черновика
+              const x = taxDraft.quarters.find(q => q.key === taxFormPopup.q.key) || taxFormPopup.q;
+              const form = taxFormPopup.form;
+              return (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 1300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+                  onClick={() => setTaxFormPopup(null)}>
+                  <div style={{ background: '#fff', borderRadius: 12, maxWidth: 640, width: '100%', maxHeight: '85vh', overflow: 'auto', padding: 20 }} onClick={e => e.stopPropagation()}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                      <h3 style={{ margin: 0 }}>{form === '420' ? '📄 Modelo 420 — IGIC' : '📄 Modelo 130 — IRPF'} · {x.key.replace('-', ' · ')}</h3>
+                      <button onClick={() => setTaxFormPopup(null)} style={{ border: 'none', background: '#eee', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>✖</button>
+                    </div>
+                    <pre style={{ background: '#f8f9fa', border: '1px solid #e0e0e0', borderRadius: 8, padding: 12, fontSize: 13, whiteSpace: 'pre-wrap', margin: '0 0 12px' }}>{buildSingleTaxFormText(form, x, taxDraft)}</pre>
+                    {(form === '420' ? Math.max(0, x.result420) : x.result130) > 0 && (
+                      <div style={{ background: '#fdecea', border: '2px solid #c0392b', borderRadius: 8, padding: '8px 14px', marginBottom: 12, color: '#c0392b', fontWeight: 800, fontSize: 18 }}>
+                        💶 К ОПЛАТЕ: {formatAmount(form === '420' ? Math.max(0, x.result420) : x.result130, 'EUR')}
+                        {x.isLate && (x.recargo > 0 || x.intereses > 0) && <span style={{ fontSize: 13, fontWeight: 700 }}> + штраф {formatAmount(x.recargo, 'EUR')} + пени {formatAmount(x.intereses, 'EUR')}</span>}
+                      </div>
+                    )}
+                    {form === '420' && x.result420 < 0 && (
+                      <div style={{ background: '#eafaf1', border: '2px solid #27ae60', borderRadius: 8, padding: '8px 14px', marginBottom: 12, color: '#1e8449', fontWeight: 700, fontSize: 15 }}>
+                        ↩ К компенсации в следующих кварталах (a compensar): {formatAmount(Math.abs(x.result420), 'EUR')}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button onClick={() => downloadTextFile(`modelo-${form}-${x.key}.txt`, buildSingleTaxFormText(form, x, taxDraft))}
+                        style={{ background: '#27ae60', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}>⬇ Скачать эту форму (.txt)</button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         );
       })()}
