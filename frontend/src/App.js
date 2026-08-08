@@ -462,6 +462,10 @@ function App() {
   };
   const [currency, setCurrency] = useState('auto');
   const [docType, setDocType] = useState('auto');
+  // Режим обработки НЕСКОЛЬКИХ страниц (v29.1):
+  // auto — AI сам решает (classify-pages); separate — каждая страница в свою карточку;
+  // single — все страницы = ОДИН документ (договор, эскритура)
+  const [multiPageMode, setMultiPageMode] = useState('auto');
   const [subtype, setSubtype] = useState('auto');
   const [paymentStatus, setPaymentStatus] = useState(''); // '' = статус оплаты не указан
   const [object, setObject] = useState('other');
@@ -939,6 +943,48 @@ function App() {
       if (!localBase) {
         throw new Error(`не отвечает (${candidates.join(', ')}).\n\n1) Запустите llama-server:\n./build/bin/llama-server -m ./uocr/Unlimited-OCR-Q4_K_M.gguf --mmproj ./uocr/mmproj-Unlimited-OCR-F16.gguf -c 8192 --host 127.0.0.1 --port 8080\n\n2) Во втором окне — прокси:\npython3 uocr-proxy.py\n\n3) Оба запущены, а ошибка остаётся (браузер режет http с HTTPS-страницы)? Поднимите HTTPS-туннель:\nbrew install cloudflared\ncloudflared tunnel --url http://127.0.0.1:8081\nи вставьте выданный https://….trycloudflare.com через ⚙ под кнопкой «Локально»`);
       }
+      // Режим «по страницам» (v29.1): каждая страница — ОТДЕЛЬНАЯ карточка
+      if (multiPageMode === 'separate' && selectedFiles.length > 1) {
+        const results = [];
+        for (let i = 0; i < selectedFiles.length; i++) {
+          let f = selectedFiles[i];
+          setProgressStage('local');
+          setUploadProgress(Math.round((i / selectedFiles.length) * 100));
+          try {
+            if (f.size > MAX_FILE_SIZE_MB * 1024 * 1024) f = await compressImageFile(f);
+            const ocrText = await ocrPageLocal(f, localBase);
+            const fd = new FormData();
+            fd.append('pages', f);
+            fd.append('ocr_texts', JSON.stringify([ocrText]));
+            fd.append('currency', currency);
+            fd.append('docType', docType);
+            fd.append('subtype', subtype);
+            fd.append('payment_status', paymentStatus);
+            fd.append('object', object);
+            fd.append('token', token);
+            setProgressStage('recognize');
+            const res = await fetch(`${API_URL}/api/upload-ocr-text?token=${token}`, { method: 'POST', body: fd });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || (!data.success && !data.id)) throw new Error(data.error || `Ошибка сервера: ${res.status}`);
+            const rd = data.data || data;
+            if (rd.image_url) rd.image_url = fixImageUrl(rd.image_url);
+            results.push({ file: f.name, status: 'success', receipt: rd });
+          } catch (err) {
+            results.push({ file: f.name, status: 'error', error: err.message });
+          }
+          setFolderResults([...results]);
+        }
+        const okCount = results.filter(r => r.status === 'success').length;
+        const errCount = results.filter(r => r.status === 'error').length;
+        const lastOk = [...results].reverse().find(r => r.status === 'success');
+        if (lastOk) setLastSavedReceipt(lastOk.receipt);
+        loadReceipts();
+        alert(`🖥 Локальный OCR — режим «по страницам»:\n\n✅ Сохранено карточек: ${okCount}` + (errCount ? `\n❌ Ошибок: ${errCount} (детали — в списке ниже)` : ''));
+        setRecognizing(false);
+        setProgressStage(null);
+        setUploadProgress(0);
+        return;
+      }
       // 1. OCR каждой страницы — локально (0–70% прогресса)
       const texts = [];
       const uploadFiles = [];
@@ -1002,9 +1048,22 @@ function App() {
   };
 
   const recognizeAndSave = async (fileArg) => {
-    // Без явного файла и при выбранных нескольких — умный разбор: AI решает,
-    // отдельные это документы (каждый в свою карточку) или страницы одного
+    // Без явного файла и при выбранных нескольких — смотрим РЕЖИМ (v29.1):
+    // auto — умный разбор (AI решает сам); separate — каждая в свою карточку;
+    // single — все страницы в один документ (договор)
     if (!(fileArg instanceof File) && selectedFiles.length > 1) {
+      if (multiPageMode === 'separate') {
+        setFolderProgress({ active: true, phase: 'recognizing', current: 0, total: selectedFiles.length, success: 0, errors: 0, retries: 0, currentFile: '', fileRatio: 0 });
+        setFolderResults([]);
+        const results = await recognizeFilesSequentially(selectedFiles);
+        const okCount = results.filter(r => r.status === 'success').length;
+        const errCount = results.filter(r => r.status === 'error').length;
+        alert(`📄 Режим «по страницам»: каждая страница — отдельная карточка.\n\n✅ Сохранено карточек: ${okCount}` + (errCount ? `\n❌ Ошибок: ${errCount} (детали — в списке ниже)` : ''));
+        return;
+      }
+      if (multiPageMode === 'single') {
+        return recognizeDocumentPages(selectedFiles);
+      }
       return recognizeSelectedFilesSmart(selectedFiles);
     }
     const file = (fileArg instanceof File) ? fileArg : selectedFiles[currentFileIndex];
@@ -2681,6 +2740,14 @@ function App() {
                   {objectsList.map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
               </div>
+              <div className="control-group compact" title="Как обрабатывать несколько выбранных страниц/файлов: Авто — AI сам решит; По страницам — каждая в свою карточку; Один документ — все страницы склеиваются в одну карточку (договор, эскритура)">
+                <label>Режим:</label>
+                <select value={multiPageMode} onChange={e => setMultiPageMode(e.target.value)}>
+                  <option value="auto">🤖 Авто (AI)</option>
+                  <option value="separate">📄 По страницам</option>
+                  <option value="single">📑 Один документ</option>
+                </select>
+              </div>
             </div>
           </div>
 
@@ -2737,7 +2804,7 @@ function App() {
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-08 · v29 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
+              сборка 2026-08-08 · v29.1 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
               <button
                 onClick={configureLocalOcr}
                 title="Задать адрес локального OCR (HTTPS-туннель cloudflared)"
@@ -2781,7 +2848,11 @@ function App() {
                     )}
                     {selectedFiles.length > 1 && (
                       <p style={{ fontSize: 12, color: '#2980b9', marginTop: 4, fontWeight: 600 }}>
-                        {selectedFiles.length} файлов → распознаются как СТРАНИЦЫ ОДНОГО документа
+                        {selectedFiles.length} файлов → {multiPageMode === 'separate'
+                          ? 'КАЖДАЯ страница — в СВОЮ карточку'
+                          : multiPageMode === 'single'
+                            ? 'СТРАНИЦЫ ОДНОГО документа (одна карточка)'
+                            : 'AI сам решит: отдельные документы или страницы одного'}
                       </p>
                     )}
                   </div>
