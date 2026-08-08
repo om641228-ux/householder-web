@@ -38,6 +38,12 @@ body {
   font-size: 15px;
   line-height: 1.45;
 }
+
+/* Серая подложка во весь экран во всех окнах */
+html, body, #root, .App {
+  background: var(--apple-bg) !important;
+  min-height: 100vh;
+}
 h1, h2, h3, h4,
 .result-panel-header, .receipt-header, .modal-header, .model-modal-header {
   font-family: var(--apple-font) !important;
@@ -59,17 +65,21 @@ a:hover { text-decoration: underline; }
 *::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.38); }
 * { scrollbar-width: thin; scrollbar-color: rgba(0, 0, 0, 0.22) transparent; }
 
-/* ---------- Кнопки: пилюли, микро-анимации, фокус-кольцо ---------- */
-button {
+/* ---------- Кнопки: единый серый градиент, пилюли, микро-анимации ---------- */
+button, .btn-folder {
   font-family: var(--apple-font);
   letter-spacing: -0.01em;
   cursor: pointer;
+  background: linear-gradient(180deg, #ffffff 0%, #ececf0 100%) !important;
+  color: #1d1d1f !important;
+  border: 1px solid #c7c7cc !important;
+  border-radius: 999px !important;
   transition: transform 0.16s ease, box-shadow 0.2s ease, filter 0.18s ease,
     background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
   -webkit-tap-highlight-color: transparent;
 }
-button:hover:not(:disabled) { filter: brightness(1.06); transform: translateY(-1px); }
-button:active:not(:disabled) { transform: scale(0.97); filter: brightness(0.96); }
+button:hover:not(:disabled), .btn-folder:hover { filter: brightness(1.03); transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.10); }
+button:active:not(:disabled), .btn-folder:active { transform: scale(0.97); filter: brightness(0.97); }
 button:disabled { opacity: 0.45; cursor: default; }
 button:focus-visible {
   outline: none;
@@ -82,10 +92,10 @@ input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="r
 select,
 textarea {
   font-family: var(--apple-font);
-  background: var(--apple-card);
-  border: 1px solid var(--apple-border);
-  border-radius: 10px;
-  color: var(--apple-text);
+  background: var(--apple-card) !important;
+  border: 1px solid var(--apple-border) !important;
+  border-radius: 10px !important;
+  color: var(--apple-text) !important;
   transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
 input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]):focus,
@@ -97,43 +107,43 @@ textarea:focus {
 }
 input[type="checkbox"], input[type="radio"] { accent-color: var(--apple-blue); }
 
-/* ---------- Шапка (меню): графитово-серый градиент как в pro-разделах apple.com ---------- */
+/* ---------- Шапка (меню): светло-серый градиент, чёрный шрифт ---------- */
 .App { color: var(--apple-text); }
 .mini-header {
-  background: linear-gradient(180deg, #4a4a4d 0%, #323234 55%, #1d1d1f 100%) !important;
-  color: #f5f5f7 !important;
+  background: linear-gradient(180deg, #ffffff 0%, #f0f0f3 55%, #e4e4e8 100%) !important;
+  color: #1d1d1f !important;
   -webkit-backdrop-filter: blur(14px) saturate(1.5);
   backdrop-filter: blur(14px) saturate(1.5);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.22);
+  border-bottom: 1px solid #d2d2d7 !important;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.08);
 }
-.mini-header .user-name { color: #d2d2d7 !important; font-weight: 500; }
-.mini-header .model-active-name { color: #f5f5f7 !important; }
+.mini-header .user-name { color: #3a3a3c !important; font-weight: 500; }
+.mini-header .model-active-name { color: #1d1d1f !important; }
 .mini-header .model-toggle-btn {
-  background: rgba(255, 255, 255, 0.14) !important;
-  color: #f5f5f7 !important;
-  border: 1px solid rgba(255, 255, 255, 0.24) !important;
+  background: linear-gradient(180deg, #ffffff, #ececf0) !important;
+  color: #1d1d1f !important;
+  border: 1px solid #c7c7cc !important;
   border-radius: 999px !important;
   font-weight: 500;
 }
 .mini-header .logout-btn {
-  border: 1px solid rgba(255, 255, 255, 0.24) !important;
+  border: 1px solid #c7c7cc !important;
   border-radius: 999px !important;
-  background: rgba(255, 255, 255, 0.14) !important;
-  color: #f5f5f7 !important;
+  background: linear-gradient(180deg, #ffffff, #ececf0) !important;
+  color: #1d1d1f !important;
   padding: 7px 16px !important;
   font-weight: 500;
 }
 
-/* Экран входа — тот же графитовый градиент */
+/* Экран входа — тот же светло-серый градиент */
 .login-box {
-  background: linear-gradient(180deg, #4a4a4d 0%, #2c2c2e 60%, #1d1d1f 100%) !important;
-  color: #f5f5f7 !important;
-  border: 1px solid rgba(255, 255, 255, 0.10) !important;
+  background: linear-gradient(180deg, #ffffff 0%, #ececf0 100%) !important;
+  color: #1d1d1f !important;
+  border: 1px solid #d2d2d7 !important;
   border-radius: var(--apple-radius-lg) !important;
   box-shadow: var(--apple-shadow-lg) !important;
 }
-.login-box h1, .login-box h2, .login-box h3, .login-box label, .login-box p { color: #f5f5f7 !important; }
+.login-box h1, .login-box h2, .login-box h3, .login-box label, .login-box p { color: #1d1d1f !important; }
 
 /* ---------- Вкладки: сегмент-контрол как в iOS/macOS ---------- */
 .tabs-inline {
@@ -159,11 +169,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--apple-blue); }
   font-weight: 600;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.04) !important;
 }
-/* Сегмент-контрол на тёмном меню */
-.mini-header .tabs-inline { background: rgba(255, 255, 255, 0.14) !important; }
-.mini-header .tabs-inline button { color: #d2d2d7 !important; }
-.mini-header .tabs-inline button:hover:not(:disabled) { color: #f5f5f7 !important; }
-.mini-header .tabs-inline button.active { background: #f5f5f7 !important; color: #1d1d1f !important; }
+/* Сегмент-контрол на светлом меню — обычная серая капсула */
+.mini-header .tabs-inline { background: var(--apple-fill) !important; }
+.mini-header .tabs-inline button { color: var(--apple-gray) !important; background: transparent !important; border: none !important; }
+.mini-header .tabs-inline button:hover:not(:disabled) { color: var(--apple-text) !important; }
+.mini-header .tabs-inline button.active { background: var(--apple-card) !important; color: var(--apple-text) !important; }
 
 /* ---------- Карточки и панели ---------- */
 .info-block,
@@ -205,7 +215,14 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--apple-blue); }
 }
 .btn-folder:hover { transform: translateY(-1px); filter: brightness(1.06); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14); }
 .btn-folder:active { transform: scale(0.97); }
-.recognize-main-btn { border-radius: 999px !important; font-weight: 600 !important; }
+/* Крупные/акцентные кнопки из App.css — тоже серый градиент */
+.recognize-main-btn, .danger, .model-refresh-btn {
+  background: linear-gradient(180deg, #ffffff 0%, #ececf0 100%) !important;
+  color: #1d1d1f !important;
+  border: 1px solid #c7c7cc !important;
+  border-radius: 999px !important;
+  font-weight: 600 !important;
+}
 
 /* ---------- Бейджи: пилюли ---------- */
 .provider-badge, .type-badge {

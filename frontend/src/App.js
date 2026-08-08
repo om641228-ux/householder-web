@@ -2601,9 +2601,9 @@ function App() {
             borderRadius: 6,
             marginBottom: 12,
             fontSize: 13,
-            background: serverStatus === 'ok' ? '#d4edda' : serverStatus === 'error' ? '#f8d7da' : '#fff3cd',
-            color: serverStatus === 'ok' ? '#155724' : serverStatus === 'error' ? '#721c24' : '#856404',
-            border: `1px solid ${serverStatus === 'ok' ? '#c3e6cb' : serverStatus === 'error' ? '#f5c6cb' : '#ffeeba'}`
+            background: 'linear-gradient(180deg,#ffffff,#ececf0)',
+            color: '#1d1d1f',
+            border: '1px solid #c7c7cc'
           }}>
             {serverStatus === 'checking' && '⏳ Проверка сервера...'}
             {serverStatus === 'ok' && '✅ Сервер доступен'}
@@ -2665,13 +2665,13 @@ function App() {
       </header>
 
       {backendInfo && !String(backendInfo.version || '').includes('2026-08-04.22') && (
-        <div style={{ background: '#fdecea', border: '1px solid #e74c3c', color: '#c0392b', padding: '10px 16px', borderRadius: 8, margin: '10px 15px', fontSize: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ background: 'linear-gradient(180deg,#ffffff,#ececf0)', border: '1px solid #c7c7cc', color: '#1d1d1f', padding: '10px 16px', borderRadius: 12, margin: '10px 15px', fontSize: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <strong> Бэкенд устарел!</strong>
           <span>
             На householder-api сейчас: <code>{backendInfo.version || backendInfo.error || 'старая версия (до diagnostics)'}</code>, нужна: <code>2026-08-04.22</code>.
             Задеплой свежий index.js (Railway → householder-api → Deploy latest commit), иначе перевод не заработает.
           </span>
-          <button onClick={() => setBackendInfo(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', color: '#c0392b' }}>✕</button>
+          <button onClick={() => setBackendInfo(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', fontSize: 16, cursor: 'pointer', color: '#1d1d1f' }}>✕</button>
         </div>
       )}
 
@@ -2931,7 +2931,7 @@ function App() {
                 })()}
               <div className="modal-info">
                 {editMode && (
-                  <div className="info-block" style={{ background: '#fdf6ec', border: '1px solid #f0e0c0' }}>
+                  <div className="info-block">
                     <h3>✏️ Редактирование</h3>
                     {(() => {
                       const ls = { display: 'flex', flexDirection: 'column', fontSize: 11, color: '#7f8c8d', gap: 3 };
@@ -3235,7 +3235,7 @@ function App() {
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-08 · v31.1 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
+              сборка 2026-08-08 · v31.2 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
               <button
                 onClick={configureLocalOcr}
                 title="Задать адрес локального OCR (HTTPS-туннель cloudflared)"
@@ -3488,7 +3488,7 @@ function App() {
           </div>
 
           {selectedReceiptIds.size > 0 && (
-            <div style={{ background: '#fff3cd', padding: '12px 15px', borderRadius: 8, marginBottom: 15, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <div style={{ background: 'linear-gradient(180deg,#ffffff,#ececf0)', border: '1px solid #d2d2d7', padding: '12px 15px', borderRadius: 12, marginBottom: 15, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
               <span> Выбрано: <strong>{selectedReceiptIds.size}</strong></span>
               {user?.role === 'admin' && (
                 <button onClick={bulkDelete} style={{ background: '#e74c3c', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}> Удалить</button>
@@ -3605,7 +3605,7 @@ function App() {
           </div>
 
           {showDuplicates && (
-            <div style={{ background: '#fdecea', border: '1px solid #f5b7b1', padding: '10px 15px', borderRadius: 8, marginBottom: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 14 }}>
+            <div style={{ background: 'linear-gradient(180deg,#ffffff,#ececf0)', border: '1px solid #d2d2d7', padding: '10px 15px', borderRadius: 12, marginBottom: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 14 }}>
               <span>
                 Найдено групп дубликатов: <strong>{dupGroups.length}</strong>, лишних копий: <strong>{dupCopyIds.size}</strong>
                 <span style={{ color: '#7f8c8d' }}> — оригиналы помечены зелёным, копии красным</span>
@@ -3779,9 +3779,9 @@ function App() {
             const unmatchedOut = out.filter(m => !m.matched_receipt_id);
             const unpaidBills = receipts.filter(r => ['bill', 'invoice'].includes(r.document_type) && !r.bank_movement_id && r.payment_status !== 'paid');
             const stat = (label, value, color, bg) => (
-              <div key={label} style={{ flex: '1 1 150px', background: bg, border: `1px solid ${color}`, borderRadius: 10, padding: '10px 14px' }}>
-                <div style={{ fontSize: 22, fontWeight: 800, color }}>{value}</div>
-                <div style={{ fontSize: 12, color: '#555' }}>{label}</div>
+              <div key={label} style={{ flex: '1 1 150px', background: 'linear-gradient(180deg,#ffffff,#ececf0)', border: '1px solid #d2d2d7', borderRadius: 12, padding: '10px 14px' }}>
+                <div style={{ fontSize: 22, fontWeight: 800, color: '#1d1d1f' }}>{value}</div>
+                <div style={{ fontSize: 12, color: '#6e6e73' }}>{label}</div>
               </div>
             );
             const q = bankSearch.trim().toLowerCase();
@@ -3822,7 +3822,7 @@ function App() {
               <>
                 <h3 style={{ margin: '4px 0 10px' }}>{activeTab === 'taxes' ? '🧾 Налоги — выписка и привязка платежей (полная копия «Анализа»)' : '🏦 Банковская выписка — привязка платежей к фактурам'}</h3>
                 {bankMovements.length === 0 && !bankLoading && (
-                  <div style={{ background: '#fff8e6', border: '1px solid #f0c36d', borderRadius: 10, padding: 16, marginBottom: 12 }}>
+                  <div style={{ background: 'linear-gradient(180deg,#ffffff,#ececf0)', border: '1px solid #d2d2d7', borderRadius: 12, padding: 16, marginBottom: 12 }}>
                     Выписка ещё не загружена. Откройте вкладку «Загрузка» → кнопка «🏦 Выписка банка» и выберите Excel-файл (.xlsx) из банка — движения появятся здесь, а фактуры с совпавшими суммами сами получат статус 🟢 Оплачено.
                   </div>
                 )}
@@ -3921,7 +3921,7 @@ function App() {
                         <input autoFocus value={linkSearch} onChange={e => setLinkSearch(e.target.value)} placeholder="Поиск фактуры: название, поставщик, № фактуры, сумма…" style={{ width: '100%', boxSizing: 'border-box', padding: '7px 10px', borderRadius: 6, border: '1px solid #ddd', marginBottom: 10 }} />
                         {candidates.length === 0 && <p style={{ color: '#95a5a6' }}>Фактуры не найдены.</p>}
                         {candidates.map(({ r, exact }) => (
-                          <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 8px', borderRadius: 8, marginBottom: 4, background: exact ? '#e8f8ef' : '#fafafa', border: exact ? '1px solid #27ae60' : '1px solid #eee' }}>
+                          <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 8px', borderRadius: 8, marginBottom: 4, background: exact ? '#e4e4e8' : '#fafafa', border: exact ? '1px solid #8e8e93' : '1px solid #eee' }}>
                             <span style={{ flex: '1 1 auto', minWidth: 0, overflowWrap: 'break-word', fontSize: 14 }}>
                               <b>{r.store_name || r.store_name_ru || 'Без названия'}</b>{exact && <span style={{ marginLeft: 6, fontSize: 11, color: '#27ae60', fontWeight: 700 }}>сумма совпадает</span>}
                               <span style={{ marginLeft: 8, fontSize: 12, color: '#7f8c8d' }}>{formatDate(r.receipt_date)}</span>
@@ -3968,7 +3968,7 @@ function App() {
         for (let y = minOptY; y <= maxOptY; y++) for (let q = 1; q <= 4; q++) quarterOptions.push(`${y}-${q}T`);
         const taxIconBtn = (open) => ({
           fontSize: 20, lineHeight: 1, padding: '6px 10px', borderRadius: 8, cursor: 'pointer',
-          border: `1px solid ${open ? '#8e44ad' : '#ccc'}`, background: open ? '#f4ecf7' : '#fff'
+          border: `1px solid ${open ? '#8e8e93' : '#d2d2d7'}`, background: open ? 'linear-gradient(180deg,#ffffff,#e4e4e8)' : '#fff'
         });
         return (
           <div style={{ padding: '6px 0 20px' }}>
@@ -3984,8 +3984,8 @@ function App() {
 
             {/* ОПОВЕЩЕНИЕ: за месяц до дедлайна — что подать и что подготовить */}
             {soon.length > 0 && (
-              <div style={{ background: '#fdecea', border: '2px solid #e74c3c', borderRadius: 10, padding: '12px 16px', marginBottom: 14 }}>
-                <strong style={{ color: '#c0392b', fontSize: 15 }}>⏰ До дедлайна меньше месяца — готовьте документы:</strong>
+              <div style={{ background: 'linear-gradient(180deg,#ffffff,#e8e8ed)', border: '2px solid #8e8e93', borderRadius: 12, padding: '12px 16px', marginBottom: 14 }}>
+                <strong style={{ color: '#1d1d1f', fontSize: 15 }}>⏰ До дедлайна меньше месяца — готовьте документы:</strong>
                 {soon.map(ev => (
                   <div key={ev.id} style={{ marginTop: 8, fontSize: 14 }}>
                     <span style={{ display: 'inline-block', minWidth: 170, fontWeight: 700 }}>{fmtD(ev.dl)} (через {ev.daysLeft} дн.)</span>
@@ -4014,8 +4014,8 @@ function App() {
                   <span style={{ minWidth: 165, fontWeight: 600 }}>{fmtD(ev.dl)}</span>
                   <span style={{
                     minWidth: 110, fontWeight: 700, fontSize: 12, borderRadius: 8, padding: '2px 8px',
-                    background: ev.daysLeft <= 35 ? '#fdecea' : ev.daysLeft <= 65 ? '#fff8e1' : '#eafaf1',
-                    color: ev.daysLeft <= 35 ? '#c0392b' : ev.daysLeft <= 65 ? '#b9770e' : '#1e8449'
+                    background: ev.daysLeft <= 35 ? '#d9d9de' : ev.daysLeft <= 65 ? '#e8e8ed' : '#f5f5f7',
+                    color: ev.daysLeft <= 35 ? '#1d1d1f' : ev.daysLeft <= 65 ? '#3a3a3c' : '#6e6e73'
                   }}>через {ev.daysLeft} дн.</span>
                   <span style={{ fontWeight: 700 }}>{ev.name}</span>
                   <span style={{ color: '#7f8c8d', fontSize: 13, flex: '1 1 260px' }}>{ev.what}</span>
@@ -4083,7 +4083,7 @@ function App() {
             </div>
 
             {/* АВТОЗАПОЛНЕНИЕ ФОРМ ИЗ БАНКА ЗА ДИАПАЗОН КВАРТАЛОВ (v30.1) */}
-            <div style={{ background: 'linear-gradient(135deg,#eaf3fb,#f4ecf7)', border: '2px solid #8e44ad', borderRadius: 10, padding: '12px 16px' }}>
+            <div style={{ background: 'linear-gradient(135deg,#ffffff,#e8e8ed)', border: '2px solid #c7c7cc', borderRadius: 12, padding: '12px 16px' }}>
               <h3 style={{ margin: '0 0 6px' }}>🤖 Автозаполнение форм из банка</h3>
               <p style={{ fontSize: 13, color: '#555', margin: '0 0 10px' }}>
                 Выберите диапазон кварталов (например, 1T 2025 → 2T 2026). Доходы = поступления квартала; расходы = платежи с галкой «есть фактура»
@@ -4093,11 +4093,11 @@ function App() {
               </p>
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 14 }}>с</span>
-                <select value={taxQFrom} onChange={e => applyTaxRange(e.target.value, taxQTo)} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #8e44ad' }}>
+                <select value={taxQFrom} onChange={e => applyTaxRange(e.target.value, taxQTo)} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #c7c7cc' }}>
                   {quarterOptions.map(k => <option key={k} value={k}>{k.replace('-', ' · ')}</option>)}
                 </select>
                 <span style={{ fontSize: 14 }}>по</span>
-                <select value={taxQTo} onChange={e => applyTaxRange(taxQFrom, e.target.value)} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #8e44ad' }}>
+                <select value={taxQTo} onChange={e => applyTaxRange(taxQFrom, e.target.value)} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #c7c7cc' }}>
                   {quarterOptions.map(k => <option key={k} value={k}>{k.replace('-', ' · ')}</option>)}
                 </select>
                 <button
@@ -4131,7 +4131,7 @@ function App() {
                   {taxDraft.quarters.map(x => {
                     const late = x.isLate && (x.result420 > 0 || x.result130 > 0);
                     return (
-                      <div key={x.key} style={{ border: `1px solid ${late ? '#e74c3c' : '#e0e0e0'}`, borderLeft: `4px solid ${late ? '#e74c3c' : '#8e44ad'}`, borderRadius: 8, padding: '10px 12px', marginBottom: 10 }}>
+                      <div key={x.key} style={{ border: `1px solid ${late ? '#8e8e93' : '#e0e0e0'}`, borderLeft: `4px solid ${late ? '#48484a' : '#c7c7cc'}`, borderRadius: 8, padding: '10px 12px', marginBottom: 10 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
                           <strong>{x.key.replace('-', ' · ')} <span style={{ fontSize: 12, color: '#7f8c8d' }}>({x.from}…{x.to})</span></strong>
                           <span style={{ fontSize: 12, color: '#7f8c8d' }}>поступлений {x.counts.incCount} · расходов с фактурой {x.counts.outInvCount} из {x.counts.outCount}</span>
@@ -4153,17 +4153,17 @@ function App() {
                         <div style={{ fontSize: 13, lineHeight: 1.5 }}>
                           <div role="button" onClick={() => setTaxFormPopup({ form: '420', q: x })} title="Открыть заполненную modelo 420"
                             style={{ cursor: 'pointer', borderRadius: 6, padding: '3px 6px', marginLeft: -6 }}
-                            onMouseEnter={e => e.currentTarget.style.background = '#f4ecf7'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                            📄 <strong style={{ color: '#8e44ad', textDecoration: 'underline dotted' }}>Modelo 420</strong> (IGIC): cuota {formatAmount(x.igicRepercutido, 'EUR')} − deducible {formatAmount(x.igicSoportado, 'EUR')} = <strong>{formatAmount(x.result420, 'EUR')}</strong>
+                            onMouseEnter={e => e.currentTarget.style.background = '#ececf0'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                            📄 <strong style={{ color: '#1d1d1f', textDecoration: 'underline dotted' }}>Modelo 420</strong> (IGIC): cuota {formatAmount(x.igicRepercutido, 'EUR')} − deducible {formatAmount(x.igicSoportado, 'EUR')} = <strong>{formatAmount(x.result420, 'EUR')}</strong>
                             {x.result420 < 0 && <span style={{ fontSize: 12, color: '#1e8449' }}> → к компенсации</span>}
                           </div>
                           <div role="button" onClick={() => setTaxFormPopup({ form: '130', q: x })} title="Открыть заполненную modelo 130"
                             style={{ cursor: 'pointer', borderRadius: 6, padding: '3px 6px', marginLeft: -6 }}
-                            onMouseEnter={e => e.currentTarget.style.background = '#f4ecf7'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                            📄 <strong style={{ color: '#8e44ad', textDecoration: 'underline dotted' }}>Modelo 130</strong> (IRPF, нарастающим): рендимьенто {formatAmount(x.rendCum, 'EUR')} × 20% − авансы {formatAmount(x.prev130, 'EUR')} = <strong>{formatAmount(x.result130, 'EUR')}</strong>
+                            onMouseEnter={e => e.currentTarget.style.background = '#ececf0'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+                            📄 <strong style={{ color: '#1d1d1f', textDecoration: 'underline dotted' }}>Modelo 130</strong> (IRPF, нарастающим): рендимьенто {formatAmount(x.rendCum, 'EUR')} × 20% − авансы {formatAmount(x.prev130, 'EUR')} = <strong>{formatAmount(x.result130, 'EUR')}</strong>
                           </div>
                           {late && (
-                            <div style={{ color: '#c0392b', fontWeight: 700, background: '#fdecea', borderRadius: 6, padding: '6px 8px', marginTop: 6 }}>
+                            <div style={{ color: '#1d1d1f', fontWeight: 700, background: '#e4e4e8', borderRadius: 6, padding: '6px 8px', marginTop: 6 }}>
                               ⚠ ПРОСРОЧЕНО (дедлайн {x.dl.toLocaleDateString('ru-RU')}, {x.monthsLate} мес.): штраф-надбавка recargo {(x.recargoRate * 100).toFixed(0)}% = {formatAmount(x.recargo, 'EUR')}{x.intereses > 0 ? ` + пени intereses = ${formatAmount(x.intereses, 'EUR')}` : ' (пени начнутся с 13-го месяца просрочки)'}
                             </div>
                           )}
@@ -4196,17 +4196,17 @@ function App() {
                     );
                   })}
 
-                  {/* СУММА К ОПЛАТЕ — отдельный красный блок */}
-                  <div style={{ background: '#fdecea', border: '2px solid #c0392b', borderRadius: 10, padding: '12px 16px', marginBottom: 12 }}>
+                  {/* СУММА К ОПЛАТЕ — отдельный блок (сумма остаётся красной по запросу пользователя) */}
+                  <div style={{ background: 'linear-gradient(180deg,#ffffff,#e4e4e8)', border: '2px solid #8e8e93', borderRadius: 12, padding: '12px 16px', marginBottom: 12 }}>
                     <div style={{ fontSize: 14, display: 'grid', gap: 4 }}>
                       <div>IGIC (modelo 420) к оплате: <strong>{formatAmount(Math.max(0, taxDraft.total420), 'EUR')}</strong>
-                        {taxDraft.total420 < 0 && <span style={{ fontSize: 12, color: '#1e8449' }}> (ещё {formatAmount(Math.abs(taxDraft.total420), 'EUR')} к компенсации в следующих кварталах — a compensar)</span>}
+                        {taxDraft.total420 < 0 && <span style={{ fontSize: 12, color: '#3a3a3c' }}> (ещё {formatAmount(Math.abs(taxDraft.total420), 'EUR')} к компенсации в следующих кварталах — a compensar)</span>}
                       </div>
                       <div>IRPF (modelo 130) к оплате: <strong>{formatAmount(taxDraft.total130, 'EUR')}</strong></div>
                       <div>Штраф-надбавка (recargo): <strong style={{ color: taxDraft.totalRecargo > 0 ? '#c0392b' : 'inherit' }}>{formatAmount(taxDraft.totalRecargo, 'EUR')}</strong></div>
                       <div>Пени (intereses de demora): <strong style={{ color: taxDraft.totalIntereses > 0 ? '#c0392b' : 'inherit' }}>{formatAmount(taxDraft.totalIntereses, 'EUR')}</strong></div>
                     </div>
-                    <div style={{ borderTop: '2px solid #c0392b', marginTop: 8, paddingTop: 8, color: '#c0392b', fontWeight: 800, fontSize: 22 }}>
+                    <div style={{ borderTop: '2px solid #8e8e93', marginTop: 8, paddingTop: 8, color: '#c0392b', fontWeight: 800, fontSize: 22 }}>
                       💶 К ОПЛАТЕ: {formatAmount(taxDraft.grandTotal, 'EUR')}
                     </div>
                     {taxDraft.lateCount > 0 && (
@@ -4244,13 +4244,13 @@ function App() {
                     </div>
                     <pre style={{ background: '#f8f9fa', border: '1px solid #e0e0e0', borderRadius: 8, padding: 12, fontSize: 13, whiteSpace: 'pre-wrap', margin: '0 0 12px' }}>{buildSingleTaxFormText(form, x, taxDraft)}</pre>
                     {(form === '420' ? Math.max(0, x.result420) : x.result130) > 0 && (
-                      <div style={{ background: '#fdecea', border: '2px solid #c0392b', borderRadius: 8, padding: '8px 14px', marginBottom: 12, color: '#c0392b', fontWeight: 800, fontSize: 18 }}>
+                      <div style={{ background: 'linear-gradient(180deg,#ffffff,#e4e4e8)', border: '2px solid #8e8e93', borderRadius: 10, padding: '8px 14px', marginBottom: 12, color: '#c0392b', fontWeight: 800, fontSize: 18 }}>
                         💶 К ОПЛАТЕ: {formatAmount(form === '420' ? Math.max(0, x.result420) : x.result130, 'EUR')}
                         {x.isLate && (x.recargo > 0 || x.intereses > 0) && <span style={{ fontSize: 13, fontWeight: 700 }}> + штраф {formatAmount(x.recargo, 'EUR')} + пени {formatAmount(x.intereses, 'EUR')}</span>}
                       </div>
                     )}
                     {form === '420' && x.result420 < 0 && (
-                      <div style={{ background: '#eafaf1', border: '2px solid #27ae60', borderRadius: 8, padding: '8px 14px', marginBottom: 12, color: '#1e8449', fontWeight: 700, fontSize: 15 }}>
+                      <div style={{ background: 'linear-gradient(180deg,#ffffff,#e4e4e8)', border: '2px solid #8e8e93', borderRadius: 10, padding: '8px 14px', marginBottom: 12, color: '#3a3a3c', fontWeight: 700, fontSize: 15 }}>
                         ↩ К компенсации в следующих кварталах (a compensar): {formatAmount(Math.abs(x.result420), 'EUR')}
                       </div>
                     )}
