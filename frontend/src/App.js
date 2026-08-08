@@ -2225,6 +2225,10 @@ function App() {
             <button className={activeTab === 'analysis' ? 'active' : ''} onClick={() => {setActiveTab('analysis'); loadReceipts(); loadBankMovements();}}>
               📊 Анализ
             </button>
+            {/* Вкладка «Налоги» (v29.2): полная копия банковского «Анализа» — основа под налоговый учёт */}
+            <button className={activeTab === 'taxes' ? 'active' : ''} onClick={() => {setActiveTab('taxes'); loadReceipts(); loadBankMovements();}}>
+              🧾 Налоги
+            </button>
           </nav>
         </div>
         <div className="header-right">
@@ -2804,7 +2808,7 @@ function App() {
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-08 · v29.1 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
+              сборка 2026-08-08 · v29.2 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
               <button
                 onClick={configureLocalOcr}
                 title="Задать адрес локального OCR (HTTPS-туннель cloudflared)"
@@ -3338,7 +3342,8 @@ function App() {
           )}
         </div>
       )}
-      {activeTab === 'analysis' && (
+      {/* «Налоги» (v29.2) рендерят тот же блок, что и «Анализ», — полная копия функционала */}
+      {(activeTab === 'analysis' || activeTab === 'taxes') && (
         <div className="analysis-section" style={{ padding: '6px 0 20px' }}>
           {(() => {
             const isOut = m => Number(m.amount) < 0;
@@ -3388,7 +3393,7 @@ function App() {
             const sumVis = sumOf(visible);
             return (
               <>
-                <h3 style={{ margin: '4px 0 10px' }}>🏦 Банковская выписка — привязка платежей к фактурам</h3>
+                <h3 style={{ margin: '4px 0 10px' }}>{activeTab === 'taxes' ? '🧾 Налоги — выписка и привязка платежей (полная копия «Анализа»)' : '🏦 Банковская выписка — привязка платежей к фактурам'}</h3>
                 {bankMovements.length === 0 && !bankLoading && (
                   <div style={{ background: '#fff8e6', border: '1px solid #f0c36d', borderRadius: 10, padding: 16, marginBottom: 12 }}>
                     Выписка ещё не загружена. Откройте вкладку «Загрузка» → кнопка «🏦 Выписка банка» и выберите Excel-файл (.xlsx) из банка — движения появятся здесь, а фактуры с совпавшими суммами сами получат статус 🟢 Оплачено.
