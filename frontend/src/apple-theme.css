@@ -1,0 +1,225 @@
+/* ============================================================
+   Apple-inspired theme для householder-web (v31)
+   За основу — apple.com: шрифт SF Pro (системный стек), фон #f5f5f7,
+   текст #1d1d1f / #6e6e73, акцент #0071e3, пилюльные кнопки,
+   карточки с мягкими тенями, плавные микро-анимации.
+   Подключается ПОСЛЕ App.css (перекрывает базовые стили).
+   ============================================================ */
+
+:root {
+  --apple-blue: #0071e3;
+  --apple-blue-hover: #0077ed;
+  --apple-text: #1d1d1f;
+  --apple-gray: #6e6e73;
+  --apple-bg: #f5f5f7;
+  --apple-card: #ffffff;
+  --apple-border: #d2d2d7;
+  --apple-fill: #e8e8ed;
+  --apple-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
+  --apple-shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.12);
+  --apple-radius: 14px;
+  --apple-radius-lg: 20px;
+  --apple-font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display',
+    'Helvetica Neue', 'Segoe UI', Roboto, Arial, sans-serif;
+}
+
+/* ---------- База ---------- */
+html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+
+body {
+  font-family: var(--apple-font);
+  background: var(--apple-bg);
+  color: var(--apple-text);
+  letter-spacing: -0.01em;
+}
+
+::selection { background: rgba(0, 113, 227, 0.18); }
+
+a { color: var(--apple-blue); text-decoration: none; transition: opacity 0.18s ease; }
+a:hover { text-decoration: underline; }
+
+/* Тонкие скроллбары как в macOS */
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.22); border-radius: 999px; }
+*::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.38); }
+* { scrollbar-width: thin; scrollbar-color: rgba(0, 0, 0, 0.22) transparent; }
+
+/* ---------- Кнопки: пилюли, микро-анимации, фокус-кольцо ---------- */
+button {
+  font-family: var(--apple-font);
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  transition: transform 0.16s ease, box-shadow 0.2s ease, filter 0.18s ease,
+    background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+button:hover:not(:disabled) { filter: brightness(1.06); transform: translateY(-1px); }
+button:active:not(:disabled) { transform: scale(0.97); filter: brightness(0.96); }
+button:disabled { opacity: 0.45; cursor: default; }
+button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.35);
+}
+label[class*="btn"], .btn-folder { -webkit-tap-highlight-color: transparent; }
+
+/* ---------- Поля ввода: чистые, с мягким фокусом ---------- */
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]),
+select,
+textarea {
+  font-family: var(--apple-font);
+  background: var(--apple-card);
+  border: 1px solid var(--apple-border);
+  border-radius: 10px;
+  color: var(--apple-text);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]):focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--apple-blue);
+  box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.15);
+}
+input[type="checkbox"], input[type="radio"] { accent-color: var(--apple-blue); }
+
+/* ---------- Шапка ---------- */
+.App { color: var(--apple-text); }
+.user-name { color: var(--apple-gray); font-weight: 500; }
+.logout-btn {
+  border: 1px solid var(--apple-border) !important;
+  border-radius: 999px !important;
+  background: var(--apple-card) !important;
+  color: var(--apple-text) !important;
+  padding: 7px 16px !important;
+  font-weight: 500;
+}
+
+/* ---------- Вкладки: сегмент-контрол как в iOS/macOS ---------- */
+.tabs-inline {
+  background: var(--apple-fill) !important;
+  border: none !important;
+  border-radius: 999px !important;
+  padding: 3px !important;
+  gap: 2px !important;
+}
+.tabs-inline button {
+  border: none !important;
+  border-radius: 999px !important;
+  background: transparent !important;
+  color: var(--apple-gray) !important;
+  font-weight: 500;
+  padding: 7px 18px !important;
+  box-shadow: none !important;
+}
+.tabs-inline button:hover:not(:disabled) { transform: none; color: var(--apple-text) !important; filter: none; }
+.tabs-inline button.active {
+  background: var(--apple-card) !important;
+  color: var(--apple-text) !important;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.04) !important;
+}
+
+/* ---------- Карточки и панели ---------- */
+.info-block,
+.result-panel,
+.result-info,
+.result-items,
+.result-raw-text,
+.raw-text,
+.preview-container,
+.upload-section,
+.receipt-card {
+  background: var(--apple-card);
+  border: 1px solid rgba(0, 0, 0, 0.06) !important;
+  border-radius: var(--apple-radius-lg) !important;
+  box-shadow: var(--apple-shadow);
+}
+.receipt-card {
+  overflow: hidden;
+  transition: transform 0.22s ease, box-shadow 0.22s ease;
+}
+.receipt-card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--apple-shadow-lg);
+}
+.receipt-thumb { border-radius: var(--apple-radius) var(--apple-radius) 0 0; }
+.result-panel-header, .receipt-header {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+.raw-text, .result-raw-text { font-size: 13px; line-height: 1.55; }
+
+/* ---------- Загрузка: тулбар и кнопки-лейблы ---------- */
+.upload-toolbar, .toolbar-controls, .recognize-bar { gap: 10px; }
+.btn-folder {
+  border-radius: 999px !important;
+  font-weight: 600;
+  padding: 10px 20px !important;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.10);
+  transition: transform 0.16s ease, box-shadow 0.2s ease, filter 0.18s ease;
+}
+.btn-folder:hover { transform: translateY(-1px); filter: brightness(1.06); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.14); }
+.btn-folder:active { transform: scale(0.97); }
+.recognize-main-btn { border-radius: 999px !important; font-weight: 600 !important; }
+
+/* ---------- Бейджи: пилюли ---------- */
+.provider-badge, .type-badge {
+  border-radius: 999px !important;
+  font-weight: 600;
+  letter-spacing: 0;
+  padding: 3px 10px !important;
+}
+
+/* ---------- Спиннер и прогресс ---------- */
+.spinner {
+  border-color: rgba(0, 113, 227, 0.2) !important;
+  border-top-color: var(--apple-blue) !important;
+}
+.folder-progress-bar { border-radius: 999px; overflow: hidden; background: var(--apple-fill); }
+.folder-progress-bar > div { border-radius: 999px; }
+
+/* ---------- Модалки: стекло и мягкие тени ---------- */
+.modal-overlay, .model-modal-overlay {
+  background: rgba(0, 0, 0, 0.36) !important;
+  -webkit-backdrop-filter: blur(10px) saturate(1.4);
+  backdrop-filter: blur(10px) saturate(1.4);
+  animation: apple-fade 0.22s ease;
+}
+.modal-overlay > div, .model-modal-content {
+  border-radius: var(--apple-radius-lg) !important;
+  box-shadow: var(--apple-shadow-lg) !important;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  animation: apple-pop 0.26s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+.modal-image { border-radius: var(--apple-radius); }
+.modal-close, .model-modal-close-btn {
+  border-radius: 999px !important;
+  border: none !important;
+  background: var(--apple-fill) !important;
+  color: var(--apple-text) !important;
+  font-weight: 600;
+}
+.model-modal-search input { border-radius: 999px !important; }
+
+@keyframes apple-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes apple-pop {
+  from { opacity: 0; transform: scale(0.96) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* ---------- Оверлей сканирования: тёмное стекло ---------- */
+.scan-overlay {
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  backdrop-filter: blur(18px) saturate(1.3);
+}
+.scan-overlay-header, .scan-overlay-footer { border-color: rgba(255, 255, 255, 0.14); }
+
+/* ---------- Прочее ---------- */
+.hint, .drop-text, .no-image, .no-image-thumb { color: var(--apple-gray); }
+.danger { border-radius: 999px !important; }
+.model-toggle-btn, .model-refresh-btn { border-radius: 999px !important; }
+
+/* Уважение к reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
