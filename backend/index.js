@@ -2486,6 +2486,9 @@ function withDbSchemaHint(msg) {
   if (/payment_status/i.test(m)) {
     m += ' | РЕШЕНИЕ: выполни supabase-migration-v19.sql в Supabase SQL Editor (ПРОЕКТ householder!): alter table receipts add column if not exists payment_status text; — и затем: notify pgrst, \'reload schema\';';
   }
+  if (/has_invoice/i.test(m)) {
+    m += ' | РЕШЕНИЕ: выполни supabase-migration-v21.sql в Supabase SQL Editor (ПРОЕКТ householder!): alter table bank_movements add column if not exists has_invoice boolean not null default false; — и затем: notify pgrst, \'reload schema\';';
+  }
   if (/bank_movements/i.test(m)) {
     m += ' | РЕШЕНИЕ: выполни supabase-migration-v20.sql в Supabase SQL Editor (ПРОЕКТ householder!) — таблица bank_movements + колонки receipts.bank_movement_id/paid_date; затем: notify pgrst, \'reload schema\';';
   }
@@ -2786,6 +2789,22 @@ app.post('/api/unlink-bank-movement', requireAuth, async (req, res) => {
       .eq('id', movement_id);
     if (error) throw error;
     if (oldReceipt) await recomputeReceiptPayment(oldReceipt);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: withDbSchemaHint(e.message) });
+  }
+});
+
+// Галка «есть фактура на этот платёж» (вкладка «Налоги», v30)
+// Требует supabase-migration-v21.sql (колонка bank_movements.has_invoice)
+app.post('/api/bank-movement-invoice-flag', requireAuth, async (req, res) => {
+  try {
+    const { movement_id, has_invoice } = req.body || {};
+    if (!movement_id) return res.status(400).json({ error: 'Нужен movement_id' });
+    const { error } = await supabaseAdmin.from('bank_movements')
+      .update({ has_invoice: !!has_invoice })
+      .eq('id', movement_id);
+    if (error) throw error;
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: withDbSchemaHint(e.message) });
