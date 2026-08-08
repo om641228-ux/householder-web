@@ -135,135 +135,134 @@ const TAX_GUIDE = [
 // электронные в sede electrónica; наш .txt — помощник для переноса цифр в веб-форму)
 const TAX_FORM_TEMPLATES = {
   '420': {
-    blank: `MODELO 420 — AUTOLIQUIDACIÓN IGIC (Канары) — ЧЕРНОВИК
+    blank: `МОДЕЛО 420 — IGIC (Канары) — БЛАНК-ЧЕРНОВИК НА РУССКОМ
 ============================================================
-Ejercicio (год): ______        Período: 1T / 2T / 3T / 4T
-NIF/NIE: ____________  Apellidos y nombre: ____________________
+Год (Ejercicio): ______        Квартал (Período): 1T / 2T / 3T / 4T
+NIF/NIE: ____________  Фамилия и имя: ________________________
 
-IGIC DEVENGADO (с ваших продаж/аренды за квартал):
-  Casilla 01 — Base imponible (tipo ___%): __________ ,__
-  Casilla 06 — Cuota (01 × тип):            __________ ,__
-  Casilla 11 — Total cuotas devengadas:     __________ ,__
+IGIC НАЧИСЛЕННЫЙ (с ваших продаж/аренды за квартал):
+  Casilla 01 — Налоговая база (Base imponible, тип ___%): __________ ,__
+  Casilla 06 — Сумма налога (Cuota = база × тип):         __________ ,__
+  Casilla 11 — Всего начислено (Total devengado):         __________ ,__
 
-IGIC DEDUCIBLE (покупки для деятельности, с фактурами):
-  Casilla 12 — Cuotas soportadas interiores: __________ ,__
-  Casilla 17 — Total a deducir:              __________ ,__
+IGIC К ВЫЧЕТУ (покупки для деятельности, с фактурами):
+  Casilla 12 — IGIC по покупкам (Cuotas soportadas):      __________ ,__
+  Casilla 17 — Всего к вычету (Total a deducir):          __________ ,__
 
-RESULTADO:
-  Casilla 18 — Diferencia (11 − 17):        __________ ,__
-  Casilla 19 — Compensación periodos anteriores: ______ ,__
-  Casilla 20 — Resultado liquidación:       __________ ,__
-  → Importe a ingresar / a compensar / a devolver: _____ ,__
+РЕЗУЛЬТАТ:
+  Casilla 18 — Разница (11 − 17):                         __________ ,__
+  Casilla 19 — Зачёт прошлых периодов (Compensación):     __________ ,__
+  Casilla 20 — Итог декларации (Resultado):               __________ ,__
+  → К ОПЛАТЕ (a ingresar) / к зачёту / к возврату: ______ ,__
 
-Подача: sede electrónica ATC (certificado digital / Cl@ve):
+Подача: электронный кабинет ATC (сертификат / Cl@ve):
 https://sede.gobiernodecanarias.org/sede-atc/`,
-    example: `MODELO 420 — ПРИМЕР ЗАПОЛНЕНИЯ (выдуманные цифры!)
+    example: `МОДЕЛО 420 — ПРИМЕР ЗАПОЛНЕНИЯ (выдуманные цифры!)
 ============================================================
-Ejercicio: 2026               Período: 2T
-NIF: Y1234567X  Nombre: ALEJANDRO RODRIGUEZ
+Год: 2026                     Квартал: 2T
+NIF: Y1234567X  Имя: ALEJANDRO RODRIGUEZ
 
 Ситуация: за апр–июнь получено аренды 12 000,00 € (IGIC 7%),
 куплено мебели/ремонт с фактурами на 3 000,00 € + IGIC 210,00 €.
 
-IGIC DEVENGADO:
-  Casilla 01 — Base imponible (tipo 7%): 12 000,00
-  Casilla 06 — Cuota (12 000 × 7%):         840,00
-  Casilla 11 — Total devengado:             840,00
+IGIC НАЧИСЛЕННЫЙ:
+  Casilla 01 — Налоговая база (тип 7%):    12 000,00
+  Casilla 06 — Сумма налога (12 000 × 7%):    840,00
+  Casilla 11 — Всего начислено:               840,00
 
-IGIC DEDUCIBLE:
-  Casilla 12 — Cuotas soportadas:           210,00
-  Casilla 17 — Total a deducir:             210,00
+IGIC К ВЫЧЕТУ:
+  Casilla 12 — IGIC по покупкам:              210,00
+  Casilla 17 — Всего к вычету:                210,00
 
-RESULTADO:
-  Casilla 18 — Diferencia:                  630,00
-  Casilla 19 — Compensación anteriores:       0,00
-  Casilla 20 — Resultado:                   630,00
-  → A INGRESAR: 630,00 € (домициляция IBAN или NRC через банк)` },
+РЕЗУЛЬТАТ:
+  Casilla 18 — Разница:                       630,00
+  Casilla 19 — Зачёт прошлых периодов:          0,00
+  Casilla 20 — Итог:                            630,00
+  → К ОПЛАТЕ: 630,00 € (списание с IBAN или NRC через банк)` },
   '130': {
-    blank: `MODELO 130 — IRPF PAGO FRACCIONADO — ЧЕРНОВИК
+    blank: `МОДЕЛО 130 — ПОДОХОДНЫЙ, АВАНСОВЫЙ ПЛАТЁЖ — БЛАНК НА РУССКОМ
 ============================================================
-Ejercicio: ______   Período: 1T / 2T / 3T / 4T
-NIF/NIE: ____________  Nombre: ____________________
+Год: ______   Квартал: 1T / 2T / 3T / 4T
+NIF/NIE: ____________  Имя: ____________________
 
-(суммы НАРАСТАЮЩИМ итогом с 1 января!)
-  Casilla 01 — Ingresos computables:        __________ ,__
-  Casilla 02 — Gastos deducibles:           __________ ,__
-  Casilla 03 — Rendimiento neto (01 − 02):  __________ ,__
-  Casilla 04 — 20% de la casilla 03:        __________ ,__
-  Casilla 05 — Pagos fraccionados anteriores
-               + retenciones del año:       __________ ,__
-  Casilla 07 — Resultado (04 − 05):         __________ ,__
-  → A ingresar (si 07 > 0):                 __________ ,__
+(суммы НАРАСТАЮЩИМ ИТОГОМ с 1 января!)
+  Casilla 01 — Доходы (Ingresos computables):            __________ ,__
+  Casilla 02 — Расходы к вычету (Gastos deducibles):     __________ ,__
+  Casilla 03 — Чистая прибыль (01 − 02):                 __________ ,__
+  Casilla 04 — 20% от casilla 03:                        __________ ,__
+  Casilla 05 — Уже уплаченные авансы года + удержания:   __________ ,__
+  Casilla 07 — Результат (04 − 05):                      __________ ,__
+  → К ОПЛАТЕ (если 07 > 0):                              __________ ,__
 
-Подача: sede AEAT (certificado / Cl@ve)`,
-    example: `MODELO 130 — ПРИМЕР ЗАПОЛНЕНИЯ (выдуманные цифры!)
+Подача: sede AEAT (сертификат / Cl@ve)`,
+    example: `МОДЕЛО 130 — ПРИМЕР ЗАПОЛНЕНИЯ (выдуманные цифры!)
 ============================================================
-Ejercicio: 2026   Período: 2T (нарастающий итог янв–июнь)
-NIF: Y1234567X  Nombre: ALEJANDRO RODRIGUEZ
+Год: 2026   Квартал: 2T (нарастающий итог янв–июнь)
+NIF: Y1234567X  Имя: ALEJANDRO RODRIGUEZ
 
 Янв–июнь: доходы от аренды 24 000,00 €; подтверждённые
 расходы (платежи банка с фактурами) 9 500,00 €.
 В 1T уже уплачено 400,00 €.
 
-  Casilla 01 — Ingresos:        24 000,00
-  Casilla 02 — Gastos:           9 500,00
-  Casilla 03 — Rendimiento:     14 500,00
-  Casilla 04 — 20%:              2 900,00
-  Casilla 05 — Pagos anteriores:   400,00
-  Casilla 07 — Resultado:        2 500,00
-  → A INGRESAR: 2 500,00 €` },
-  '100': { blank: `MODELO 100 — RENTA (IRPF anual) — ЧЕК-ЛИСТ ДАННЫХ
+  Casilla 01 — Доходы:              24 000,00
+  Casilla 02 — Расходы:              9 500,00
+  Casilla 03 — Чистая прибыль:      14 500,00
+  Casilla 04 — 20%:                  2 900,00
+  Casilla 05 — Авансы прошлых кв.:     400,00
+  Casilla 07 — Результат:            2 500,00
+  → К ОПЛАТЕ: 2 500,00 €` },
+  '100': { blank: `МОДЕЛО 100 — ГОДОВАЯ ДЕКЛАРАЦИЯ (Renta) — ЧЕК-ЛИСТ НА РУССКОМ
 ============================================================
-Ejercicio: ______ (подаётся апрель–июнь следующего года)
-1. Rendimientos de actividades económicas: доходы года − расходы
-   года (переносится из modelo 130 за 4T, casilla 03).
-2. Pagos fraccionados (modelo 130, сумма 4 платежей): ____ ,__
-3. Rendimientos del capital inmobiliario (если сдаёте как физлицо
-   без деятельности): доходы аренды − расходы (IBI, comunidad,
-   ремонт, проценты ипотеки, амортизация 3%).
-4. Retenciones (certificados): ____ ,__
-5. Вычеты автономии (Canarias): по правилам года.
+Год: ______ (подаётся апрель–июнь следующего года)
+1. Доход от деятельности: доходы года − расходы года
+   (переносится из modelo 130 за 4T, casilla 03).
+2. Авансовые платежи (modelo 130, сумма 4 платежей): ______ ,__
+3. Доход от недвижимости (если сдаёте как физлицо):
+   аренда − расходы (IBI, comunidad, ремонт, проценты
+   ипотеки, амортизация 3%).
+4. Удержания (certificados de retenciones): ______ ,__
+5. Вычеты автономии (Канары): по правилам года.
 Подача: Renta WEB в sede AEAT.`,
-    example: `MODELO 100 — ПРИМЕР (выдуманные цифры!)
+    example: `МОДЕЛО 100 — ПРИМЕР (выдуманные цифры!)
 ============================================================
-Ejercicio 2025: доходы аренды 48 000,00, расходы 18 000,00.
-Base: 30 000,00. Cuota IRPF (по шкале, ~24%): 7 200,00
-Pagos fraccionados 130 за год: 6 000,00
-→ A ingresar por Renta: 1 200,00 (или menos con deducciones)` },
-  '115': { blank: `MODELO 115 — RETENCIONES ALQUILER — ЧЕРНОВИК
+Год 2025: доходы аренды 48 000,00, расходы 18 000,00.
+База: 30 000,00. Налог по шкале (~24%): 7 200,00
+Авансы modelo 130 за год: 6 000,00
+→ К ОПЛАТЕ по Renta: 1 200,00 (или меньше с вычетами)` },
+  '115': { blank: `МОДЕЛО 115 — УДЕРЖАНИЯ С АРЕНДЫ — БЛАНК НА РУССКОМ
 ============================================================
-Período: __T   Ejercicio: ______
-  Casilla 01 — Nº arrendadores: ____
-  Casilla 02 — Base retenciones (аренда без IGIC): ______ ,__
-  Casilla 03 — Retenciones 19% (02 × 0,19):           ______ ,__
-  → A ingresar: casilla 03.`,
-    example: `MODELO 115 — ПРИМЕР (выдуманные цифры!)
+Квартал: __T   Год: ______
+  Casilla 01 — Кол-во арендодателей: ____
+  Casilla 02 — База удержания (аренда без IGIC):  ______ ,__
+  Casilla 03 — Удержано 19% (02 × 0,19):          ______ ,__
+  → К ОПЛАТЕ: casilla 03.`,
+    example: `МОДЕЛО 115 — ПРИМЕР (выдуманные цифры!)
 ============================================================
 2T 2026: аренда офиса 500 €/мес → база 1 500,00
-  Casilla 01 — Arrendadores: 1
-  Casilla 02 — Base: 1 500,00
+  Casilla 01 — Арендодателей: 1
+  Casilla 02 — База: 1 500,00
   Casilla 03 — 19%: 285,00
-  → A INGRESAR: 285,00 €` },
-  '111': { blank: `MODELO 111 — RETENCIONES TRABAJO/PROFESIONALES — ЧЕРНОВИК
+  → К ОПЛАТЕ: 285,00 €` },
+  '111': { blank: `МОДЕЛО 111 — УДЕРЖАНИЯ С ЗАРПЛАТ — БЛАНК НА РУССКОМ
 ============================================================
-Período: __T   Ejercicio: ______
-  Casilla 01 — Nº perceptores (trabajo): ____   Base: ______ ,__  Retención: ____ ,__
-  Casilla 02 — Nº perceptores (profesionales): ____ Base: ____ ,__ Retención: ____ ,__
-  → A ingresar: сумма retenciones.`,
-    example: `MODELO 111 — ПРИМЕР (выдуманные цифры!)
+Квартал: __T   Год: ______
+  Casilla 01 — Работники: ____ чел.  База: ______ ,__  Удержано: ____ ,__
+  Casilla 02 — Профессионалы: ____ чел. База: ____ ,__  Удержано: ____ ,__
+  → К ОПЛАТЕ: сумма удержаний.`,
+    example: `МОДЕЛО 111 — ПРИМЕР (выдуманные цифры!)
 ============================================================
-2T 2026: зарплата работника 1 200 €/мес, retención 10%.
-  Casilla 01 — Perceptores: 1  Base: 3 600,00  Retención: 360,00
-  → A INGRESAR: 360,00 €` },
-  '036': { blank: `MODELO 036 / 400 (Canarias) — CENSAL — ЧЕК-ЛИСТ
+2T 2026: зарплата работника 1 200 €/мес, удержание 10%.
+  Casilla 01 — Работники: 1  База: 3 600,00  Удержано: 360,00
+  → К ОПЛАТЕ: 360,00 €` },
+  '036': { blank: `МОДЕЛО 036 / 400 (Канары) — ПОСТАНОВКА НА УЧЁТ — ЧЕК-ЛИСТ
 ============================================================
-□ Alta: NIF/NIE, epígrafe IAE, fecha inicio, domicilio.
-□ Baja/modificación: qué cambia, fecha.
-□ Канары IGIC: modelo 400 в ATC.`,
-    example: `MODELO 036 — ПРИМЕР
+□ Alta: NIF/NIE, код деятельности (epígrafe IAE), дата начала, адрес.
+□ Baja/изменение: что меняется, дата.
+□ Канары, IGIC: modelo 400 в ATC.`,
+    example: `МОДЕЛО 036 — ПРИМЕР
 ============================================================
-Alta como arrendador de viviendas: epígrafe 861.1
-«Alquiler de viviendas», fecha inicio 01/02/2026.` },
+Постановка как арендодатель жилья: epígrafe 861.1
+«Alquiler de viviendas», дата начала 01/02/2026.` },
 };
 
 // Скачивание текстового файла (бланк/пример/черновик формы)
@@ -710,6 +709,12 @@ function App() {
   });
   const [taxDraft, setTaxDraft] = useState(null);
   const [taxShowOptional, setTaxShowOptional] = useState(false);
+  // Диапазон кварталов для автозаполнения форм (v30.1): «с … по …»
+  const [taxQFrom, setTaxQFrom] = useState('2025-1T');
+  const [taxQTo, setTaxQTo] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${Math.floor(now.getMonth() / 3) + 1}T`;
+  });
   const [filterDiffs, setFilterDiffs] = useState([]); // фильтр по разнице Δ (итог чека vs сумма товаров)
   const [searchQuery, setSearchQuery] = useState('');
   const [itemsPerPage, setItemsPerPage] = useState(20);
@@ -2052,64 +2057,100 @@ function App() {
     return [`${y}-${pad(m0)}-01`, `${y}-${pad(q * 3)}-${pad(lastDay)}`];
   };
 
-  // Автозаполнение форм из банка: доходы = входящие квартала,
-  // расходы = исходящие с галкой «есть фактура» (или привязанные к фактуре);
-  // IGIC soportado берём из поля tax_amount привязанных фактур (если есть).
-  // Каждый вызов = свежий пересчёт («финальный апдейт» к моменту подачи).
-  const computeTaxDraft = (qKey, overrides = {}, mvts = null) => {
-    const src = mvts || bankMovements;
-    const [from, to] = taxQuarterRange(qKey);
-    const [year, qs] = qKey.split('-');
-    const inQ = src.filter(m => m.operation_date && m.operation_date >= from && m.operation_date <= to);
-    const inc = inQ.filter(m => Number(m.amount) > 0);
-    const outAll = inQ.filter(m => Number(m.amount) < 0);
-    const outInv = outAll.filter(m => m.has_invoice || m.matched_receipt_id);
-    const sum = (arr) => arr.reduce((s, m) => s + Math.abs(Number(m.amount) || 0), 0);
-    const linkedReceipts = outInv.map(m => receipts.find(r => String(r.id) === String(m.matched_receipt_id))).filter(Boolean);
-    const igicFromReceipts = linkedReceipts.reduce((s, r) => s + (parseFloat(r.tax_amount) || 0), 0);
-    const d = {
-      qKey, year, period: qs, from, to,
-      ingresos: overrides.ingresos != null ? overrides.ingresos : +sum(inc).toFixed(2),
-      gastos: overrides.gastos != null ? overrides.gastos : +sum(outInv).toFixed(2),
-      igicRate: overrides.igicRate != null ? overrides.igicRate : 7,
-      igicSoportado: overrides.igicSoportado != null ? overrides.igicSoportado : +(igicFromReceipts > 0 ? igicFromReceipts : sum(outInv) * 0.07 / 1.07).toFixed(2),
-      prevPayments: overrides.prevPayments != null ? overrides.prevPayments : 0,
-      incCount: inc.length, outCount: outAll.length, outInvCount: outInv.length
+  // Автозаполнение форм из банка за ДИАПАЗОН кварталов (v30.1):
+  // доходы = входящие квартала; расходы = исходящие с галкой «есть фактура»
+  // (или привязанные к фактуре); IGIC soportado — из tax_amount привязанных фактур.
+  // Просроченные кварталы (дедлайн прошёл, налог > 0) → штраф-надбавка (recargo por
+  // extemporaneidad, art. 27 LGT: 1% + 1% за каждый полный месяц, макс 12%; после 12 мес.
+  // — 15%) + пени (intereses de demora 4,0625% годовых с 13-го месяца). Каждый вызов = свежий пересчёт.
+  const taxQuarterSums = (y, q, mvts) => {
+    const [from, to] = taxQuarterRange(`${y}-${q}T`);
+    const yFrom = `${y}-01-01`;
+    const sums = (list) => {
+      const inc = list.filter(m => Number(m.amount) > 0);
+      const outAll = list.filter(m => Number(m.amount) < 0);
+      const outInv = outAll.filter(m => m.has_invoice || m.matched_receipt_id);
+      const sum = (arr) => arr.reduce((s, m) => s + Math.abs(Number(m.amount) || 0), 0);
+      const linked = outInv.map(m => receipts.find(r => String(r.id) === String(m.matched_receipt_id))).filter(Boolean);
+      const igicFromR = linked.reduce((s, r) => s + (parseFloat(r.tax_amount) || 0), 0);
+      return { ingresos: sum(inc), gastos: sum(outInv), igicSop: igicFromR > 0 ? igicFromR : sum(outInv) * 0.07 / 1.07, incCount: inc.length, outCount: outAll.length, outInvCount: outInv.length };
     };
+    const inQ = mvts.filter(m => m.operation_date && m.operation_date >= from && m.operation_date <= to);
+    const cum = mvts.filter(m => m.operation_date && m.operation_date >= yFrom && m.operation_date <= to);
+    return { from, to, quarter: sums(inQ), cum: sums(cum) };
+  };
+  const taxQuarterDeadline = (y, q) => q < 4 ? new Date(y, q * 3, 20) : new Date(y + 1, 0, 30); // 20 апр/июл/окт; 30 янв след. года
+  const computeTaxRange = (fromKey, toKey, overrides = {}, mvts = null) => {
+    const src = mvts || bankMovements;
+    const parse = (k) => { const [y, qs] = String(k).split('-'); return { y: +y, q: parseInt(qs) || 1 }; };
+    const a = parse(fromKey), b = parse(toKey);
+    const list = [];
+    let { y, q } = a;
+    let guard = 0;
+    while ((y < b.y || (y === b.y && q <= b.q)) && guard++ < 40) { list.push({ y, q }); q++; if (q > 4) { q = 1; y++; } }
+    if (!list.length) list.push(a);
+    const rate = overrides.igicRate != null ? overrides.igicRate : 7;
     const r2 = n => Math.round(n * 100) / 100;
-    d.igicRepercutido = r2(d.ingresos * d.igicRate / 100);
-    d.result420 = r2(d.igicRepercutido - d.igicSoportado);
-    d.rendimiento = r2(d.ingresos - d.gastos);
-    d.pago130bruto = r2(Math.max(0, d.rendimiento) * 0.20);
-    d.result130 = r2(d.pago130bruto - (parseFloat(d.prevPayments) || 0));
-    return d;
+    const today0 = new Date().setHours(0, 0, 0, 0);
+    const paid130ByYear = {}; // авто-зачёт авансов: суммы результатов 130 предыдущих кварталов года
+    const quarters = list.map(({ y, q }) => {
+      const { from, to, quarter, cum } = taxQuarterSums(y, q, src);
+      const ingresos = overrides[`ingresos_${y}_${q}`] != null ? overrides[`ingresos_${y}_${q}`] : r2(quarter.ingresos);
+      const gastos = overrides[`gastos_${y}_${q}`] != null ? overrides[`gastos_${y}_${q}`] : r2(quarter.gastos);
+      const igicSoportado = overrides[`igicSop_${y}_${q}`] != null ? overrides[`igicSop_${y}_${q}`] : r2(quarter.igicSop);
+      const igicRepercutido = r2(ingresos * rate / 100);
+      const result420 = r2(igicRepercutido - igicSoportado);
+      // Modelo 130 — нарастающим итогом с 1 января минус авансы прошлых кварталов
+      const rendCum = r2(cum.ingresos - cum.gastos);
+      const pagoCum = r2(Math.max(0, rendCum) * 0.20);
+      const prev130 = paid130ByYear[y] || 0;
+      const result130raw = r2(pagoCum - prev130);
+      const result130 = Math.max(0, result130raw);
+      paid130ByYear[y] = r2(prev130 + result130);
+      // Просрочка: дедлайн прошёл, а платить нужно → надбавка + пени (добровольная подача)
+      const dl = taxQuarterDeadline(y, q);
+      const isLate = dl.getTime() < today0;
+      const monthsLate = isLate ? Math.max(0, Math.floor((today0 - dl.getTime()) / (30.44 * 86400000))) : 0;
+      // art. 27 LGT: 1% + 1% за каждый полный месяц просрочки (макс 12%), после 12 мес. — 15% + пени
+      const recargoRate = !isLate ? 0 : monthsLate > 12 ? 0.15 : Math.min(12, monthsLate + 1) * 0.01;
+      const interestFrom = new Date(dl.getTime()); interestFrom.setMonth(interestFrom.getMonth() + 12);
+      const interestDays = monthsLate > 12 ? Math.floor((today0 - interestFrom.getTime()) / 86400000) : 0;
+      const base420 = Math.max(0, result420), base130 = result130;
+      const recargo = r2((base420 + base130) * recargoRate);
+      const intereses = interestDays > 0 ? r2((base420 + base130) * 0.040625 * interestDays / 365) : 0;
+      return { y, q, key: `${y}-${q}T`, from, to, ingresos, gastos, igicSoportado, igicRepercutido, result420, rendCum, pagoCum, prev130, result130, dl, isLate, monthsLate, recargoRate, recargo, intereses, counts: quarter };
+    });
+    const tot = (f) => r2(quarters.reduce((s, x) => s + (x[f] || 0), 0));
+    return {
+      fromKey, toKey, igicRate: rate, quarters,
+      total420: tot('result420'), total130: tot('result130'),
+      totalRecargo: tot('recargo'), totalIntereses: tot('intereses'),
+      grandTotal: r2(tot('result420') + tot('result130') + tot('recargo') + tot('intereses')),
+      lateCount: quarters.filter(x => x.isLate && (x.result420 > 0 || x.result130 > 0)).length
+    };
   };
 
-  const buildTaxDraftText = (d) => {
+  const buildTaxRangeText = (d) => {
     const f = n => Number(n || 0).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return `ЧЕРНОВИКИ ФОРМ ${d.year} ${d.period} — автозаполнено из банка (${new Date().toLocaleString('ru-RU')})
-Основание: ${d.incCount} поступлений и ${d.outInvCount} платежей с фактурой за ${d.from}…${d.to}
-(Это помощник для переноса цифр в веб-форму — НЕ официальный документ. Проверьте цифры!)
-
-════════════════ MODELO 420 — IGIC ${d.period} ${d.year} ════════════════
-  Casilla 01 — Base imponible (tipo ${d.igicRate}%):  ${f(d.ingresos)}
-  Casilla 06 — Cuota devengada:                       ${f(d.igicRepercutido)}
-  Casilla 11 — Total devengado:                       ${f(d.igicRepercutido)}
-  Casilla 12 — IGIC deducible (con facturas):         ${f(d.igicSoportado)}
-  Casilla 17 — Total a deducir:                       ${f(d.igicSoportado)}
-  Casilla 18 — Diferencia:                            ${f(d.result420)}
-  Casilla 20 — Resultado:                             ${f(d.result420)}
-  → ${d.result420 >= 0 ? 'A INGRESAR' : 'A COMPENSAR/DEVOLVER'}: ${f(Math.abs(d.result420))} €
-
-════════════════ MODELO 130 — IRPF ${d.period} ${d.year} ════════════════
-  (нарастающим итогом с 1 января — при необходимости поправьте!)
-  Casilla 01 — Ingresos computables:        ${f(d.ingresos)}
-  Casilla 02 — Gastos deducibles:           ${f(d.gastos)}
-  Casilla 03 — Rendimiento neto:            ${f(d.rendimiento)}
-  Casilla 04 — 20%:                         ${f(d.pago130bruto)}
-  Casilla 05 — Pagos anteriores/retenciones: ${f(d.prevPayments)}
-  Casilla 07 — Resultado:                   ${f(d.result130)}
-  → ${d.result130 > 0 ? `A INGRESAR: ${f(d.result130)} €` : 'Sin ingreso (resultado ≤ 0)'}`;
+    const lines = [`ЧЕРНОВИКИ ФОРМ ${d.fromKey} — ${d.toKey} — автозаполнено из банка (${new Date().toLocaleString('ru-RU')})`,
+      '(Помощник для переноса цифр в веб-форму — НЕ официальный документ. Проверьте цифры!)', ''];
+    d.quarters.forEach(x => {
+      lines.push(`════════════════ ${x.key} (движения ${x.from}…${x.to}: ${x.counts.incCount} поступл., ${x.counts.outInvCount} расходов с фактурой) ════════════════`);
+      lines.push(`  MODELO 420 (IGIC ${x.igicRate}%): база ${f(x.ingresos)} · cuota ${f(x.igicRepercutido)} · deducible ${f(x.igicSoportado)} · РЕЗУЛЬТАТ ${f(x.result420)}`);
+      lines.push(`  MODELO 130 (нарастающим): рендимьенто ${f(x.rendCum)} · 20% ${f(x.pagoCum)} · авансы ранее ${f(x.prev130)} · К ОПЛАТЕ ${f(x.result130)}`);
+      if (x.isLate && (x.result420 > 0 || x.result130 > 0)) {
+        lines.push(`  ⚠ ПРОСРОЧЕНО (дедлайн ${x.dl.toLocaleDateString('ru-RU')}, ${x.monthsLate} мес.): надбавка recargo ${(x.recargoRate * 100).toFixed(0)}% = ${f(x.recargo)} · пени intereses = ${f(x.intereses)}`);
+      }
+      lines.push('');
+    });
+    lines.push(`════════ ИТОГО ЗА ПЕРИОД ════════`);
+    lines.push(`  IGIC (modelo 420) к оплате:      ${f(d.total420)} €`);
+    lines.push(`  IRPF (modelo 130) к оплате:      ${f(d.total130)} €`);
+    lines.push(`  ШТРАФ-надбавка (recargo):        ${f(d.totalRecargo)} €`);
+    lines.push(`  ПЕНИ (intereses de demora):      ${f(d.totalIntereses)} €`);
+    lines.push(`  ══ ВСЕГО К ОПЛАТЕ:               ${f(d.grandTotal)} € ══`);
+    if (d.lateCount) lines.push(`  (просрочено кварталов: ${d.lateCount}; расчёт санкций — при добровольной подаче ДО требования AEAT; при требовании штраф 50–150%)`);
+    return lines.join('\n');
   };
 
   const bulkChangeSubtype = async (newSubtype) => {
@@ -3115,7 +3156,7 @@ function App() {
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-08 · v30 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
+              сборка 2026-08-08 · v30.1 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
               <button
                 onClick={configureLocalOcr}
                 title="Задать адрес локального OCR (HTTPS-туннель cloudflared)"
@@ -3868,10 +3909,12 @@ function App() {
               </div>
             )}
 
-            {/* КАЛЕНДАРЬ ПЛАТЕЖЕЙ И ПОДАЧИ */}
-            <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 10, padding: '12px 16px', marginBottom: 14 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
-                <h3 style={{ margin: 0 }}>📅 Календарь налоговых дедлайнов</h3>
+            {/* КАЛЕНДАРЬ ПЛАТЕЖЕЙ И ПОДАЧИ (выпадающий, по умолчанию свёрнут — v30.1) */}
+            <details style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 10, padding: '12px 16px', marginBottom: 14 }}>
+              <summary style={{ cursor: 'pointer', fontWeight: 700, fontSize: 16, userSelect: 'none' }}>
+                📅 Календарь налоговых дедлайнов <span style={{ fontSize: 12, color: '#95a5a6', fontWeight: 400 }}>(нажмите, чтобы развернуть)</span>
+              </summary>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '10px 0 8px' }}>
                 <label style={{ fontSize: 13, cursor: 'pointer' }}>
                   <input type="checkbox" checked={taxShowOptional} onChange={e => setTaxShowOptional(e.target.checked)} style={{ marginRight: 5 }} />
                   показать формы «если есть работники/аренда офиса» (111/115/190/180)
@@ -3889,12 +3932,14 @@ function App() {
                   <span style={{ color: '#7f8c8d', fontSize: 13, flex: '1 1 260px' }}>{ev.what}</span>
                 </div>
               ))}
-            </div>
+            </details>
 
-            {/* СПРАВОЧНИК: какие налоги и какие документы подавать */}
-            <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 10, padding: '12px 16px', marginBottom: 14 }}>
-              <h3 style={{ margin: '0 0 10px' }}>📚 Справочник: какие налоги и какие документы подавать</h3>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(330px, 1fr))', gap: 12 }}>
+            {/* СПРАВОЧНИК: какие налоги и какие документы подавать (выпадающий, свёрнут — v30.1) */}
+            <details style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 10, padding: '12px 16px', marginBottom: 14 }}>
+              <summary style={{ cursor: 'pointer', fontWeight: 700, fontSize: 16, userSelect: 'none', marginBottom: 2 }}>
+                📚 Справочник: какие налоги и какие документы подавать <span style={{ fontSize: 12, color: '#95a5a6', fontWeight: 400 }}>(нажмите, чтобы развернуть)</span>
+              </summary>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(330px, 1fr))', gap: 12, marginTop: 10 }}>
                 {TAX_GUIDE.map(g => (
                   <div key={g.form} style={{ border: `1px solid ${g.color}55`, borderLeft: `4px solid ${g.color}`, borderRadius: 8, padding: '10px 12px' }}>
                     <div style={{ fontWeight: 800, color: g.color, marginBottom: 6 }}>{g.title}</div>
@@ -3914,7 +3959,7 @@ function App() {
                   </div>
                 ))}
               </div>
-            </div>
+            </details>
 
             {/* ПЛАТЕЖИ БАНКА ЗА КВАРТАЛ + ГАЛКА «ЕСТЬ ФАКТУРА» */}
             <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 10, padding: '12px 16px', marginBottom: 14 }}>
@@ -3947,20 +3992,26 @@ function App() {
               })}
             </div>
 
-            {/* АВТОЗАПОЛНЕНИЕ ФОРМ ИЗ БАНКА */}
+            {/* АВТОЗАПОЛНЕНИЕ ФОРМ ИЗ БАНКА ЗА ДИАПАЗОН КВАРТАЛОВ (v30.1) */}
             <div style={{ background: 'linear-gradient(135deg,#eaf3fb,#f4ecf7)', border: '2px solid #8e44ad', borderRadius: 10, padding: '12px 16px' }}>
               <h3 style={{ margin: '0 0 6px' }}>🤖 Автозаполнение форм из банка</h3>
               <p style={{ fontSize: 13, color: '#555', margin: '0 0 10px' }}>
-                Доходы = поступления квартала; расходы = платежи с галкой «есть фактура» (или привязанные к фактуре); IGIC soportado — из поля «налог» привязанных фактур.
-                Нажимайте пересчёт перед подачей — черновик всегда собирается из свежих данных («финальный апдейт»).
+                Выберите диапазон кварталов (например, 1T 2025 → 2T 2026). Доходы = поступления квартала; расходы = платежи с галкой «есть фактура»
+                (или привязанные к фактуре); IGIC soportado — из поля «налог» привязанных фактур. За прошлые кварталы, где налог не платился,
+                отдельно считаются штраф-надбавка (recargo 1% + 1% за каждый полный месяц, после 12 мес. — 15%) и пени (intereses 4,0625% годовых с 13-го месяца просрочки).
+                Нажимайте «Финальный пересчёт» перед подачей — черновик всегда собирается из свежих данных.
               </p>
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 14 }}>Квартал:</span>
-                <select value={taxQuarter} onChange={e => setTaxQuarter(e.target.value)} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #8e44ad' }}>
+                <span style={{ fontSize: 14 }}>с</span>
+                <select value={taxQFrom} onChange={e => setTaxQFrom(e.target.value)} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #8e44ad' }}>
+                  {quarterOptions.map(k => <option key={k} value={k}>{k.replace('-', ' · ')}</option>)}
+                </select>
+                <span style={{ fontSize: 14 }}>по</span>
+                <select value={taxQTo} onChange={e => setTaxQTo(e.target.value)} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #8e44ad' }}>
                   {quarterOptions.map(k => <option key={k} value={k}>{k.replace('-', ' · ')}</option>)}
                 </select>
                 <button
-                  onClick={() => setTaxDraft(computeTaxDraft(taxQuarter))}
+                  onClick={() => setTaxDraft(computeTaxRange(taxQFrom, taxQTo))}
                   style={{ background: '#8e44ad', color: '#fff', border: 'none', padding: '9px 18px', borderRadius: 8, fontWeight: 700, fontSize: 15, cursor: 'pointer' }}
                 >
                   🧮 Заполнить формы из банка
@@ -3968,36 +4019,82 @@ function App() {
               </div>
             </div>
 
-            {/* МОДАЛКА ЧЕРНОВИКА ФОРМ */}
+            {/* МОДАЛКА ЧЕРНОВИКА ФОРМ (диапазон кварталов, v30.1) */}
             {taxDraft && (
               <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
                 onClick={() => setTaxDraft(null)}>
-                <div style={{ background: '#fff', borderRadius: 12, maxWidth: 720, width: '100%', maxHeight: '88vh', overflow: 'auto', padding: 20 }} onClick={e => e.stopPropagation()}>
+                <div style={{ background: '#fff', borderRadius: 12, maxWidth: 780, width: '100%', maxHeight: '88vh', overflow: 'auto', padding: 20 }} onClick={e => e.stopPropagation()}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                    <h3 style={{ margin: 0 }}>🧮 Черновики {taxDraft.year} · {taxDraft.period} <span style={{ fontSize: 12, color: '#7f8c8d' }}>({taxDraft.from}…{taxDraft.to}; поступлений {taxDraft.incCount}, расходов с фактурой {taxDraft.outInvCount} из {taxDraft.outCount})</span></h3>
+                    <h3 style={{ margin: 0 }}>🧮 Черновики {taxDraft.fromKey.replace('-', ' · ')} — {taxDraft.toKey.replace('-', ' · ')}
+                      <span style={{ fontSize: 12, color: '#7f8c8d', marginLeft: 8 }}>кварталов: {taxDraft.quarters.length}{taxDraft.lateCount ? ` · ⚠ просрочено: ${taxDraft.lateCount}` : ''}</span>
+                    </h3>
                     <button onClick={() => setTaxDraft(null)} style={{ border: 'none', background: '#eee', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>✖</button>
                   </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 8, marginBottom: 10, fontSize: 13 }}>
-                    {[
-                      ['ingresos', 'Доходы квартала, €'],
-                      ['gastos', 'Расходы с фактурами, €'],
-                      ['igicRate', 'Ставка IGIC, %'],
-                      ['igicSoportado', 'IGIC soportado, €'],
-                      ['prevPayments', 'Pagos anteriores 130, €'],
-                    ].map(([field, label]) => (
-                      <label key={field} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                        <span style={{ color: '#555' }}>{label}</span>
-                        <input type="number" step="0.01" value={taxDraft[field]}
-                          onChange={e => setTaxDraft(computeTaxDraft(taxDraft.qKey, { ...taxDraft, [field]: parseFloat(e.target.value) || 0 }))}
-                          style={{ padding: '6px 8px', borderRadius: 6, border: '1px solid #ccc' }} />
-                      </label>
-                    ))}
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 10 }}>
+                    <span style={{ color: '#555' }}>Ставка IGIC, %:</span>
+                    <input type="number" step="0.5" value={taxDraft.igicRate}
+                      onChange={e => setTaxDraft(prev => computeTaxRange(prev.fromKey, prev.toKey, { ...prev, igicRate: parseFloat(e.target.value) || 0 }))}
+                      style={{ width: 70, padding: '5px 8px', borderRadius: 6, border: '1px solid #ccc' }} />
+                  </label>
+
+                  {taxDraft.quarters.map(x => {
+                    const late = x.isLate && (x.result420 > 0 || x.result130 > 0);
+                    return (
+                      <div key={x.key} style={{ border: `1px solid ${late ? '#e74c3c' : '#e0e0e0'}`, borderLeft: `4px solid ${late ? '#e74c3c' : '#8e44ad'}`, borderRadius: 8, padding: '10px 12px', marginBottom: 10 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                          <strong>{x.key.replace('-', ' · ')} <span style={{ fontSize: 12, color: '#7f8c8d' }}>({x.from}…{x.to})</span></strong>
+                          <span style={{ fontSize: 12, color: '#7f8c8d' }}>поступлений {x.counts.incCount} · расходов с фактурой {x.counts.outInvCount} из {x.counts.outCount}</span>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8, fontSize: 13, marginBottom: 8 }}>
+                          {[
+                            [`ingresos_${x.y}_${x.q}`, 'Доходы, €'],
+                            [`gastos_${x.y}_${x.q}`, 'Расходы с фактурами, €'],
+                            [`igicSop_${x.y}_${x.q}`, 'IGIC soportado, €'],
+                          ].map(([field, label]) => (
+                            <label key={field} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                              <span style={{ color: '#555' }}>{label}</span>
+                              <input type="number" step="0.01" value={x[field.startsWith('igicSop') ? 'igicSoportado' : field.startsWith('gastos') ? 'gastos' : 'ingresos']}
+                                onChange={e => setTaxDraft(prev => computeTaxRange(prev.fromKey, prev.toKey, { ...prev, [field]: parseFloat(e.target.value) || 0 }))}
+                                style={{ padding: '5px 8px', borderRadius: 6, border: '1px solid #ccc' }} />
+                            </label>
+                          ))}
+                        </div>
+                        <div style={{ fontSize: 13, lineHeight: 1.5 }}>
+                          <div>📄 <strong>Modelo 420</strong> (IGIC): cuota {formatAmount(x.igicRepercutido, 'EUR')} − deducible {formatAmount(x.igicSoportado, 'EUR')} = <strong>{formatAmount(x.result420, 'EUR')}</strong></div>
+                          <div>📄 <strong>Modelo 130</strong> (IRPF, нарастающим): рендимьенто {formatAmount(x.rendCum, 'EUR')} × 20% − авансы {formatAmount(x.prev130, 'EUR')} = <strong>{formatAmount(x.result130, 'EUR')}</strong></div>
+                          {late && (
+                            <div style={{ color: '#c0392b', fontWeight: 700, background: '#fdecea', borderRadius: 6, padding: '6px 8px', marginTop: 6 }}>
+                              ⚠ ПРОСРОЧЕНО (дедлайн {x.dl.toLocaleDateString('ru-RU')}, {x.monthsLate} мес.): штраф-надбавка recargo {(x.recargoRate * 100).toFixed(0)}% = {formatAmount(x.recargo, 'EUR')}{x.intereses > 0 ? ` + пени intereses = ${formatAmount(x.intereses, 'EUR')}` : ' (пени начнутся с 13-го месяца просрочки)'}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* СУММА К ОПЛАТЕ — отдельный красный блок */}
+                  <div style={{ background: '#fdecea', border: '2px solid #c0392b', borderRadius: 10, padding: '12px 16px', marginBottom: 12 }}>
+                    <div style={{ fontSize: 14, display: 'grid', gap: 4 }}>
+                      <div>IGIC (modelo 420) к оплате: <strong>{formatAmount(taxDraft.total420, 'EUR')}</strong></div>
+                      <div>IRPF (modelo 130) к оплате: <strong>{formatAmount(taxDraft.total130, 'EUR')}</strong></div>
+                      <div>Штраф-надбавка (recargo): <strong style={{ color: taxDraft.totalRecargo > 0 ? '#c0392b' : 'inherit' }}>{formatAmount(taxDraft.totalRecargo, 'EUR')}</strong></div>
+                      <div>Пени (intereses de demora): <strong style={{ color: taxDraft.totalIntereses > 0 ? '#c0392b' : 'inherit' }}>{formatAmount(taxDraft.totalIntereses, 'EUR')}</strong></div>
+                    </div>
+                    <div style={{ borderTop: '2px solid #c0392b', marginTop: 8, paddingTop: 8, color: '#c0392b', fontWeight: 800, fontSize: 22 }}>
+                      💶 К ОПЛАТЕ: {formatAmount(taxDraft.grandTotal, 'EUR')}
+                    </div>
+                    {taxDraft.lateCount > 0 && (
+                      <div style={{ fontSize: 12, color: '#7f8c8d', marginTop: 6 }}>
+                        Санкции посчитаны для добровольной подачи ДО требования налоговой; если придёт требование — штраф 50–150% от суммы налога.
+                      </div>
+                    )}
                   </div>
-                  <pre style={{ background: '#f8f9fa', border: '1px solid #e0e0e0', borderRadius: 8, padding: 12, fontSize: 13, whiteSpace: 'pre-wrap', margin: '0 0 12px' }}>{buildTaxDraftText(taxDraft)}</pre>
+
+                  <pre style={{ background: '#f8f9fa', border: '1px solid #e0e0e0', borderRadius: 8, padding: 12, fontSize: 13, whiteSpace: 'pre-wrap', margin: '0 0 12px' }}>{buildTaxRangeText(taxDraft)}</pre>
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    <button onClick={() => downloadTextFile(`borrador-420-130-${taxDraft.year}-${taxDraft.period}.txt`, buildTaxDraftText(taxDraft))}
+                    <button onClick={() => downloadTextFile(`borrador-420-130-${taxDraft.fromKey}-${taxDraft.toKey}.txt`, buildTaxRangeText(taxDraft))}
                       style={{ background: '#27ae60', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}>⬇ Скачать черновик (.txt)</button>
-                    <button onClick={async () => { const mvts = await loadBankMovements(); setTaxDraft(prev => prev ? computeTaxDraft(prev.qKey, prev, mvts || undefined) : prev); }}
+                    <button onClick={async () => { const mvts = await loadBankMovements(); setTaxDraft(prev => prev ? computeTaxRange(prev.fromKey, prev.toKey, prev, mvts || undefined) : prev); }}
                       style={{ background: '#2980b9', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}
                       title="Перезагрузить выписку и пересчитать — делайте это прямо перед подачей">🔄 Финальный пересчёт из банка</button>
                   </div>
