@@ -2134,21 +2134,53 @@ function App() {
     };
   };
 
+  // Строки заполненной модели: испанское название casilla КАК В ОФИЦИАЛЬНОЙ ФОРМЕ + рядом перевод на русский (v30.3)
+  const taxFormRows = (form, x, d) => {
+    const f = n => Number(n || 0).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const row = (label, val) => `  ${label}:`.padEnd(76, ' ') + f(val);
+    const rows = [];
+    if (form === '420') {
+      rows.push(row(`Casilla 01 — Base imponible (tipo ${d.igicRate}%) — Налогооблагаемая база`, x.ingresos));
+      rows.push(row('Casilla 06 — Cuota devengada — Начисленный налог', x.igicRepercutido));
+      rows.push(row('Casilla 11 — Total devengado — Всего начислено', x.igicRepercutido));
+      rows.push(row('Casilla 12 — IGIC deducible (con facturas) — IGIC к вычету по фактурам', x.igicSoportado));
+      rows.push(row('Casilla 17 — Total a deducir — Всего к вычету', x.igicSoportado));
+      rows.push(row('Casilla 18 — Diferencia — Разница', x.result420));
+      rows.push(row('Casilla 20 — Resultado — Результат', x.result420));
+      rows.push(x.result420 >= 0
+        ? `  → A INGRESAR — К УПЛАТЕ: ${f(x.result420)} €`
+        : `  → A COMPENSAR — К КОМПЕНСАЦИИ в следующих кварталах: ${f(Math.abs(x.result420))} €`);
+    } else {
+      rows.push(`  (нарастающим итогом с 1 января ${x.y} — при необходимости поправьте!)`);
+      rows.push(row('Casilla 01 — Ingresos computables — Облагаемые доходы', x.cumIngresos));
+      rows.push(row('Casilla 02 — Gastos deducibles — Вычитаемые расходы', x.cumGastos));
+      rows.push(row('Casilla 03 — Rendimiento neto — Чистый доход', x.rendCum));
+      rows.push(row('Casilla 04 — 20%', x.pagoCum));
+      rows.push(row('Casilla 05 — Pagos anteriores/retenciones — Авансы прошлых кварталов', x.prev130));
+      rows.push(row('Casilla 07 — Resultado — Результат', x.result130));
+      rows.push(`  → A INGRESAR — К УПЛАТЕ: ${f(x.result130)} €`);
+    }
+    return rows;
+  };
+
   const buildTaxRangeText = (d) => {
     const f = n => Number(n || 0).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const lines = [`ЧЕРНОВИКИ ФОРМ ${d.fromKey} — ${d.toKey} — автозаполнено из банка (${new Date().toLocaleString('ru-RU')})`,
       '(Помощник для переноса цифр в веб-форму — НЕ официальный документ. Проверьте цифры!)', ''];
     d.quarters.forEach(x => {
-      lines.push(`════════════════ ${x.key} (движения ${x.from}…${x.to}: ${x.counts.incCount} поступл., ${x.counts.outInvCount} расходов с фактурой) ════════════════`);
-      lines.push(`  MODELO 420 (IGIC ${x.igicRate}%): база ${f(x.ingresos)} · cuota ${f(x.igicRepercutido)} · deducible ${f(x.igicSoportado)} · РЕЗУЛЬТАТ ${f(x.result420)}`);
-      lines.push(`  MODELO 130 (нарастающим): рендимьенто ${f(x.rendCum)} · 20% ${f(x.pagoCum)} · авансы ранее ${f(x.prev130)} · К ОПЛАТЕ ${f(x.result130)}`);
+      lines.push(`════════════════ ${x.key} (движения ${x.from}…${x.to}: ${x.counts.incCount} поступл., ${x.counts.outInvCount} расходов с фактурой из ${x.counts.outCount}) ════════════════`);
+      lines.push(`  ──────────── MODELO 420 — IGIC ${x.key} ────────────`);
+      lines.push(...taxFormRows('420', x, d));
+      lines.push('');
+      lines.push(`  ──────────── MODELO 130 — IRPF ${x.key} ────────────`);
+      lines.push(...taxFormRows('130', x, d));
       if (x.isLate && (x.result420 > 0 || x.result130 > 0)) {
         lines.push(`  ⚠ ПРОСРОЧЕНО (дедлайн ${x.dl.toLocaleDateString('ru-RU')}, ${x.monthsLate} мес.): надбавка recargo ${(x.recargoRate * 100).toFixed(0)}% = ${f(x.recargo)} · пени intereses = ${f(x.intereses)}`);
       }
       lines.push('');
     });
     lines.push(`════════ ИТОГО ЗА ПЕРИОД ════════`);
-    lines.push(`  IGIC (modelo 420) к оплате:      ${f(d.total420)} €`);
+    lines.push(`  IGIC (modelo 420) к оплате:      ${f(Math.max(0, d.total420))} €${d.total420 < 0 ? `   (ещё ${f(Math.abs(d.total420))} € — a compensar, к компенсации)` : ''}`);
     lines.push(`  IRPF (modelo 130) к оплате:      ${f(d.total130)} €`);
     lines.push(`  ШТРАФ-надбавка (recargo):        ${f(d.totalRecargo)} €`);
     lines.push(`  ПЕНИ (intereses de demora):      ${f(d.totalIntereses)} €`);
@@ -2161,27 +2193,9 @@ function App() {
   const buildSingleTaxFormText = (form, x, d) => {
     const f = n => Number(n || 0).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const lines = [`MODELO ${form} — ${form === '420' ? 'IGIC' : 'IRPF'} · ${x.key} — автозаполнено из банка (${new Date().toLocaleString('ru-RU')})`,
-      `(движения ${x.from}…${x.to}: ${x.counts.incCount} поступлений, ${x.counts.outInvCount} расходов с фактурой из ${x.counts.outCount})`,
-      '(Помощник для переноса цифр в веб-форму — НЕ официальный документ. Проверьте цифры!)', ''];
-    if (form === '420') {
-      lines.push(`  Casilla 01 — Налогооблагаемая база (Base imponible), тип ${d.igicRate}%:  ${f(x.ingresos)}`);
-      lines.push(`  Casilla 06 — Начисленный сбор (Cuota devengada):                          ${f(x.igicRepercutido)}`);
-      lines.push(`  Casilla 11 — Всего начислено (Total devengado):                          ${f(x.igicRepercutido)}`);
-      lines.push(`  Casilla 12 — IGIC к вычету по фактурам (IGIC deducible):               ${f(x.igicSoportado)}`);
-      lines.push(`  Casilla 17 — Всего к вычету (Total a deducir):                         ${f(x.igicSoportado)}`);
-      lines.push(`  Casilla 18 — Разница (Diferencia):                                     ${f(x.result420)}`);
-      lines.push(`  Casilla 20 — Результат (Resultado):                                    ${f(x.result420)}`);
-      lines.push(x.result420 >= 0 ? `  → К УПЛАТЕ (A INGRESAR): ${f(x.result420)} €` : `  → К КОМПЕНСАЦИИ в следующих кварталах (A COMPENSAR): ${f(Math.abs(x.result420))} €`);
-    } else {
-      lines.push(`  (нарастающим итогом с 1 января ${x.y} — при необходимости поправьте!)`);
-      lines.push(`  Casilla 01 — Облагаемые доходы (Ingresos computables):       ${f(x.cumIngresos)}`);
-      lines.push(`  Casilla 02 — Вычитаемые расходы (Gastos deducibles):         ${f(x.cumGastos)}`);
-      lines.push(`  Casilla 03 — Чистый доход (Rendimiento neto):                ${f(x.rendCum)}`);
-      lines.push(`  Casilla 04 — 20%:                                            ${f(x.pagoCum)}`);
-      lines.push(`  Casilla 05 — Авансы прошлых кварталов (Pagos anteriores):    ${f(x.prev130)}`);
-      lines.push(`  Casilla 07 — Результат (Resultado):                          ${f(x.result130)}`);
-      lines.push(`  → К УПЛАТЕ (A INGRESAR): ${f(x.result130)} €`);
-    }
+      `Основание: ${x.counts.incCount} поступлений и ${x.counts.outInvCount} платежей с фактурой за ${x.from}…${x.to}`,
+      '(Это помощник для переноса цифр в веб-форму — НЕ официальный документ. Проверьте цифры!)', '',
+      ...taxFormRows(form, x, d)];
     if (x.isLate && (x.result420 > 0 || x.result130 > 0)) {
       lines.push('');
       lines.push(`  ⚠ ПРОСРОЧЕНО (дедлайн ${x.dl.toLocaleDateString('ru-RU')}, ${x.monthsLate} мес.): надбавка recargo ${(x.recargoRate * 100).toFixed(0)}% = ${f(x.recargo)} · пени intereses = ${f(x.intereses)}`);
@@ -3199,7 +3213,7 @@ function App() {
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-08 · v30.2 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
+              сборка 2026-08-08 · v30.3 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
               <button
                 onClick={configureLocalOcr}
                 title="Задать адрес локального OCR (HTTPS-туннель cloudflared)"
