@@ -26,12 +26,26 @@
 /* ---------- База ---------- */
 html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 
+/* Типографика как на apple.com: SF Pro (на macOS/iOS — настоящий системный шрифт Apple),
+   трекинг .011em для текста и отрицательный для заголовков */
+body, .App, button, input, select, textarea {
+  font-family: var(--apple-font) !important;
+}
 body {
-  font-family: var(--apple-font);
   background: var(--apple-bg);
   color: var(--apple-text);
-  letter-spacing: -0.01em;
+  letter-spacing: 0.011em;
+  font-size: 15px;
+  line-height: 1.45;
 }
+h1, h2, h3, h4,
+.result-panel-header, .receipt-header, .modal-header, .model-modal-header {
+  font-family: var(--apple-font) !important;
+  font-weight: 600;
+  letter-spacing: -0.022em;
+  color: var(--apple-text);
+}
+strong, b { font-weight: 600; }
 
 ::selection { background: rgba(0, 113, 227, 0.18); }
 
@@ -83,17 +97,43 @@ textarea:focus {
 }
 input[type="checkbox"], input[type="radio"] { accent-color: var(--apple-blue); }
 
-/* ---------- Шапка ---------- */
+/* ---------- Шапка (меню): графитово-серый градиент как в pro-разделах apple.com ---------- */
 .App { color: var(--apple-text); }
-.user-name { color: var(--apple-gray); font-weight: 500; }
-.logout-btn {
-  border: 1px solid var(--apple-border) !important;
+.mini-header {
+  background: linear-gradient(180deg, #4a4a4d 0%, #323234 55%, #1d1d1f 100%) !important;
+  color: #f5f5f7 !important;
+  -webkit-backdrop-filter: blur(14px) saturate(1.5);
+  backdrop-filter: blur(14px) saturate(1.5);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.22);
+}
+.mini-header .user-name { color: #d2d2d7 !important; font-weight: 500; }
+.mini-header .model-active-name { color: #f5f5f7 !important; }
+.mini-header .model-toggle-btn {
+  background: rgba(255, 255, 255, 0.14) !important;
+  color: #f5f5f7 !important;
+  border: 1px solid rgba(255, 255, 255, 0.24) !important;
   border-radius: 999px !important;
-  background: var(--apple-card) !important;
-  color: var(--apple-text) !important;
+  font-weight: 500;
+}
+.mini-header .logout-btn {
+  border: 1px solid rgba(255, 255, 255, 0.24) !important;
+  border-radius: 999px !important;
+  background: rgba(255, 255, 255, 0.14) !important;
+  color: #f5f5f7 !important;
   padding: 7px 16px !important;
   font-weight: 500;
 }
+
+/* Экран входа — тот же графитовый градиент */
+.login-box {
+  background: linear-gradient(180deg, #4a4a4d 0%, #2c2c2e 60%, #1d1d1f 100%) !important;
+  color: #f5f5f7 !important;
+  border: 1px solid rgba(255, 255, 255, 0.10) !important;
+  border-radius: var(--apple-radius-lg) !important;
+  box-shadow: var(--apple-shadow-lg) !important;
+}
+.login-box h1, .login-box h2, .login-box h3, .login-box label, .login-box p { color: #f5f5f7 !important; }
 
 /* ---------- Вкладки: сегмент-контрол как в iOS/macOS ---------- */
 .tabs-inline {
@@ -119,6 +159,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--apple-blue); }
   font-weight: 600;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.04) !important;
 }
+/* Сегмент-контрол на тёмном меню */
+.mini-header .tabs-inline { background: rgba(255, 255, 255, 0.14) !important; }
+.mini-header .tabs-inline button { color: #d2d2d7 !important; }
+.mini-header .tabs-inline button:hover:not(:disabled) { color: #f5f5f7 !important; }
+.mini-header .tabs-inline button.active { background: #f5f5f7 !important; color: #1d1d1f !important; }
 
 /* ---------- Карточки и панели ---------- */
 .info-block,
