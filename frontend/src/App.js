@@ -716,6 +716,18 @@ function App() {
     const now = new Date();
     return `${now.getFullYear()}-${Math.floor(now.getMonth() / 3) + 1}T`;
   });
+  // Календарь/справочник — иконки в шапке вкладки (v30.4); авто-диапазон из дат движений банка
+  const [taxCalOpen, setTaxCalOpen] = useState(false);
+  const [taxGuideOpen, setTaxGuideOpen] = useState(false);
+  const taxRangeTouched = useRef(false); // пользователь сам менял диапазон — не перезаписывать
+  useEffect(() => {
+    if (taxRangeTouched.current || !bankMovements.length) return;
+    const dates = bankMovements.map(m => m.operation_date).filter(Boolean).sort();
+    if (!dates.length) return;
+    const qk = d => `${d.slice(0, 4)}-${Math.floor((+d.slice(5, 7) - 1) / 3) + 1}T`;
+    setTaxQFrom(qk(dates[0]));
+    setTaxQTo(qk(dates[dates.length - 1]));
+  }, [bankMovements]);
   const [filterDiffs, setFilterDiffs] = useState([]); // фильтр по разнице Δ (итог чека vs сумма товаров)
   const [searchQuery, setSearchQuery] = useState('');
   const [itemsPerPage, setItemsPerPage] = useState(20);
@@ -2210,6 +2222,15 @@ function App() {
     if (mvts && mvts.length) setTaxDraft(prev => prev ? computeTaxRange(prev.fromKey, prev.toKey, prev, mvts) : prev);
   };
 
+  // Выбор диапазона «с/по»: свежая выборка из базы + сразу открываем заполненные формы (v30.4)
+  const applyTaxRange = async (f, t) => {
+    taxRangeTouched.current = true;
+    setTaxQFrom(f);
+    setTaxQTo(t);
+    const mvts = await loadBankMovements();
+    setTaxDraft(computeTaxRange(f, t, {}, mvts && mvts.length ? mvts : undefined));
+  };
+
   const bulkChangeSubtype = async (newSubtype) => {
     if (selectedReceiptIds.size === 0) return;
     try {
@@ -3213,7 +3234,7 @@ function App() {
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-08 · v30.3 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
+              сборка 2026-08-08 · v30.4 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
               <button
                 onClick={configureLocalOcr}
                 title="Задать адрес локального OCR (HTTPS-туннель cloudflared)"
@@ -3939,11 +3960,22 @@ function App() {
         const [qFrom, qTo] = taxQuarterRange(taxQuarter);
         const qOut = bankMovements.filter(m => Number(m.amount) < 0 && m.operation_date && m.operation_date >= qFrom && m.operation_date <= qTo);
         const fmtD = d => d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+        // Опции кварталов покрывают все годы, за которые есть движения в банке (плюс текущий ±1)
+        const mvtYears = bankMovements.map(m => m.operation_date ? +m.operation_date.slice(0, 4) : year).filter(y => y > 2000 && y < 2100);
+        const minOptY = Math.min(year - 1, ...mvtYears), maxOptY = Math.max(year + 1, ...mvtYears);
         const quarterOptions = [];
-        for (let y = year - 1; y <= year + 1; y++) for (let q = 1; q <= 4; q++) quarterOptions.push(`${y}-${q}T`);
+        for (let y = minOptY; y <= maxOptY; y++) for (let q = 1; q <= 4; q++) quarterOptions.push(`${y}-${q}T`);
+        const taxIconBtn = (open) => ({
+          fontSize: 20, lineHeight: 1, padding: '6px 10px', borderRadius: 8, cursor: 'pointer',
+          border: `1px solid ${open ? '#8e44ad' : '#ccc'}`, background: open ? '#f4ecf7' : '#fff'
+        });
         return (
           <div style={{ padding: '6px 0 20px' }}>
-            <h2 style={{ margin: '4px 0 4px' }}>🧾 Налоги (Испания · Канары)</h2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '4px 0' }}>
+              <h2 style={{ margin: 0 }}>🧾 Налоги (Испания · Канары)</h2>
+              <button onClick={() => setTaxCalOpen(v => !v)} style={taxIconBtn(taxCalOpen)} title="Календарь налоговых дедлайнов">📅</button>
+              <button onClick={() => setTaxGuideOpen(v => !v)} style={taxIconBtn(taxGuideOpen)} title="Справочник: какие налоги и какие документы подавать">📚</button>
+            </div>
             <p style={{ margin: '0 0 14px', fontSize: 13, color: '#7f8c8d' }}>
               Календарь подачи, справочник форм, галка «есть фактура» и автозаполнение черновиков из банка.
               Черновики — помощник для переноса цифр в официальную веб-форму, а не налоговая консультация.
@@ -3966,12 +3998,11 @@ function App() {
               </div>
             )}
 
-            {/* КАЛЕНДАРЬ ПЛАТЕЖЕЙ И ПОДАЧИ (выпадающий, по умолчанию свёрнут — v30.1) */}
-            <details style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 10, padding: '12px 16px', marginBottom: 14 }}>
-              <summary style={{ cursor: 'pointer', fontWeight: 700, fontSize: 16, userSelect: 'none' }}>
-                📅 Календарь налоговых дедлайнов <span style={{ fontSize: 12, color: '#95a5a6', fontWeight: 400 }}>(нажмите, чтобы развернуть)</span>
-              </summary>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '10px 0 8px' }}>
+            {/* КАЛЕНДАРЬ ПЛАТЕЖЕЙ И ПОДАЧИ (открывается иконкой 📅 в шапке — v30.4) */}
+            {taxCalOpen && (
+            <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 10, padding: '12px 16px', marginBottom: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '0 0 8px' }}>
+                <h3 style={{ margin: 0 }}>📅 Календарь налоговых дедлайнов</h3>
                 <label style={{ fontSize: 13, cursor: 'pointer' }}>
                   <input type="checkbox" checked={taxShowOptional} onChange={e => setTaxShowOptional(e.target.checked)} style={{ marginRight: 5 }} />
                   показать формы «если есть работники/аренда офиса» (111/115/190/180)
@@ -3989,13 +4020,13 @@ function App() {
                   <span style={{ color: '#7f8c8d', fontSize: 13, flex: '1 1 260px' }}>{ev.what}</span>
                 </div>
               ))}
-            </details>
+            </div>
+            )}
 
-            {/* СПРАВОЧНИК: какие налоги и какие документы подавать (выпадающий, свёрнут — v30.1) */}
-            <details style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 10, padding: '12px 16px', marginBottom: 14 }}>
-              <summary style={{ cursor: 'pointer', fontWeight: 700, fontSize: 16, userSelect: 'none', marginBottom: 2 }}>
-                📚 Справочник: какие налоги и какие документы подавать <span style={{ fontSize: 12, color: '#95a5a6', fontWeight: 400 }}>(нажмите, чтобы развернуть)</span>
-              </summary>
+            {/* СПРАВОЧНИК: какие налоги и какие документы подавать (открывается иконкой 📚 в шапке — v30.4) */}
+            {taxGuideOpen && (
+            <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 10, padding: '12px 16px', marginBottom: 14 }}>
+              <h3 style={{ margin: '0 0 10px' }}>📚 Справочник: какие налоги и какие документы подавать</h3>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(330px, 1fr))', gap: 12, marginTop: 10 }}>
                 {TAX_GUIDE.map(g => (
                   <div key={g.form} style={{ border: `1px solid ${g.color}55`, borderLeft: `4px solid ${g.color}`, borderRadius: 8, padding: '10px 12px' }}>
@@ -4016,7 +4047,8 @@ function App() {
                   </div>
                 ))}
               </div>
-            </details>
+            </div>
+            )}
 
             {/* ПЛАТЕЖИ БАНКА ЗА КВАРТАЛ + ГАЛКА «ЕСТЬ ФАКТУРА» */}
             <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 10, padding: '12px 16px', marginBottom: 14 }}>
@@ -4060,19 +4092,20 @@ function App() {
               </p>
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 14 }}>с</span>
-                <select value={taxQFrom} onChange={e => setTaxQFrom(e.target.value)} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #8e44ad' }}>
+                <select value={taxQFrom} onChange={e => applyTaxRange(e.target.value, taxQTo)} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #8e44ad' }}>
                   {quarterOptions.map(k => <option key={k} value={k}>{k.replace('-', ' · ')}</option>)}
                 </select>
                 <span style={{ fontSize: 14 }}>по</span>
-                <select value={taxQTo} onChange={e => setTaxQTo(e.target.value)} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #8e44ad' }}>
+                <select value={taxQTo} onChange={e => applyTaxRange(taxQFrom, e.target.value)} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #8e44ad' }}>
                   {quarterOptions.map(k => <option key={k} value={k}>{k.replace('-', ' · ')}</option>)}
                 </select>
                 <button
-                  onClick={() => setTaxDraft(computeTaxRange(taxQFrom, taxQTo))}
+                  onClick={() => applyTaxRange(taxQFrom, taxQTo)}
                   style={{ background: '#8e44ad', color: '#fff', border: 'none', padding: '9px 18px', borderRadius: 8, fontWeight: 700, fontSize: 15, cursor: 'pointer' }}
                 >
                   🧮 Заполнить формы из банка
                 </button>
+                <span style={{ fontSize: 12, color: '#7f8c8d' }}>диапазон подставлен автоматически по датам движений в базе; при смене «с/по» формы заполняются сразу</span>
               </div>
             </div>
 
