@@ -471,6 +471,8 @@ function loadPdfJs() {
 }
 
 const isPdfFile = (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '');
+// Word/текст как источник распознавания (v32.3): PDF → Word → правка → загрузка → распознавание из текста
+const isWordFile = (f) => /\.(docx?|html?|txt)$/i.test(f.name || '') || /wordprocessingml|msword|text\/(html|plain)/.test(f.type || '');
 const isPdfUrl = (url) => /\.pdf(\?|$)/i.test(url || '');
 
 // Текст одной страницы из raw_text / raw_text_ru (формат «══════ СТРАНИЦА N из M ══════»)
@@ -964,7 +966,7 @@ function App() {
   }, [token, loadReceipts, logout]);
 
   const handleFileSelect = async (e) => {
-    const picked = Array.from(e.target.files).filter(f => f.type.startsWith('image/') || isPdfFile(f));
+    const picked = Array.from(e.target.files).filter(f => f.type.startsWith('image/') || isPdfFile(f) || isWordFile(f));
     if (picked.length > 0) {
       setPreparingPdf(picked.some(isPdfFile));
       const files = await expandFilesWithPdf(picked);
@@ -983,7 +985,7 @@ function App() {
 
   const handleDrop = async (e) => {
     e.preventDefault();
-    const picked = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/') || isPdfFile(f));
+    const picked = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/') || isPdfFile(f) || isWordFile(f));
     if (picked.length > 0) {
       setPreparingPdf(picked.some(isPdfFile));
       const files = await expandFilesWithPdf(picked);
@@ -1151,6 +1153,11 @@ function App() {
 
   const recognizeLocal = async () => {
     if (!selectedFiles.length || recognizing) return;
+    // Word/текст не нуждается в OCR — текст извлекается на бэкенде, идём обычным путём (v32.3)
+    if (selectedFiles.some(isWordFile)) {
+      alert('📝 Файл Word/текста не требует OCR — распознавание выполнится из текста файла на сервере (обычная кнопка «Распознать»).');
+      return recognizeAndSave();
+    }
     setRecognizing(true);
     setLastSavedReceipt(null);
     setFolderResults([]);
@@ -1311,7 +1318,7 @@ function App() {
     setLastSavedReceipt(null);
     try {
       let fileToUpload = file;
-      if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+      if (!isWordFile(file) && file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
         console.log(`File too large (${(file.size / 1024 / 1024).toFixed(1)}MB), compressing...`);
         fileToUpload = await compressImageFile(file);
       }
@@ -2204,6 +2211,64 @@ function App() {
   // Строки отчётности лежат в items: {section, casilla, name, name_ru, total, prev_total, text_value};
   // служебные строки section="ΣBANK" — ключевые итоги для сравнения с банковскими движениями.
 
+  // Текст страницы (с Markdown-таблицами v32.1) → HTML для Word (v32.3)
+  const mdPageToWordHtml = (text) => {
+    const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    let html = '';
+    let inTable = false;
+    let headerDone = false;
+    const closeTable = () => { if (inTable) { html += '</table>'; inTable = false; headerDone = false; } };
+    for (const line of String(text || '').split('\n')) {
+      const l = line.trim();
+      if (/^\|[\s\-:|]+\|$/.test(l)) continue; // разделитель Markdown-таблицы
+      if (l.startsWith('|') && l.endsWith('|') && l.length > 2) {
+        const cells = l.slice(1, -1).split('|').map(c => c.trim());
+        if (!inTable) { html += '<table border="1" cellspacing="0" cellpadding="4" style="border-collapse:collapse;font-size:11pt;width:100%">'; inTable = true; }
+        const tag = headerDone ? 'td' : 'th';
+        html += '<tr>' + cells.map(c => `<${tag} style="border:1px solid #000;padding:3px 6px">${esc(c)}</${tag}>`).join('') + '</tr>';
+        headerDone = true;
+      } else {
+        closeTable();
+        if (l) html += `<p style="margin:2px 0">${esc(l)}</p>`;
+      }
+    }
+    closeTable();
+    return html;
+  };
+
+  // Экспорт документа в Word (.doc): PDF → Word (правка) → повторная загрузка → распознавание из текста.
+  // Маркеры «══════ СТРАНИЦА N из M ══════» сохраняем — по ним бэкенд делит файл на страницы
+  const downloadAnnualWord = (r) => {
+    const { yearCur } = computeAnnualBankCmp(r);
+    const items = Array.isArray(r.items) ? r.items : [];
+    const denomItem = items.find(it => it && it.section === 'IDA' && /denominaci[oó]n/i.test(String(it.name || '')) && it.text_value);
+    const denom = denomItem ? String(denomItem.text_value) : (r.store_name || 'documento');
+    const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const rawText = String(r.raw_text || '');
+    const chunks = rawText.split(/(?=^══════ СТРАНИЦА )/m).filter(c => c.trim());
+    const bodyHtml = chunks.map(chunk => {
+      const m = chunk.match(/^══════ (СТРАНИЦА \d+ из \d+) ══════\n?/);
+      if (m) return `<h3 style="page-break-before:always">══════ ${m[1]} ══════</h3>` + mdPageToWordHtml(chunk.slice(m[0].length));
+      return mdPageToWordHtml(chunk);
+    }).join('\n');
+    const word = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
+<head><meta charset="utf-8"><title>Cuentas Anuales ${yearCur || ''} — ${esc(denom)}</title></head>
+<body style="font-family:'Times New Roman',serif">
+<h2>CUENTAS ANUALES ${yearCur || ''} — ${esc(denom)} — REGISTRO MERCANTIL</h2>
+<p style="color:#666;font-size:10pt">Текст, восстановленный распознаванием. Исправьте ошибки и загрузите файл обратно — распознавание выполнится из текста Word, без OCR. Заголовки «══════ СТРАНИЦА N из M ══════» НЕ удаляйте — по ним файл делится на страницы.</p>
+${bodyHtml}
+</body></html>`;
+    const blob = new Blob(['﻿' + word], { type: 'application/msword;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `cuentas_anuales_${yearCur || 'ejercicio'}_${r.id || 'export'}.doc`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  };
+
+
   // Сверка итогов отчётности с банковскими движениями за отчётный год (общая для карточки и HTML, v32.2)
   const computeAnnualBankCmp = (r) => {
     const items = Array.isArray(r.items) ? r.items : [];
@@ -2388,6 +2453,10 @@ function App() {
               <button onClick={() => openAnnualHTMLPage(r)} style={{ padding: '6px 14px', fontSize: 13, cursor: 'pointer' }}
                 title="Открыть документ отдельной HTML-страницей (вид официальной формы + сверка с банком; можно сохранить и напечатать)">
                 🌐 HTML-страница
+              </button>
+              <button onClick={() => downloadAnnualWord(r)} style={{ padding: '6px 14px', fontSize: 13, cursor: 'pointer' }}
+                title="Скачать текст документа в Word (.doc): исправьте ошибки и загрузите обратно — распознавание пойдёт из текста Word">
+                ⬇ Word (.doc)
               </button>
               <button onClick={() => downloadAnnualCSV(r)} style={{ padding: '6px 14px', fontSize: 13, cursor: 'pointer' }}
                 title="Выгрузить таблицу касилий в Excel (CSV)">
@@ -3509,7 +3578,7 @@ function App() {
             </div>
           </div>
 
-          <input type="file" accept="image/*,application/pdf" multiple onChange={handleFileSelect} id="file-input" style={{ display: 'none' }} />
+          <input type="file" accept="image/*,application/pdf,.doc,.docx,.txt,.html,.htm" multiple onChange={handleFileSelect} id="file-input" style={{ display: 'none' }} />
           {/* Только webkitdirectory — без multiple/accept: тогда диалог выбирает ПАПКУ целиком,
               а файлы внутри не кликабельны (с accept/macOS диалог превращался в выбор файлов).
               Фильтрация по типу всё равно есть в handleFolderSelect */}
@@ -3562,7 +3631,7 @@ function App() {
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-10 · v32.2 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
+              сборка 2026-08-10 · v32.3 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
               <button
                 onClick={configureLocalOcr}
                 title="Задать адрес локального OCR (HTTPS-туннель cloudflared)"
@@ -3573,7 +3642,7 @@ function App() {
 
           <div className="upload-layout">
             <div className="drop-zone" onDrop={handleDrop} onDragOver={e => e.preventDefault()}>
-              <input type="file" accept="image/*,application/pdf" multiple onChange={handleFileSelect} id="file-input-hidden" style={{ display: 'none' }} />
+              <input type="file" accept="image/*,application/pdf,.doc,.docx,.txt,.html,.htm" multiple onChange={handleFileSelect} id="file-input-hidden" style={{ display: 'none' }} />
               <label htmlFor="file-input" style={{ display: 'block', width: '100%', cursor: 'pointer' }}>
                 {preparingPdf ? (
                   <div className="drop-text">
@@ -3582,6 +3651,14 @@ function App() {
                   </div>
                 ) : previewUrl ? (
                   <div className="preview-container">
+                    {selectedFiles[currentFileIndex] && isWordFile(selectedFiles[currentFileIndex]) ? (
+                      <div style={{ padding: '26px 16px', textAlign: 'center', background: 'linear-gradient(180deg,#ffffff,#ececf0)', border: '1px solid #d2d2d7', borderRadius: 14, maxWidth: 420, margin: '0 auto' }}>
+                        <div style={{ fontSize: 42, marginBottom: 8 }}>📝</div>
+                        <div style={{ fontWeight: 700, color: '#1d1d1f', wordBreak: 'break-all' }}>{selectedFiles[currentFileIndex].name}</div>
+                        <div style={{ fontSize: 12, color: '#6e6e73', marginTop: 6 }}>Файл Word/текста — распознавание выполнится ИЗ ТЕКСТА, без OCR.<br/>Нажмите «Распознать».</div>
+                      </div>
+                    ) : (
+                    <>
                     <img
                       src={previewUrl}
                       alt="Preview"
@@ -3591,6 +3668,8 @@ function App() {
                       onClick={(e) => { e.preventDefault(); e.stopPropagation(); setFullscreenImage(previewUrl); }}
                     />
                     <p style={{ fontSize: 11, color: '#95a5a6', margin: '4px 0 0' }}>Нажмите на изображение для увеличения</p>
+                    </>
+                    )}
                     {selectedFiles.length > 1 && (
                       <div className="file-nav">
                         <button onClick={(e) => {e.preventDefault(); prevFile();}} disabled={currentFileIndex === 0}>◀</button>

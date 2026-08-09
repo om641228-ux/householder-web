@@ -301,7 +301,17 @@ Bucket: `receipt-images` (public, policies SELECT/INSERT/DELETE).
 
 ## 14. Changelog
 
-**2026-08-10 (текущая финальная версия, v32.2 — HTML-страница документа в виде официальной формы Registro Mercantil)**
+**2026-08-10 (текущая финальная версия, v32.3 — цепочка PDF → Word → распознавание из текста → HTML)**
+- Запрос пользователя: «организуй экспорт сначала pdf в word потом распознавание и представление в html». Word — редактируемое промежуточное звено: экспортировал → поправил ошибки в Word → загрузил обратно → распознавание из исправленного текста → представление в HTML (v32.2).
+- Backend (index.js):
+  - `extractPageTextsFromWordFile(buffer, filename)` — файл → массив текстов страниц. .txt — как есть; .doc/.htm (Word MIME HTML) — `htmlToTextWithTables` (таблицы → Markdown-строки «| a | b | c |»); .docx — `extractTextFromDocx`: ZIP центральный каталог вручную + Node zlib.inflateRawSync для word/document.xml (новых зависимостей НЕТ), w:tc → « | », w:tr/w:p → переносы; порядок замен важен: `</w:p>` перед `</w:tc>` гасим (иначе каждая ячейка на своей строке). Деление на страницы по маркерам «══════ СТРАНИЦА N из M ══════» (принимаются и =), преамбула до первого маркера дописывается в стр. 1 (заголовок «CUENTAS ANUALES … REGISTRO MERCANTIL» нужен детектору).
+  - Ветки импорта: `/api/upload-receipt` (синхронно; >2 стр. → finalizeDocumentFromPageTexts, ≤2 → finalizeReceiptFromPageTexts) и `/api/upload-document-pages` (асинхронно через docJob; смешанные word+изображения — ошибка «загружайте отдельно»). Метод распознавания: «word/text import (N стр.)». Файл сохраняется в Storage как есть.
+  - looksLikeAnnualAccounts усилен для ре-импорта из Word (сконвертированные таблицы без заголовков форм): +2 importe neto de la cifra de negocios, +1 activo (no) corriente/patrimonio neto, +1 gastos de personal/otros gastos de explotación.
+- Frontend (App.js): кнопка «⬇ Word (.doc)» в карточке годовой отчётности — `downloadAnnualWord(r)`: Word MIME HTML (открывается в MS Word/LibreOffice), заголовок «CUENTAS ANUALES {год} — {denominación} — REGISTRO MERCANTIL» + инструкция (не удалять маркеры страниц), страницы raw_text через `mdPageToWordHtml` (Markdown-таблицы → настоящие Word-таблицы border=1, page-break на каждой странице). Загрузка: accept дополнен (.doc,.docx,.txt,.html,.htm) в обоих file-input; `isWordFile()`; фильтры handleFileSelect/handleDrop; для word-файлов НЕ сжимаем (compressImageFile пропускается), превью — плейсхолдер 📝 вместо <img>; recognizeLocal при word-файле → предупреждение + обычный облачный путь (OCR не нужен).
+- Проверено тестами: настоящий .docx (zip+deflate) и Word HTML .doc → страницы с Markdown-таблицами; детектор годовой отчётности на ре-импорте = true.
+- Деплой ОБОИХ: householder-api (index.js) + householder-web (App.js). Метка сборки: «сборка 2026-08-10 · v32.3».
+
+**2026-08-10 (v32.2 — HTML-страница документа в виде официальной формы Registro Mercantil)**
 - Запрос пользователя (по скриншоту IDA1: текст полей распознан, но вид формы — клеточки, касилии — потерян): «сделать распознавание как оригинал, может экспортировать в HTML а потом распознать (под документ создавать HTML страницу)».
 - Решение — НЕ генерация HTML через LLM (дорого/хрупко), а детерминированное восстановление вида формы из уже распознанных касилий (items): точно, мгновенно, бесплатно, всегда совпадает с данными карточки и сверки.
 - Backend (index.js): расширен regex buildAnnualAccountsSample — теперь в выборку для структурирования попадают и идентификационные листы (identificación, denominación, domicilio, CNAE, titular real, presentación de cuentas, fecha de inicio/cierre, órgano de administración, personal asalariado), а не только баланс/P&L: раньше IDA1 (NIF, даты cierre, CNAE) мог не попасть в анализ.

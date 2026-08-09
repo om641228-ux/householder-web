@@ -707,6 +707,10 @@ function looksLikeAnnualAccounts(text) {
   if (/cuenta\s+de\s+p[ée]rdidas\s+y\s+ganancias/i.test(t)) score += 2;
   if (/casilla\s*(?:n[ºo°]\s*)?\d{4,5}/i.test(t)) score += 1;
   if (/dep[oó]sito\s+de\s+cuentas|formulaci[oó]n\s+de\s+cuentas|memoria\s+abreviada/i.test(t)) score += 1;
+  // Маркеры для повторного импорта из Word: сконвертированные таблицы без заголовков форм
+  if (/importe\s+neto\s+de\s+la\s+cifra\s+de\s+negocios/i.test(t)) score += 2;
+  if (/activo\s+(?:no\s+)?corriente|patrimonio\s+neto/i.test(t)) score += 1;
+  if (/gastos\s+de\s+personal|otros\s+gastos\s+de\s+explotaci[oó]n/i.test(t)) score += 1;
   return score >= 4;
 }
 
@@ -869,6 +873,128 @@ function parseAmountLike(s) {
   }
   const n = parseFloat(t);
   return isNaN(n) ? null : n;
+}
+
+// ========== WORD/ТЕКСТ как источник распознавания (v32.3) ==========
+// Цепочка пользователя: PDF → экспорт в Word из карточки → правка в Word → загрузка Word →
+// распознавание ИЗ ТЕКСТА (без OCR) → представление в HTML. Поддержка: .txt, .doc/.htm (это HTML
+// Word — таблицы превращаем обратно в Markdown-строки), .docx (zip: читаем word/document.xml
+// через встроенный zlib — новых зависимостей не нужно).
+function decodeHtmlEntities(s) {
+  return String(s)
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0?39;|&apos;/gi, "'")
+    .replace(/&#(\d+);/g, (_, n) => { try { return String.fromCodePoint(+n); } catch { return ''; } });
+}
+
+// HTML (Word MIME .doc / .htm) → текст; таблицы → Markdown-строки "| a | b | c |"
+function htmlToTextWithTables(html) {
+  let t = String(html);
+  t = t.replace(/<!--[\s\S]*?-->/g, ' ');
+  t = t.replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<script[\s\S]*?<\/script>/gi, ' ');
+  t = t.replace(/<\s*br\s*\/?\s*>/gi, '\n');
+  t = t.replace(/<\/t[dh]>\s*<t[dh][^>]*>/gi, ' | ');
+  t = t.replace(/<\/t[dh]>/gi, ' |');
+  t = t.replace(/<\/tr>/gi, '\n');
+  t = t.replace(/<\/(p|div|h[1-6]|table|li|tr)>/gi, '\n');
+  t = t.replace(/<[^>]+>/g, '');
+  t = decodeHtmlEntities(t);
+  t = t.split('\n').map(line => {
+    const l = line.replace(/\s+/g, ' ').trim();
+    if (!l) return '';
+    if (l.includes('|') && !l.startsWith('|')) return '| ' + l;
+    return l;
+  }).join('\n');
+  return t.replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// .docx — ZIP-архив: ищем word/document.xml по центральному каталогу, распаковываем deflate
+// через Node zlib; XML Word → текст с Markdown-строками таблиц
+function extractTextFromDocx(buffer) {
+  const zlib = require('zlib');
+  let eocd = -1; // End Of Central Directory — с конца файла
+  for (let i = buffer.length - 22; i >= Math.max(0, buffer.length - 65558); i--) {
+    if (buffer.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) return null;
+  const cdCount = buffer.readUInt16LE(eocd + 10);
+  let cdOff = buffer.readUInt32LE(eocd + 16);
+  for (let n = 0; n < cdCount && cdOff + 46 <= buffer.length; n++) {
+    if (buffer.readUInt32LE(cdOff) !== 0x02014b50) break;
+    const method = buffer.readUInt16LE(cdOff + 10);
+    const compSize = buffer.readUInt32LE(cdOff + 20);
+    const nameLen = buffer.readUInt16LE(cdOff + 28);
+    const extraLen = buffer.readUInt16LE(cdOff + 30);
+    const commentLen = buffer.readUInt16LE(cdOff + 32);
+    const localOff = buffer.readUInt32LE(cdOff + 42);
+    const name = buffer.slice(cdOff + 46, cdOff + 46 + nameLen).toString('utf8');
+    cdOff += 46 + nameLen + extraLen + commentLen;
+    if (!/word\/document\.xml$/i.test(name)) continue;
+    if (buffer.readUInt32LE(localOff) !== 0x04034b50) return null;
+    const lNameLen = buffer.readUInt16LE(localOff + 26);
+    const lExtraLen = buffer.readUInt16LE(localOff + 28);
+    const dataStart = localOff + 30 + lNameLen + lExtraLen;
+    const comp = buffer.slice(dataStart, dataStart + compSize);
+    let xml = null;
+    try {
+      xml = method === 8 ? zlib.inflateRawSync(comp).toString('utf8')
+        : method === 0 ? comp.toString('utf8') : null;
+    } catch (e) { return null; }
+    if (!xml) return null;
+    let t = xml;
+    t = t.replace(/<w:tab[^>]*\/>/gi, ' ');
+    t = t.replace(/<w:br[^>]*\/>/gi, '\n');
+    // Сначала таблицы: конец параграфа ВНУТРИ ячейки — не перенос строки, иначе
+    // каждая ячейка уедет на свою строку и таблица развалится
+    t = t.replace(/<\/w:p>(?=<\/w:tc>)/gi, '');
+    t = t.replace(/<\/w:tc>\s*<w:tc[^>]*>/gi, ' | ');
+    t = t.replace(/<\/w:tc>/gi, ' |');
+    t = t.replace(/<\/w:tr>/gi, '\n');
+    t = t.replace(/<\/w:p>/gi, '\n');
+    t = t.replace(/<[^>]+>/g, '');
+    t = decodeHtmlEntities(t);
+    return t.split('\n').map(line => {
+      const l = line.replace(/[ \t]+/g, ' ').trim();
+      if (!l) return '';
+      if (l.includes('|') && !l.startsWith('|')) return '| ' + l;
+      return l;
+    }).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+  return null;
+}
+
+// Файл Word/текста → массив текстов страниц (деление по маркерам нашего экспорта
+// «══════ СТРАНИЦА N из M ══════»; без маркеров — одна страница)
+async function extractPageTextsFromWordFile(buffer, filename) {
+  const ext = (String(filename || '').match(/\.([^.]+)$/) || [null, ''])[1].toLowerCase();
+  let text = null;
+  if (ext === 'docx') {
+    try { text = extractTextFromDocx(buffer); } catch (e) { console.error('DOCX parse:', e.message); }
+    if (!text) throw new Error('Не удалось прочитать .docx (файл повреждён или нестандартный архив)');
+  } else {
+    const raw = buffer.toString('utf8').replace(/^﻿/, '');
+    text = /<html|<table|<w:|<meta\s/i.test(raw) ? htmlToTextWithTables(raw) : raw.trim();
+  }
+  if (!text || text.trim().length < 10) return [];
+  const re = /[═=]{3,}\s*СТРАНИЦА\s+\d+\s+из\s+\d+\s*[═=]{3,}/gi;
+  const marks = [];
+  let m;
+  while ((m = re.exec(text)) !== null) marks.push({ idx: m.index, end: m.index + m[0].length });
+  if (!marks.length) return [text.trim()];
+  const pages = [];
+  for (let i = 0; i < marks.length; i++) {
+    const body = text.slice(marks[i].end, i + 1 < marks.length ? marks[i + 1].idx : text.length).trim();
+    if (body) pages.push(body);
+  }
+  // Преамбула до первого маркера (заголовок документа: «CUENTAS ANUALES … REGISTRO MERCANTIL») —
+  // важна для детектора типа: дописываем в начало первой страницы
+  const preamble = text.slice(0, marks[0].idx).trim();
+  if (preamble && pages.length) pages[0] = preamble + '\n' + pages[0];
+  return pages.length ? pages : [text.trim()];
 }
 
 // Сборка документа из готовых текстов страниц: перевод по страницам + модули + JSON-сводка
@@ -1819,6 +1945,31 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     const paymentStatusOverride = sanitizePaymentStatus(req.body.payment_status);
     
     const isPdf = req.file.mimetype === 'application/pdf' || /\.pdf$/i.test(req.file.originalname || '');
+
+    // WORD/ТЕКСТ как источник (v32.3): PDF → Word → правка → распознавание ИЗ ТЕКСТА (без OCR)
+    const fname = req.file.originalname || '';
+    const isWordLike = /\.(docx?|html?|txt)$/i.test(fname)
+      || /wordprocessingml|msword|text\/(html|plain)/.test(req.file.mimetype || '');
+    if (isWordLike) {
+      const pageTexts = await extractPageTextsFromWordFile(req.file.buffer, fname);
+      if (!pageTexts.length) return res.status(400).json({ error: 'Не удалось извлечь текст из файла (пустой или неподдерживаемый формат)' });
+      console.log(`Word/text-импорт: ${fname} → страниц: ${pageTexts.length}`);
+      let rd = pageTexts.length > 2
+        ? await finalizeDocumentFromPageTexts(pageTexts, currency, docType)
+        : await finalizeReceiptFromPageTexts(pageTexts, currency, docType);
+      rd = await ensureRawTextRu(rd);
+      rd.docType = docType === 'auto' ? (rd.document_type || 'other') : docType;
+      rd.object = (object && object !== 'other') ? object : (rd.object || 'other');
+      if (subtypeOverride) rd.subtype = subtypeOverride;
+      if (paymentStatusOverride) rd.payment_status = paymentStatusOverride;
+      const fileUrl = await uploadToStorage(req.file.buffer, fname, user.id, req.file.mimetype || 'application/octet-stream');
+      const savedW = await saveReceiptToDB(rd, fileUrl, user, `word/text import (${pageTexts.length} стр.)`);
+      return res.json({
+        success: true, id: savedW.id, ...savedW, image_url: fileUrl,
+        warning: `Импорт из Word/текста (${pageTexts.length} стр.) — распознавание по тексту, без OCR`
+      });
+    }
+
     const mimeType = isPdf ? 'application/pdf' : 'image/jpeg';
     const processedBuffer = isPdf ? req.file.buffer : await processImage(req.file.buffer);
 
@@ -2233,6 +2384,39 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
     const object = req.body.object || 'other';
     const subtypeOverride = req.body.subtype && req.body.subtype !== 'auto' ? req.body.subtype : null;
     const paymentStatusOverride = sanitizePaymentStatus(req.body.payment_status);
+
+    // WORD/ТЕКСТ (v32.3): OCR не нужен — страницы извлекаем из текста файла
+    const isWordFile = f => /\.(docx?|html?|txt)$/i.test(f.originalname || '') || /wordprocessingml|msword|text\/(html|plain)/.test(f.mimetype || '');
+    const wordFiles = files.filter(isWordFile);
+    if (wordFiles.length) {
+      if (wordFiles.length !== files.length) return res.status(400).json({ error: 'Файлы Word/текста загружайте отдельно от изображений и PDF' });
+      const pageTexts = [];
+      for (const f of files) pageTexts.push(...await extractPageTextsFromWordFile(f.buffer, f.originalname));
+      if (!pageTexts.length) return res.status(400).json({ error: 'Не удалось извлечь текст из файла Word/текста' });
+      console.log(`Word/text-импорт (document-pages): ${files.map(f => f.originalname).join(', ')} → страниц: ${pageTexts.length}`);
+      const jobIdW = createDocJob(pageTexts.length);
+      res.json({ success: true, jobId: jobIdW, async: true });
+      const jobW = docJobs.get(jobIdW);
+      const t0w = Date.now();
+      try {
+        const receiptData = await finalizeDocumentFromPageTexts(pageTexts, currency, docType);
+        receiptData.docType = docType === 'auto' ? (receiptData.document_type || 'other') : docType;
+        receiptData.object = (object && object !== 'other') ? object : (receiptData.object || 'other');
+        if (subtypeOverride) receiptData.subtype = subtypeOverride;
+        if (paymentStatusOverride) receiptData.payment_status = paymentStatusOverride;
+        const fileUrl = await uploadToStorage(files[0].buffer, files[0].originalname, user.id, files[0].mimetype || 'application/octet-stream');
+        const saved = await saveReceiptToDB(receiptData, fileUrl, user, `word/text import (${pageTexts.length} стр., async)`);
+        jobW.status = 'done';
+        jobW.result = { success: true, id: saved.id, ...saved, image_url: fileUrl };
+        console.log(`Задача ${jobIdW}: Word-документ ${pageTexts.length} стр. готов за ${Math.round((Date.now() - t0w) / 1000)}с`);
+      } catch (e) {
+        console.error(`Задача ${jobIdW} (word) упала:`, e);
+        jobW.status = 'error';
+        jobW.error = e.message;
+      }
+      return;
+    }
+
     if (!genAI) return res.status(500).json({ error: 'Постраничное распознавание требует GEMINI_API_KEY на бэкенде' });
 
     // Подготовка страниц: изображения сжимаем как обычно, PDF-страницы — как есть
