@@ -2177,6 +2177,28 @@ function App() {
     return rows;
   };
 
+  // Выгрузка распознанной отчётности в Excel (CSV с BOM, разделитель «;») — v32.1
+  const downloadAnnualCSV = (r) => {
+    const items = Array.isArray(r.items) ? r.items : [];
+    const rows = items.filter(it => it && it.section !== 'ΣBANK');
+    const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const num = v => (v == null || v === '') ? '' : String(Number(v)).replace('.', ',');
+    const lines = [['Sección', 'Casilla', 'Partida (ES)', 'Перевод (RU)', 'Ejercicio', 'Ejercicio anterior'].map(esc).join(';')];
+    rows.forEach(it => lines.push([
+      it.section || '', it.casilla || '', it.name || '', it.name_ru || '',
+      it.text_value != null && it.text_value !== '' ? it.text_value : num(it.total), num(it.prev_total)
+    ].map(esc).join(';')));
+    const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const year = (r.valid_to || r.receipt_date || '').slice(0, 4) || 'ejercicio';
+    a.download = `cuentas_anuales_${year}_${r.id || 'export'}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  };
+
   // ========== ГОДОВАЯ ОТЧЁТНОСТЬ (Cuentas Anuales) — v32 ==========
   // Карточка документа: таблица касилий (оригинал ES + перевод RU + оба года) и сверка итогов с банком.
   // Строки отчётности лежат в items: {section, casilla, name, name_ru, total, prev_total, text_value};
@@ -2241,8 +2263,14 @@ function App() {
     return (
       <>
         <div className="info-block">
-          <h3>📊 Cuentas Anuales — Годовая отчётность ({tableRows.length} строк)</h3>
-          <div style={{ overflowX: 'auto' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+            <h3 style={{ margin: 0 }}>📊 Cuentas Anuales — Годовая отчётность ({tableRows.length} строк)</h3>
+            <button onClick={() => downloadAnnualCSV(r)} style={{ padding: '6px 16px', fontSize: 13, cursor: 'pointer' }}
+              title="Выгрузить таблицу касилий в Excel (CSV)">
+              ⬇ Excel (CSV)
+            </button>
+          </div>
+          <div style={{ overflowX: 'auto', marginTop: 8 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ background: 'linear-gradient(180deg,#f5f5f7,#e8e8ed)' }}>
@@ -3404,7 +3432,7 @@ function App() {
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-10 · v32 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
+              сборка 2026-08-10 · v32.1 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
               <button
                 onClick={configureLocalOcr}
                 title="Задать адрес локального OCR (HTTPS-туннель cloudflared)"

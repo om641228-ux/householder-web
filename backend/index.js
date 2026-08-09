@@ -782,6 +782,40 @@ function buildAnnualAccountsPrompt(textSample) {
 ${textSample}`;
 }
 
+// Страница является таблицей официальной формы (баланс / P&L), а не текстовым листом (IDA/TR)
+function looksLikeFormTablePage(t) {
+  const s = String(t || '');
+  if (/^\((ошибка|страница без текста|страница не распознана)/.test(s)) return false;
+  let score = 0;
+  if (/balance\s+de\s+situaci[oó]n/i.test(s)) score += 3;
+  if (/cuenta\s+de\s+p[ée]rdidas\s+y\s+ganancias/i.test(s)) score += 3;
+  if (/activo\s+(?:no\s+)?corriente|patrimonio\s+neto\s+y\s+pasivo/i.test(s)) score += 2;
+  if (/ejercicio\s+20\d{2}/i.test(s) && /\d{1,3}(?:\.\d{3})+,\d{2}/.test(s)) score += 2;
+  if ((s.match(/\b\d{5}\b/g) || []).length >= 3) score += 2; // номера касилий
+  return score >= 3;
+}
+
+// v32.1 (идея пользователя): СНАЧАЛА конвертируем разваленную OCR-таблицу формы в чистую
+// Markdown-таблицу (структура!), потом переводим и разбираем ПОСТРОЧНО — перевод таблицы
+// уже не рассыпается, а касильи извлекаются точнее
+function buildFormTablePrompt(text) {
+  return `Это OCR-текст ОДНОЙ страницы официальной испанской отчётной формы (Balance de Situación / Cuenta de Pérdidas y Ganancias). Таблица в тексте развалена: названия статей, номера касилий (5 цифр) и суммы двух лет идут не по строкам.
+ЗАДАЧА: восстанови таблицу и верни её в формате Markdown.
+ПРАВИЛА:
+1. Сначала — шапка формы строками «Ключ: значение» (NIF, Denominación social, Unidad, код листа BA1/BA2.1/BA2.2/PA — если есть на странице).
+2. Затем ОДНА Markdown-таблица: | Casilla | Partida | Notas | Ejercicio 20XX | Ejercicio 20YY | — года возьми из заголовков страницы; если столбца «Notas de la memoria» нет или он везде пуст — не добавляй его.
+3. Каждая строка формы = одна строка таблицы: название статьи ТОЛЬКО на испанском как напечатано (НЕ переводи), номер касильи, суммы в испанском формате как напечатано (602.122,09; отрицательные со знаком минус).
+4. Многострочные названия собери в одну строку; суммы привяжи к правильной строке по смыслу (иерархия A), B), I., II., 1., 2., a), b)...).
+5. Промежуточные и итоговые строки (TOTAL ACTIVO, PATRIMONIO NETO, RESULTADO DE EXPLOTACIÓN, RESULTADO DEL EJERCICIO...) — обязательно включи с их касилиями.
+6. Ничего не выдумывай: значение не читается — ячейка пустая. Точечные заполнители (........) выбрось.
+7. Верни ТОЛЬКО шапку и таблицу, без пояснений и ограждающих \`\`\`.
+
+ТЕКСТ СТРАНИЦЫ:
+"""
+${text}
+"""`;
+}
+
 // Страховка: если модель не вернула строки ΣBANK — выводим их из распознанных касилий/названий
 function ensureAnnualBankSummary(items) {
   if (!Array.isArray(items) || !items.length) return items;
@@ -838,10 +872,32 @@ function parseAmountLike(s) {
 // Сборка документа из готовых текстов страниц: перевод по страницам + модули + JSON-сводка
 async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
   const pageCount = pageTexts.length;
-  const raw_text = pageTexts.map((t, i) => `══════ СТРАНИЦА ${i + 1} из ${pageCount} ══════\n${t}`).join('\n\n');
+
+  // Годовая отчётность (v32): детект по исходным текстам страниц
+  const isAnnualAccounts = looksLikeAnnualAccounts(pageTexts.join('\n').slice(0, 40000));
+
+  // v32.1: страницы-формы (баланс/P&L) СНАЧАЛА конвертируем в Markdown-таблицы,
+  // затем переводим и разбираем построчно — таблица не рассыпается в точки
+  let effTexts = pageTexts;
+  if (isAnnualAccounts) {
+    effTexts = await runWithConcurrency(pageTexts, async (t) => {
+      if (!looksLikeFormTablePage(t)) return t;
+      try {
+        let tbl = String(await callTextChain(buildFormTablePrompt(t.slice(0, 12000))) || '').trim();
+        tbl = tbl.replace(/^```[a-zA-Z]*\s*\n?/, '').replace(/\n?```\s*$/, '').trim();
+        return tbl.includes('|') ? tbl : t;
+      } catch (e) {
+        console.error('Конвертация страницы формы в таблицу не удалась:', e.message);
+        return t;
+      }
+    }, 3);
+    console.log(`Годовая отчётность: в таблицы сконвертировано ${effTexts.filter((t, i) => t !== pageTexts[i]).length}/${pageCount} стр.`);
+  }
+
+  const raw_text = effTexts.map((t, i) => `══════ СТРАНИЦА ${i + 1} из ${pageCount} ══════\n${t}`).join('\n\n');
 
   // Перевод каждой страницы — текстовая цепочка (3 параллельно)
-  const ruTexts = await runWithConcurrency(pageTexts, async (t) => {
+  const ruTexts = await runWithConcurrency(effTexts, async (t) => {
     if (/^\((ошибка|страница без текста|страница не распознана)/.test(t)) return t;
     const ru = await translateRawText(t);
     // Перевод недоступен или похож на пустую сетку при содержательном оригинале —
@@ -851,11 +907,10 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
   }, 3);
   const raw_text_ru = ruTexts.map((t, i) => `══════ СТРАНИЦА ${i + 1} из ${pageCount} ══════\n${t}`).join('\n\n');
 
-  // Годовая отчётность (v32): спец-промпт + выборка страниц с цифрами из середины пакета
-  const isAnnualAccounts = looksLikeAnnualAccounts(raw_text);
-  // JSON-сводка полей (начало + конец документа; для годовой отчётности — страницы с балансом/P&L)
+  // JSON-сводка полей (начало + конец документа; для годовой отчётности — страницы с балансом/P&L,
+  // уже сконвертированные в таблицы — касильи извлекаются точнее)
   const sample = isAnnualAccounts
-    ? buildAnnualAccountsSample(pageTexts)
+    ? buildAnnualAccountsSample(effTexts)
     : `${raw_text.slice(0, 12000)}\n\n…(середина документа опущена)…\n\n${raw_text.slice(-5000)}`;
   let data;
   try {
