@@ -713,7 +713,9 @@ function looksLikeAnnualAccounts(text) {
 // Выборка страниц с цифрами отчётности: в 20+ страничном пакете баланс и P&L — в середине,
 // стандартный сэмпл «начало+конец» их не захватывает
 function buildAnnualAccountsSample(pageTexts, maxLen = 22000) {
-  const re = /balance|situaci[oó]n|cuenta\s+de\s+p|activo|pasivo|patrimonio|casilla|resultado|ingresos|gastos|acreedores|deudores|efectivo|amortizaci/i;
+  // Финансовые листы (баланс/P&L) + идентификационные (IDA: NIF, denominación, domicilio,
+  // CNAE, fechas de inicio/cierre) + titular real / presentación — всё нужно в сводке
+  const re = /balance|situaci[oó]n|cuenta\s+de\s+p|activo|pasivo|patrimonio|casilla|resultado|ingresos|gastos|acreedores|deudores|efectivo|amortizaci|identificaci[oó]n|denominaci[oó]n|domicilio|cnae|titular\s+real|presentaci[oó]n\s+de\s+cuentas|fecha\s+de\s+(inicio|cierre)|[oó]rgano\s+de\s+administraci|personal\s+asalariado/i;
   const picked = pageTexts
     .map((t, i) => ({ t, i }))
     .filter(p => re.test(p.t) && !/^\((ошибка|страница без текста|страница не распознана)/.test(p.t));

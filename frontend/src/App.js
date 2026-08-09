@@ -752,7 +752,8 @@ function App() {
   const [savingEdit, setSavingEdit] = useState(false);
 
   // При открытии другого чека галерея начинается с первой страницы, режим редактирования сбрасывается
-  useEffect(() => { setModalPageIdx(0); setEditMode(false); setPageTextLang('ru'); }, [viewModal?.id]);
+  useEffect(() => { setModalPageIdx(0); setEditMode(false); setPageTextLang('ru'); setAnnualFormView(false); }, [viewModal?.id]);
+  const [annualFormView, setAnnualFormView] = useState(false); // годовая отчётность: таблица | вид официальной формы (v32.2)
   const [pageTextLang, setPageTextLang] = useState('ru'); // текст страницы рядом с галереей: перевод | оригинал
   // Ширина окна — адаптивная раскладка карточки документа (<900px: изображение и перевод — вертикально, для мобильных)
   const [winWidth, setWinWidth] = useState(window.innerWidth);
@@ -2200,41 +2201,24 @@ function App() {
   };
 
   // ========== ГОДОВАЯ ОТЧЁТНОСТЬ (Cuentas Anuales) — v32 ==========
-  // Карточка документа: таблица касилий (оригинал ES + перевод RU + оба года) и сверка итогов с банком.
   // Строки отчётности лежат в items: {section, casilla, name, name_ru, total, prev_total, text_value};
   // служебные строки section="ΣBANK" — ключевые итоги для сравнения с банковскими движениями.
-  const renderAnnualAccountsCard = (r) => {
+
+  // Сверка итогов отчётности с банковскими движениями за отчётный год (общая для карточки и HTML, v32.2)
+  const computeAnnualBankCmp = (r) => {
     const items = Array.isArray(r.items) ? r.items : [];
-    const SECTION_LABELS = {
-      IDA: 'Identificación — Идентификация',
-      BA: 'Balance de Situación — Баланс',
-      PA: 'Cuenta de Pérdidas y Ganancias — Прибыли и убытки',
-      OTROS: 'Otros — Прочее'
-    };
-    const bankRows = items.filter(it => it && it.section === 'ΣBANK');
     const totals = {};
-    bankRows.forEach(it => {
+    items.filter(it => it && it.section === 'ΣBANK').forEach(it => {
       totals[it.name] = {
         cur: it.total != null ? Number(it.total) : null,
         prev: it.prev_total != null ? Number(it.prev_total) : null,
         ru: it.name_ru || it.name
       };
     });
-    const tableRows = items.filter(it => it && it.section !== 'ΣBANK');
     const yearCur = totals.ejercicio?.cur
       || (r.valid_to ? +String(r.valid_to).slice(0, 4) : null)
       || (r.receipt_date ? +String(r.receipt_date).slice(0, 4) : null);
     const yearPrev = totals.ejercicio?.prev || (yearCur ? yearCur - 1 : null);
-    const fmtN = n => n == null || isNaN(n)
-      ? '—'
-      : Number(n).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const numCell = n => (
-      <td style={{ padding: '5px 8px', borderBottom: '1px solid #ececf0', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', color: n == null ? '#8e8e93' : (Number(n) < 0 ? '#c0392b' : '#1d1d1f') }}>
-        {fmtN(n)}
-      </td>
-    );
-
-    // Сверка с банком: движения за отчётный год
     const mvts = Array.isArray(bankMovements) ? bankMovements : [];
     let cmp = null;
     if (yearCur) {
@@ -2259,17 +2243,162 @@ function App() {
         mkRow('efectivo', 'Efectivo (casilla 12700)', 'Денежные средства на 31.12', bankBal, `остаток по выписке на 31.12.${yearCur}`)
       ];
     }
+    return { totals, yearCur, yearPrev, cmp, mvtsCount: mvts.length };
+  };
+
+  // HTML документа в виде официальной формы Registro Mercantil (v32.2):
+  // детерминированное восстановление вида из распознанных касилий — оригинал (ES) + перевод (RU).
+  // standalone=true → полная страница (для отдельной вкладки/печати); false → фрагмент для модалки
+  const buildAnnualHTML = (r, standalone = true) => {
+    const items = (Array.isArray(r.items) ? r.items : []).filter(it => it && it.section);
+    const rows = items.filter(it => it.section !== 'ΣBANK');
+    const { totals, yearCur, yearPrev, cmp } = computeAnnualBankCmp(r);
+    const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const fmtN = n => (n == null || isNaN(n)) ? '' : Number(n).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    // Иерархия строки формы по префиксу названия: A) → раздел; I. → группа; 1. → подгруппа; a) → пункт
+    const levelOf = name => {
+      const s = String(name || '').trim();
+      if (/^[A-Z]\)\s/.test(s) || /^TOTAL\b/i.test(s) || /^RESULTADO\b/i.test(s)) return 0;
+      if (/^[IVX]{1,4}\.\s/.test(s)) return 1;
+      if (/^\d{1,2}\.\s/.test(s)) return 2;
+      if (/^[a-z]\)\s/.test(s)) return 3;
+      return 2;
+    };
+    const nif = r.invoice_number || '';
+    const denomItem = rows.find(it => it.section === 'IDA' && /denominaci[oó]n/i.test(String(it.name || '')) && it.text_value);
+    const denom = denomItem ? String(denomItem.text_value) : (r.store_name || '');
+    const SECTION_META = {
+      IDA: ['DATOS GENERALES DE IDENTIFICACIÓN', 'Идентификационные данные', 'IDA1'],
+      BA: ['BALANCE DE SITUACIÓN ABREVIADO', 'Баланс (сокращённый)', 'BA'],
+      PA: ['CUENTA DE PÉRDIDAS Y GANANCIAS ABREVIADA', 'Отчёт о прибылях и убытках (сокращённый)', 'PA'],
+      OTROS: ['OTROS DATOS', 'Прочее', '']
+    };
+    const secOrder = [...new Set(rows.map(it => it.section))].sort((a, b) => ['IDA', 'BA', 'PA'].indexOf(a) - ['IDA', 'BA', 'PA'].indexOf(b));
+    const formHeader = code => `
+      <table class="aaf-fh"><tr>
+        <td style="width:22%"><span class="aaf-lbl">NIF:</span> <b>${esc(nif)}</b></td>
+        <td><span class="aaf-lbl">DENOMINACIÓN SOCIAL:</span><br><b>${esc(denom)}</b></td>
+        <td style="width:20%"><span class="aaf-lbl">UNIDAD:</span><br>Euros: <b>09001</b> ☒ &nbsp;Miles: 09002 ☐</td>
+        <td class="aaf-code">${esc(code)}</td>
+      </tr></table>`;
+    const secHtml = secOrder.map(sec => {
+      const meta = SECTION_META[sec] || [sec, sec, ''];
+      const secRows = rows.filter(it => it.section === sec);
+      const isIDA = sec === 'IDA';
+      const body = secRows.map(it => {
+        const hasText = it.text_value != null && it.text_value !== '';
+        const valCell = hasText
+          ? `<td class="aaf-val" colspan="2">${esc(it.text_value)}</td>`
+          : `<td class="aaf-num">${fmtN(it.total != null ? Number(it.total) : null)}</td><td class="aaf-num">${fmtN(it.prev_total != null ? Number(it.prev_total) : null)}</td>`;
+        const lv = isIDA ? 0 : levelOf(it.name);
+        return `<tr class="aaf-lv${lv}">
+          <td class="aaf-cas">${esc(it.casilla || '')}</td>
+          <td class="aaf-lblcell" style="padding-left:${6 + lv * 18}px"><span class="aaf-es">${esc(it.name || '')}</span>${it.name_ru && it.name_ru !== it.name ? `<br><span class="aaf-ru">${esc(it.name_ru)}</span>` : ''}</td>
+          ${valCell}
+        </tr>`;
+      }).join('');
+      const headThird = isIDA ? `<th colspan="2">VALOR — ЗНАЧЕНИЕ</th>` : `<th class="aaf-num">EJERCICIO ${yearCur || ''} — ${yearCur || ''} год</th><th class="aaf-num">EJERCICIO ${yearPrev || ''} — ${yearPrev || ''} год</th>`;
+      return `<div class="aaf-sheet">
+        <div class="aaf-title">${esc(meta[0])}<span class="aaf-sheetcode">${esc(meta[2])}</span></div>
+        <div class="aaf-titleru">${esc(meta[1])}</div>
+        ${formHeader(meta[2])}
+        <table class="aaf-grid"><thead><tr><th class="aaf-cas">CASILLA</th><th>${isIDA ? 'DATO — ДАННЫЕ' : (sec === 'BA' ? 'ACTIVO / PATRIMONIO NETO Y PASIVO — АКТИВ / КАПИТАЛ И ПАССИВ' : 'CUENTA DE PÉRDIDAS Y GANANCIAS — ПРИБЫЛИ И УБЫТКИ')}</th>${headThird}</tr></thead>
+        <tbody>${body}</tbody></table>
+      </div>`;
+    }).join('');
+    // ΣBANK-итоги + сверка с банком (на момент открытия страницы)
+    const totRows = ['ingresos', 'gastos_explotacion', 'resultado', 'efectivo', 'total_activo', 'patrimonio_neto', 'acreedores_comerciales', 'deudores_comerciales']
+      .filter(k => totals[k] && totals[k].cur != null)
+      .map(k => `<tr class="aaf-lv0"><td class="aaf-cas">Σ</td><td class="aaf-lblcell"><span class="aaf-es">${esc(k)}</span><br><span class="aaf-ru">${esc(totals[k].ru || '')}</span></td><td class="aaf-num">${fmtN(totals[k].cur)}</td><td class="aaf-num">${fmtN(totals[k].prev)}</td></tr>`).join('');
+    const cmpRows = (cmp || []).map(row => `<tr>
+      <td class="aaf-lblcell"><span class="aaf-es">${esc(row.labelEs)}</span><br><span class="aaf-ru">${esc(row.labelRu)} · банк: ${esc(row.bankLabel)}</span></td>
+      <td class="aaf-num">${fmtN(row.rep)}</td><td class="aaf-num">${fmtN(row.bankVal)}</td>
+      <td class="aaf-num">${row.diff == null ? '' : (row.diff > 0 ? '+' : '') + fmtN(row.diff)}</td><td class="aaf-ctr">${row.status}</td></tr>`).join('');
+    const bankHtml = (totRows || cmpRows) ? `<div class="aaf-sheet">
+      <div class="aaf-title">RESUMEN Y COMPARACIÓN CON EL BANCO<span class="aaf-sheetcode">ΣBANK</span></div>
+      <div class="aaf-titleru">Ключевые итоги и сверка с банком ${yearCur || ''} (сформировано ${new Date().toLocaleString('ru-RU')})</div>
+      ${totRows ? `<table class="aaf-grid"><thead><tr><th class="aaf-cas">Σ</th><th>INDICADOR — ПОКАЗАТЕЛЬ</th><th class="aaf-num">${yearCur || ''}</th><th class="aaf-num">${yearPrev || ''}</th></tr></thead><tbody>${totRows}</tbody></table>` : ''}
+      ${cmpRows ? `<table class="aaf-grid" style="margin-top:10px"><thead><tr><th>СВЕРКА С БАНКОМ</th><th class="aaf-num">ОТЧЁТНОСТЬ</th><th class="aaf-num">БАНК</th><th class="aaf-num">РАЗНИЦА</th><th></th></tr></thead><tbody>${cmpRows}</tbody></table>` : ''}
+    </div>` : '';
+    const css = `<style>
+      .aaf{font-family:'Times New Roman',Times,serif;color:#1d1d1f;}
+      .aaf-dochead{max-width:920px;margin:0 auto 14px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;color:#6e6e73;}
+      .aaf-sheet{background:#fff;max-width:920px;margin:0 auto 22px;padding:16px 20px;border:2px solid #1d1d1f;box-shadow:0 2px 12px rgba(0,0,0,.08);}
+      .aaf-title{text-align:center;font-weight:700;font-size:16px;letter-spacing:.05em;position:relative;}
+      .aaf-sheetcode{position:absolute;right:0;top:0;font-size:13px;}
+      .aaf-titleru{text-align:center;color:#6e6e73;font-size:12px;margin:2px 0 10px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}
+      .aaf-fh{width:100%;border-collapse:collapse;margin-bottom:8px;font-size:12px;}
+      .aaf-fh td{border:1.5px solid #1d1d1f;padding:5px 8px;vertical-align:top;}
+      .aaf-code{font-weight:700;text-align:center;width:52px;font-size:15px;}
+      .aaf-lbl{color:#3a3a3c;font-size:11px;}
+      .aaf-grid{width:100%;border-collapse:collapse;font-size:12.5px;}
+      .aaf-grid th{border:1px solid #1d1d1f;background:#f0f0f3;padding:4px 6px;text-align:left;font-size:11px;}
+      .aaf-grid td{border:1px solid #9a9aa0;padding:3px 6px;vertical-align:top;}
+      .aaf-cas{width:56px;text-align:right;font-variant-numeric:tabular-nums;color:#3a3a3c;white-space:nowrap;}
+      .aaf-num{width:112px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
+      .aaf-ctr{text-align:center;width:36px;}
+      .aaf-val{font-weight:600;}
+      .aaf-ru{color:#6e6e73;font-size:11px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}
+      tr.aaf-lv0 td{background:#f7f7f9;} tr.aaf-lv0 .aaf-es{font-weight:700;}
+      @media print{body{background:#fff !important;padding:0 !important;}.aaf-sheet{box-shadow:none;border-width:1.5px;page-break-after:always;}}
+    </style>`;
+    const docHead = `<div class="aaf-dochead">Cuentas Anuales ${yearCur || ''} — ${esc(denom)}${nif ? ` · NIF ${esc(nif)}` : ''} · восстановленный вид формы из распознанных данных (НЕ официальный документ — сверяйте с оригиналом PDF)</div>`;
+    const body = `${docHead}${secHtml}${bankHtml}`;
+    if (!standalone) return `<div class="aaf">${css}${body}</div>`;
+    return `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Cuentas Anuales ${yearCur || ''} — ${esc(denom)}</title></head><body style="background:#e8e8ed;margin:0;padding:24px;"><div class="aaf">${css}${body}</div></body></html>`;
+  };
+
+  // Открыть документ отдельной HTML-страницей (вид официальной формы; можно сохранить/напечатать из браузера)
+  const openAnnualHTMLPage = (r) => {
+    const blob = new Blob([buildAnnualHTML(r, true)], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  };
+
+  const renderAnnualAccountsCard = (r) => {
+    const items = Array.isArray(r.items) ? r.items : [];
+    const SECTION_LABELS = {
+      IDA: 'Identificación — Идентификация',
+      BA: 'Balance de Situación — Баланс',
+      PA: 'Cuenta de Pérdidas y Ganancias — Прибыли и убытки',
+      OTROS: 'Otros — Прочее'
+    };
+    const { totals, yearCur, yearPrev, cmp, mvtsCount } = computeAnnualBankCmp(r);
+    const tableRows = items.filter(it => it && it.section !== 'ΣBANK');
+    const fmtN = n => n == null || isNaN(n)
+      ? '—'
+      : Number(n).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const numCell = n => (
+      <td style={{ padding: '5px 8px', borderBottom: '1px solid #ececf0', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', color: n == null ? '#8e8e93' : (Number(n) < 0 ? '#c0392b' : '#1d1d1f') }}>
+        {fmtN(n)}
+      </td>
+    );
 
     return (
       <>
         <div className="info-block">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
             <h3 style={{ margin: 0 }}>📊 Cuentas Anuales — Годовая отчётность ({tableRows.length} строк)</h3>
-            <button onClick={() => downloadAnnualCSV(r)} style={{ padding: '6px 16px', fontSize: 13, cursor: 'pointer' }}
-              title="Выгрузить таблицу касилий в Excel (CSV)">
-              ⬇ Excel (CSV)
-            </button>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              <button onClick={() => setAnnualFormView(v => !v)} style={{ padding: '6px 14px', fontSize: 13, cursor: 'pointer' }}
+                title="Переключить: рабочая таблица / вид официальной формы">
+                {annualFormView ? '📊 Таблица' : '📋 Вид формы'}
+              </button>
+              <button onClick={() => openAnnualHTMLPage(r)} style={{ padding: '6px 14px', fontSize: 13, cursor: 'pointer' }}
+                title="Открыть документ отдельной HTML-страницей (вид официальной формы + сверка с банком; можно сохранить и напечатать)">
+                🌐 HTML-страница
+              </button>
+              <button onClick={() => downloadAnnualCSV(r)} style={{ padding: '6px 14px', fontSize: 13, cursor: 'pointer' }}
+                title="Выгрузить таблицу касилий в Excel (CSV)">
+                ⬇ Excel (CSV)
+              </button>
+            </div>
           </div>
+          {annualFormView ? (
+            <div style={{ marginTop: 10, background: '#e8e8ed', padding: 12, borderRadius: 12 }}
+              dangerouslySetInnerHTML={{ __html: buildAnnualHTML(r, false) }} />
+          ) : (
           <div style={{ overflowX: 'auto', marginTop: 8 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
@@ -2312,11 +2441,12 @@ function App() {
               </tbody>
             </table>
           </div>
+          )}
         </div>
 
         <div className="info-block" style={{ background: 'linear-gradient(135deg,#ffffff,#e8e8ed)', border: '2px solid #c7c7cc' }}>
           <h3 style={{ marginTop: 0 }}>🏦 Сравнить с банком {yearCur ? `— ${yearCur}` : ''}</h3>
-          {mvts.length === 0 ? (
+          {mvtsCount === 0 ? (
             <p style={{ color: '#6e6e73', fontSize: 13 }}>
               Движения по счёту не загружены.{' '}
               <button onClick={loadBankMovements} disabled={bankLoading} style={{ padding: '5px 14px', fontSize: 13, cursor: 'pointer' }}>
@@ -3432,7 +3562,7 @@ function App() {
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-10 · v32.1 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
+              сборка 2026-08-10 · v32.2 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
               <button
                 onClick={configureLocalOcr}
                 title="Задать адрес локального OCR (HTTPS-туннель cloudflared)"
