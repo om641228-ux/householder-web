@@ -696,6 +696,129 @@ function buildDocumentSummaryPrompt(textSample) {
 ${textSample}`;
 }
 
+// ========== ГОДОВАЯ ОТЧЁТНОСТЬ (Cuentas Anuales → Registro Mercantil) — v32 ==========
+// Детектор пакета годовой отчётности: баланс + отчёт о прибылях/убытках + Registro Mercantil
+function looksLikeAnnualAccounts(text) {
+  const t = String(text || '');
+  let score = 0;
+  if (/cuentas\s+anuales/i.test(t)) score += 2;
+  if (/registro\s+mercantil/i.test(t)) score += 1;
+  if (/balance\s+de\s+situaci[oó]n/i.test(t)) score += 2;
+  if (/cuenta\s+de\s+p[ée]rdidas\s+y\s+ganancias/i.test(t)) score += 2;
+  if (/casilla\s*(?:n[ºo°]\s*)?\d{4,5}/i.test(t)) score += 1;
+  if (/dep[oó]sito\s+de\s+cuentas|formulaci[oó]n\s+de\s+cuentas|memoria\s+abreviada/i.test(t)) score += 1;
+  return score >= 4;
+}
+
+// Выборка страниц с цифрами отчётности: в 20+ страничном пакете баланс и P&L — в середине,
+// стандартный сэмпл «начало+конец» их не захватывает
+function buildAnnualAccountsSample(pageTexts, maxLen = 22000) {
+  const re = /balance|situaci[oó]n|cuenta\s+de\s+p|activo|pasivo|patrimonio|casilla|resultado|ingresos|gastos|acreedores|deudores|efectivo|amortizaci/i;
+  const picked = pageTexts
+    .map((t, i) => ({ t, i }))
+    .filter(p => re.test(p.t) && !/^\((ошибка|страница без текста|страница не распознана)/.test(p.t));
+  const parts = [];
+  let len = 0;
+  for (const p of picked) {
+    const chunk = `══════ СТРАНИЦА ${p.i + 1} ══════\n${p.t}`;
+    if (len + chunk.length > maxLen) {
+      const rest = maxLen - len;
+      if (rest > 1500) parts.push(chunk.slice(0, rest));
+      break;
+    }
+    parts.push(chunk);
+    len += chunk.length;
+  }
+  if (!parts.length) return pageTexts.join('\n').slice(0, maxLen);
+  return parts.join('\n\n');
+}
+
+// Промпт структурирования годовой отчётности:
+// items = строки отчётности {section, casilla, name (ES), name_ru, total (текущий год), prev_total (прошлый год), text_value}
+// + служебные строки section="ΣBANK" — ключевые итоги для сверки с банком на фронтенде
+function buildAnnualAccountsPrompt(textSample) {
+  return `Ты анализируешь пакет ГОДОВОЙ ОТЧЁТНОСТИ испанской компании (Cuentas Anuales для Registro Mercantil): идентификационные листы (IDA), Balance de Situación (баланс), Cuenta de Pérdidas y Ganancias (отчёт о прибылях и убытках). Текст получен OCR и может содержать ошибки — восстанавливай смысл, игнорируй дубликаты.
+Верни ТОЛЬКО JSON, без markdown и комментариев.
+
+ПРАВИЛА:
+1. Каждая строка баланса и P&L — объект в items: section ("BA" — баланс, "PA" — прибыли/убытки), casilla (официальный номер касильи как напечатан, например "40100"; если номера нет — null), name (название статьи НА ИСПАНСКОМ как напечатано), name_ru (точный перевод на русский), total (сумма ТЕКУЩЕГО ejercicio ЧИСЛОМ, отрицательные — со знаком минус), prev_total (сумма ПРЕДЫДУЩЕГО ejercicio или null).
+2. Идентификационные данные — строки с section "IDA": denominación social, NIF, domicilio social, CNAE, fecha de cierre, titular real — значение в text_value (total/prev_total = null).
+3. В КОНЦЕ items добавь служебные строки section "ΣBANK" (для сверки с банком) — name строго из списка:
+   "ejercicio" (отчётный год числом, prev_total — прошлый год), "ingresos" (casilla 40100 Importe neto cifra de negocios), "gastos_explotacion" (сумма расходов ПО МОДУЛЮ: gastos de personal + otros gastos de explotación + amortización), "resultado" (casilla 49500 Resultado del ejercicio), "efectivo" (casilla 12700 Efectivo y otros activos líquidos), "total_activo", "patrimonio_neto", "acreedores_comerciales", "deudores_comerciales". prev_total — значение прошлого года или null.
+4. Испанский формат чисел: 602.122,09 → 602122.09; минус в отчётности может стоять в скобках или после числа.
+5. store_name — "Cuentas Anuales {год} — {denominación}" (язык оригинала), store_name_ru — перевод. receipt_date — fecha de cierre (YYYY-MM-DD). total_amount — Resultado del ejercicio (число со знаком). valid_from/valid_to — начало и конец ejercicio. invoice_number — NIF компании. supply_address — domicilio social. provider — presentante/asesor или null.
+6. document_type — СТРОГО "annual_accounts".
+
+Верни ТОЛЬКО JSON:
+{
+  "store_name": "Cuentas Anuales 2025 — ISERA 2020, S.L.",
+  "store_name_ru": "Годовая отчётность 2025 — ISERA 2020, S.L.",
+  "receipt_date": "2025-12-31",
+  "receipt_time": null,
+  "total_amount": 75451.42,
+  "subtotal": null, "tax_amount": null, "tax_rate": null,
+  "currency": "EUR",
+  "payment_method": null, "country": "Spain",
+  "document_type": "annual_accounts",
+  "subtype": null,
+  "provider": null,
+  "valid_from": "2025-01-01",
+  "valid_to": "2025-12-31",
+  "invoice_number": "B76825199",
+  "contract_number": null,
+  "supply_address": "SAN CLEMENTE 24 PLANTA 5 PUERTA A, Santa Cruz de Tenerife",
+  "cups": null, "meter_number": null, "consumption": null, "consumption_unit": null,
+  "object": null,
+  "items": [
+    { "section": "IDA", "casilla": null, "name": "Denominación social", "name_ru": "Название общества", "total": null, "prev_total": null, "text_value": "ISERA 2020, S.L." },
+    { "section": "BA", "casilla": "12700", "name": "Efectivo y otros activos líquidos equivalentes", "name_ru": "Денежные средства и прочие ликвидные активы", "total": 54848.49, "prev_total": 22537.06, "text_value": null },
+    { "section": "PA", "casilla": "40100", "name": "Importe neto de la cifra de negocios", "name_ru": "Чистая выручка от реализации", "total": 602122.09, "prev_total": 417510.50, "text_value": null },
+    { "section": "ΣBANK", "casilla": "Σ", "name": "ingresos", "name_ru": "Доходы (сверка с банком)", "total": 602122.09, "prev_total": 417510.50, "text_value": null }
+  ]
+}
+
+Текст отчётности (выборка страниц с цифрами):
+
+${textSample}`;
+}
+
+// Страховка: если модель не вернула строки ΣBANK — выводим их из распознанных касилий/названий
+function ensureAnnualBankSummary(items) {
+  if (!Array.isArray(items) || !items.length) return items;
+  if (items.some(it => it.section === 'ΣBANK')) return items;
+  const num = v => (typeof v === 'number' && !isNaN(v)) ? v : null;
+  const byCasilla = {};
+  const byName = [];
+  for (const it of items) {
+    if (it.casilla) byCasilla[String(it.casilla)] = it;
+    byName.push(it);
+  }
+  const findByName = re => byName.find(it => re.test(String(it.name || '')));
+  const row = (name, name_ru, src, extra) => {
+    const total = num(src && src.total);
+    if (total == null) return null;
+    return { section: 'ΣBANK', casilla: 'Σ', name, name_ru, total, prev_total: num(src && src.prev_total), text_value: null, ...extra };
+  };
+  const gastosParts = ['40600', '40700', '40800'].map(c => num(byCasilla[c] && byCasilla[c].total)).filter(v => v != null);
+  const gastosPrevParts = ['40600', '40700', '40800'].map(c => num(byCasilla[c] && byCasilla[c].prev_total)).filter(v => v != null);
+  const ejercicioYear = (() => {
+    const m = String(items.map(i => i.name).join(' ')).match(/20\d{2}/);
+    return m ? parseInt(m[0], 10) : null;
+  })();
+  const derived = [
+    ejercicioYear ? { section: 'ΣBANK', casilla: 'Σ', name: 'ejercicio', name_ru: 'Отчётный год', total: ejercicioYear, prev_total: ejercicioYear - 1, text_value: null } : null,
+    row('ingresos', 'Доходы (сверка с банком)', byCasilla['40100'] || findByName(/cifra\s+de\s+negocios/i)),
+    gastosParts.length ? { section: 'ΣBANK', casilla: 'Σ', name: 'gastos_explotacion', name_ru: 'Расходы (сверка с банком)', total: gastosParts.reduce((a, b) => a + Math.abs(b), 0), prev_total: gastosPrevParts.length ? gastosPrevParts.reduce((a, b) => a + Math.abs(b), 0) : null, text_value: null } : null,
+    row('resultado', 'Результат года', byCasilla['49500'] || findByName(/resultado\s+del\s+ejercicio/i)),
+    row('efectivo', 'Остаток денежных средств', byCasilla['12700'] || findByName(/efectivo/i)),
+    row('total_activo', 'Итого активов', findByName(/total\s+activo/i)),
+    row('patrimonio_neto', 'Собственный капитал', findByName(/patrimonio\s+neto/i)),
+    row('acreedores_comerciales', 'Кредиторская задолженность', findByName(/acreedores\s+comerciales/i)),
+    row('deudores_comerciales', 'Дебиторская задолженность', findByName(/deudores\s+comerciales/i))
+  ].filter(Boolean);
+  return derived.length ? [...items, ...derived] : items;
+}
+
 // Разбор суммы в европейском/русском формате: "60 736,00" | "60.736,00" | "60,736.00" | "60736"
 function parseAmountLike(s) {
   if (!s) return null;
@@ -728,14 +851,24 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
   }, 3);
   const raw_text_ru = ruTexts.map((t, i) => `══════ СТРАНИЦА ${i + 1} из ${pageCount} ══════\n${t}`).join('\n\n');
 
-  // JSON-сводка полей (начало + конец документа)
-  const sample = `${raw_text.slice(0, 12000)}\n\n…(середина документа опущена)…\n\n${raw_text.slice(-5000)}`;
+  // Годовая отчётность (v32): спец-промпт + выборка страниц с цифрами из середины пакета
+  const isAnnualAccounts = looksLikeAnnualAccounts(raw_text);
+  // JSON-сводка полей (начало + конец документа; для годовой отчётности — страницы с балансом/P&L)
+  const sample = isAnnualAccounts
+    ? buildAnnualAccountsSample(pageTexts)
+    : `${raw_text.slice(0, 12000)}\n\n…(середина документа опущена)…\n\n${raw_text.slice(-5000)}`;
   let data;
   try {
-    data = parseAIResponse(await callTextChain(buildDocumentSummaryPrompt(sample)));
+    data = parseAIResponse(await callTextChain(
+      isAnnualAccounts ? buildAnnualAccountsPrompt(sample) : buildDocumentSummaryPrompt(sample)
+    ));
   } catch (e) {
     console.error('Сводка документа не удалась:', e.message);
     data = parseAIResponse('{}');
+  }
+  if (isAnnualAccounts) {
+    data.document_type = 'annual_accounts';
+    data.items = ensureAnnualBankSummary(data.items);
   }
   data.raw_text = raw_text;
   data.raw_text_ru = raw_text_ru;
@@ -1173,7 +1306,7 @@ function parseAIResponse(text) {
       country: data.country || data.address || null,
       document_type: (() => {
       const raw = String(data.document_type || data.doc_type || data.type || '').toLowerCase().trim();
-      if (['receipt', 'invoice', 'bill', 'insurance', 'bank', 'contract', 'municipality', 'tax', 'proposal', 'other'].includes(raw)) return raw;
+      if (['receipt', 'invoice', 'bill', 'insurance', 'bank', 'contract', 'municipality', 'tax', 'proposal', 'annual_accounts', 'other'].includes(raw)) return raw;
       return /invoice|factura|фактур/i.test(raw) ? 'invoice' : 'receipt';
     })(),
       subtype: (() => {
@@ -1264,11 +1397,14 @@ function parseAmount(val) {
 function normalizeItems(items) {
   if (!Array.isArray(items)) return [];
   return items.map(item => ({
+    // Доп. поля (section/casilla/prev_total/text_value — годовая отчётность v32) сохраняем как есть
+    ...item,
     name: item.name || item.description || item.product || item.title || 'Unknown item',
     name_ru: item.name_ru || item.name || null,
     quantity: parseFloat(item.quantity || item.qty || item.count || 1) || 1,
     price: parseAmount(item.price || item.unit_price || item.cost),
-    total: parseAmount(item.total || item.amount || item.sum || (item.price * item.quantity))
+    total: parseAmount(item.total ?? item.amount ?? item.sum ?? (item.price != null ? item.price * (item.quantity || 1) : null)),
+    prev_total: parseAmount(item.prev_total ?? item.previous_year ?? item.prev) ?? null
   }));
 }
 

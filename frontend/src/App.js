@@ -61,6 +61,7 @@ const DOC_TYPE_LABELS = {
   municipality: '🏛️ Мэрия',
   tax: '💰 Налоговая',
   proposal: '🤝 Комм. предложение',
+  annual_accounts: '📊 Годовая отчётность',
   other: '📎 Другое'
 };
 const ITEMS_PER_PAGE_OPTIONS = [10, 20, 50, 'all'];
@@ -2176,6 +2177,170 @@ function App() {
     return rows;
   };
 
+  // ========== ГОДОВАЯ ОТЧЁТНОСТЬ (Cuentas Anuales) — v32 ==========
+  // Карточка документа: таблица касилий (оригинал ES + перевод RU + оба года) и сверка итогов с банком.
+  // Строки отчётности лежат в items: {section, casilla, name, name_ru, total, prev_total, text_value};
+  // служебные строки section="ΣBANK" — ключевые итоги для сравнения с банковскими движениями.
+  const renderAnnualAccountsCard = (r) => {
+    const items = Array.isArray(r.items) ? r.items : [];
+    const SECTION_LABELS = {
+      IDA: 'Identificación — Идентификация',
+      BA: 'Balance de Situación — Баланс',
+      PA: 'Cuenta de Pérdidas y Ganancias — Прибыли и убытки',
+      OTROS: 'Otros — Прочее'
+    };
+    const bankRows = items.filter(it => it && it.section === 'ΣBANK');
+    const totals = {};
+    bankRows.forEach(it => {
+      totals[it.name] = {
+        cur: it.total != null ? Number(it.total) : null,
+        prev: it.prev_total != null ? Number(it.prev_total) : null,
+        ru: it.name_ru || it.name
+      };
+    });
+    const tableRows = items.filter(it => it && it.section !== 'ΣBANK');
+    const yearCur = totals.ejercicio?.cur
+      || (r.valid_to ? +String(r.valid_to).slice(0, 4) : null)
+      || (r.receipt_date ? +String(r.receipt_date).slice(0, 4) : null);
+    const yearPrev = totals.ejercicio?.prev || (yearCur ? yearCur - 1 : null);
+    const fmtN = n => n == null || isNaN(n)
+      ? '—'
+      : Number(n).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const numCell = n => (
+      <td style={{ padding: '5px 8px', borderBottom: '1px solid #ececf0', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', color: n == null ? '#8e8e93' : (Number(n) < 0 ? '#c0392b' : '#1d1d1f') }}>
+        {fmtN(n)}
+      </td>
+    );
+
+    // Сверка с банком: движения за отчётный год
+    const mvts = Array.isArray(bankMovements) ? bankMovements : [];
+    let cmp = null;
+    if (yearCur) {
+      const inYear = mvts.filter(m => m.operation_date && String(m.operation_date).startsWith(String(yearCur)));
+      const bankIn = inYear.filter(m => Number(m.amount) > 0).reduce((s, m) => s + Number(m.amount), 0);
+      const bankOut = inYear.filter(m => Number(m.amount) < 0).reduce((s, m) => s + Math.abs(Number(m.amount)), 0);
+      // Остаток на 31.12: берём balance последнего движения года, иначе накопленная сумма
+      const upto = mvts.filter(m => m.operation_date && String(m.operation_date) <= `${yearCur}-12-31`);
+      const withBal = upto.filter(m => m.balance != null).sort((a, b) => (a.operation_date < b.operation_date ? 1 : -1));
+      const bankBal = withBal.length ? Number(withBal[0].balance)
+        : (upto.length ? upto.reduce((s, m) => s + (Number(m.amount) || 0), 0) : null);
+      const mkRow = (key, labelEs, labelRu, bankVal, bankLabel) => {
+        const rep = totals[key]?.cur;
+        const diff = (rep != null && bankVal != null) ? bankVal - rep : null;
+        const tol = Math.max(100, Math.abs(rep || 0) * 0.05);
+        const status = diff == null ? '—' : (Math.abs(diff) <= tol ? '✅' : '⚠️');
+        return { key, labelEs, labelRu, rep, bankVal, bankLabel, diff, status };
+      };
+      cmp = [
+        mkRow('ingresos', 'Ingresos (casilla 40100)', 'Доходы по отчёту', bankIn, `поступления на счёт за ${yearCur}`),
+        mkRow('gastos_explotacion', 'Gastos de explotación', 'Расходы по отчёту (по модулю)', bankOut, `списания со счёта за ${yearCur}`),
+        mkRow('efectivo', 'Efectivo (casilla 12700)', 'Денежные средства на 31.12', bankBal, `остаток по выписке на 31.12.${yearCur}`)
+      ];
+    }
+
+    return (
+      <>
+        <div className="info-block">
+          <h3>📊 Cuentas Anuales — Годовая отчётность ({tableRows.length} строк)</h3>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: 'linear-gradient(180deg,#f5f5f7,#e8e8ed)' }}>
+                  <th style={{ padding: '7px 8px', textAlign: 'left', borderBottom: '2px solid #c7c7cc' }}>Casilla</th>
+                  <th style={{ padding: '7px 8px', textAlign: 'left', borderBottom: '2px solid #c7c7cc' }}>Partida (оригинал)</th>
+                  <th style={{ padding: '7px 8px', textAlign: 'left', borderBottom: '2px solid #c7c7cc' }}>Перевод</th>
+                  <th style={{ padding: '7px 8px', textAlign: 'right', borderBottom: '2px solid #c7c7cc' }}>{yearCur || 'Ejercicio'}</th>
+                  <th style={{ padding: '7px 8px', textAlign: 'right', borderBottom: '2px solid #c7c7cc' }}>{yearPrev || 'Anterior'}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tableRows.map((it, i) => {
+                  const prevSec = i > 0 ? tableRows[i - 1].section : null;
+                  const secHeader = it.section && it.section !== prevSec ? (
+                    <tr key={`sec-${i}`}>
+                      <td colSpan={5} style={{ padding: '8px 8px 4px', fontWeight: 700, fontSize: 12, color: '#6e6e73', textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: '1px solid #d2d2d7', background: '#f5f5f7' }}>
+                        {SECTION_LABELS[it.section] || it.section}
+                      </td>
+                    </tr>
+                  ) : null;
+                  const val = it.text_value != null && it.text_value !== '' ? String(it.text_value) : null;
+                  return (
+                    <React.Fragment key={i}>
+                      {secHeader}
+                      <tr>
+                        <td style={{ padding: '5px 8px', borderBottom: '1px solid #ececf0', color: '#6e6e73', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{it.casilla || '—'}</td>
+                        <td style={{ padding: '5px 8px', borderBottom: '1px solid #ececf0', color: '#1d1d1f' }}><HighlightText text={it.name || '—'} query={searchQuery} /></td>
+                        <td style={{ padding: '5px 8px', borderBottom: '1px solid #ececf0', color: '#3a3a3c' }}><HighlightText text={it.name_ru || '—'} query={searchQuery} /></td>
+                        {val != null
+                          ? <td colSpan={2} style={{ padding: '5px 8px', borderBottom: '1px solid #ececf0', color: '#1d1d1f' }}>{val}</td>
+                          : <>{numCell(it.total != null ? Number(it.total) : null)}{numCell(it.prev_total != null ? Number(it.prev_total) : null)}</>}
+                      </tr>
+                    </React.Fragment>
+                  );
+                })}
+                {tableRows.length === 0 && (
+                  <tr><td colSpan={5} style={{ padding: 16, textAlign: 'center', color: '#8e8e93' }}>Строки отчётности не распознаны — смотрите оригинал текста ниже</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="info-block" style={{ background: 'linear-gradient(135deg,#ffffff,#e8e8ed)', border: '2px solid #c7c7cc' }}>
+          <h3 style={{ marginTop: 0 }}>🏦 Сравнить с банком {yearCur ? `— ${yearCur}` : ''}</h3>
+          {mvts.length === 0 ? (
+            <p style={{ color: '#6e6e73', fontSize: 13 }}>
+              Движения по счёту не загружены.{' '}
+              <button onClick={loadBankMovements} disabled={bankLoading} style={{ padding: '5px 14px', fontSize: 13, cursor: 'pointer' }}>
+                {bankLoading ? '⏳ Загружаю...' : '🏦 Загрузить движения из базы'}
+              </button>
+            </p>
+          ) : !cmp ? (
+            <p style={{ color: '#6e6e73', fontSize: 13 }}>Не удалось определить отчётный год — сверка недоступна.</p>
+          ) : (
+            <>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: 'rgba(255,255,255,.6)' }}>
+                    <th style={{ padding: '6px 8px', textAlign: 'left', borderBottom: '2px solid #c7c7cc' }}>Показатель</th>
+                    <th style={{ padding: '6px 8px', textAlign: 'right', borderBottom: '2px solid #c7c7cc' }}>Отчётность</th>
+                    <th style={{ padding: '6px 8px', textAlign: 'right', borderBottom: '2px solid #c7c7cc' }}>Банк</th>
+                    <th style={{ padding: '6px 8px', textAlign: 'right', borderBottom: '2px solid #c7c7cc' }}>Разница</th>
+                    <th style={{ padding: '6px 8px', textAlign: 'center', borderBottom: '2px solid #c7c7cc' }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cmp.map(row => (
+                    <tr key={row.key}>
+                      <td style={{ padding: '6px 8px', borderBottom: '1px solid #ececf0' }}>
+                        <div style={{ color: '#1d1d1f', fontWeight: 600 }}>{row.labelEs}</div>
+                        <div style={{ color: '#6e6e73', fontSize: 12 }}>{row.labelRu} · банк: {row.bankLabel}</div>
+                      </td>
+                      <td style={{ padding: '6px 8px', borderBottom: '1px solid #ececf0', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{fmtN(row.rep)}</td>
+                      <td style={{ padding: '6px 8px', borderBottom: '1px solid #ececf0', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{fmtN(row.bankVal)}</td>
+                      <td style={{ padding: '6px 8px', borderBottom: '1px solid #ececf0', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', color: row.diff == null ? '#8e8e93' : (Math.abs(row.diff) <= Math.max(100, Math.abs(row.rep || 0) * 0.05) ? '#1d1d1f' : '#c0392b') }}>
+                        {row.diff == null ? '—' : (row.diff > 0 ? '+' : '') + fmtN(row.diff)}
+                      </td>
+                      <td style={{ padding: '6px 8px', borderBottom: '1px solid #ececf0', textAlign: 'center' }}>{row.status}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p style={{ margin: '8px 0 0', fontSize: 12, color: '#6e6e73', lineHeight: 1.45 }}>
+                ✅ — расхождение в пределах 5% или 100 €. Учтите: доходы по отчёту ≠ поступлениям ровно —
+                часть выручки может висеть в <b>deudores comerciales</b> (не оплачено на 31.12
+                {totals.deudores_comerciales?.cur != null ? `: ${fmtN(totals.deudores_comerciales.cur)} €` : ''}),
+                а расходы — в <b>acreedores comerciales</b>
+                {totals.acreedores_comerciales?.cur != null ? ` (${fmtN(totals.acreedores_comerciales.cur)} €)` : ''}.
+                Остаток «Efectivo» сверяется с балансом выписки на 31.12.{yearCur}.
+              </p>
+            </>
+          )}
+        </div>
+      </>
+    );
+  };
+
   const buildTaxRangeText = (d) => {
     const f = n => Number(n || 0).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const lines = [`ЧЕРНОВИКИ ФОРМ ${d.fromKey} — ${d.toKey} — автозаполнено из банка (${new Date().toLocaleString('ru-RU')})`,
@@ -2996,12 +3161,12 @@ function App() {
                 {!editMode && (
                 <div className="info-block">
                   <h3>Основная информация</h3>
-                  <p><strong>Магазин:</strong> <HighlightText text={viewModal.store_name || viewModal.store_name_ru || '—'} query={searchQuery} /></p>
+                  <p><strong>{viewModal.document_type === 'annual_accounts' ? 'Документ' : 'Магазин'}:</strong> <HighlightText text={viewModal.store_name || viewModal.store_name_ru || '—'} query={searchQuery} /></p>
                   {viewModal.store_name_ru && viewModal.store_name && viewModal.store_name_ru !== viewModal.store_name && (
                     <p style={{ marginTop: -6 }}><strong>Название (рус):</strong> <HighlightText text={viewModal.store_name_ru} query={searchQuery} /></p>
                   )}
                   <p><strong>Дата:</strong> {formatDate(viewModal.receipt_date)} {viewModal.receipt_time}</p>
-                  <p><strong>Итого:</strong> {formatAmount(viewModal.total_amount, viewModal.currency)}</p>
+                  <p><strong>{viewModal.document_type === 'annual_accounts' ? 'Resultado — Результат года' : 'Итого'}:</strong> {formatAmount(viewModal.total_amount, viewModal.currency)}</p>
                   <p><strong>Тип:</strong> {DOC_TYPE_LABELS[viewModal.document_type] || viewModal.document_type || '🧾 Чек'}</p>
                   <p><strong>Объект:</strong> <HighlightText text={viewModal.object || '—'} query={searchQuery} /></p>
                   {viewModal.subtype && <p><strong>Подтип:</strong> {SUBTYPE_LABELS[viewModal.subtype] || viewModal.subtype}</p>}
@@ -3043,11 +3208,11 @@ function App() {
                   <p><strong>Добавил:</strong> <HighlightText text={formatOwnerName(viewModal)} query={searchQuery} /></p>
                   {viewModal.subtotal && <p><strong>Подытог:</strong> {viewModal.subtotal}</p>}
                   {viewModal.tax_amount && <p><strong>Налог:</strong> {viewModal.tax_amount} ({viewModal.tax_rate || ''})</p>}
-                  {(() => {
+                  {['receipt', 'invoice', 'bill'].includes(viewModal.document_type || 'receipt') && (() => {
                     const itemsTotal = calculateItemsTotal(viewModal.items);
                     const total = parseFloat(viewModal.total_amount) || 0;
                     const diff = Math.abs(total - itemsTotal).toFixed(2);
-                    if (diff > 0.01 && ['receipt', 'invoice', 'bill'].includes(viewModal.document_type || 'receipt')) {
+                    if (diff > 0.01) {
                       return (
                         <p style={{ color: '#e74c3c', fontWeight: 600 }}>
                           Разница: {diff} {viewModal.currency || ''}
@@ -3059,6 +3224,9 @@ function App() {
                   })()}
                 </div>
                 )}
+                {viewModal.document_type === 'annual_accounts' ? (
+                  renderAnnualAccountsCard(viewModal)
+                ) : (
                 <div className="info-block">
                   <h3>Товары ({viewModal.items?.length || 0})</h3>
                   <table className="items-table">
@@ -3076,6 +3244,7 @@ function App() {
                     </tbody>
                   </table>
                 </div>
+                )}
                 {viewModal.raw_text && (
                   <div className="info-block">
                     <h3>Распознанный текст — оригинал</h3>
@@ -3235,7 +3404,7 @@ function App() {
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-08 · v31.2 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
+              сборка 2026-08-10 · v32 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
               <button
                 onClick={configureLocalOcr}
                 title="Задать адрес локального OCR (HTTPS-туннель cloudflared)"
