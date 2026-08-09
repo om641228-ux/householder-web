@@ -301,7 +301,13 @@ Bucket: `receipt-images` (public, policies SELECT/INSERT/DELETE).
 
 ## 14. Changelog
 
-**2026-08-10 (текущая финальная версия, v32.3 — цепочка PDF → Word → распознавание из текста → HTML)**
+**2026-08-10 (текущая финальная версия, v32.4 — PDF → JPEG → распознавание как ОДИН документ по умолчанию)**
+- Запрос пользователя: «наилучший результат — pdf переводим в Jpeg потом распознаем как один документ — реализуй».
+- Конвертация PDF → JPEG уже существовала (convertPdfToImages: pdf.js, scale 2.5 для плотных таблиц, качество 0.9, до 60 стр.), но в режиме multiPageMode='auto' страницы шли в smart-классификацию (classifyPagesWithGemini — лишний медленный проход, мог разбить документ на отдельные карточки).
+- Frontend (App.js): `pdfExpandedRef` — выставляется в handleFileSelect/handleDrop, если в выборке был PDF. В recognizeAndSave: при нескольких файлах и режиме 'auto' + pdfExpandedRef → сразу `recognizeDocumentPages(selectedFiles)` (асинхронный /api/upload-document-pages → assembleDocumentFromPages → одна карточка со всеми страницами, галерея page_urls, детектор годовой отчётности + конвертация таблиц работают). Явные режимы уважаются: 'separate' — каждая страница в свою карточку, 'single' — как раньше. Подсказка под превью: «📄 PDF → JPEG: будет распознан как ОДИН документ (лучший режим)».
+- Backend не менялся. Метка сборки: «сборка 2026-08-10 · v32.4». Деплой: только householder-web.
+
+**2026-08-10 (v32.3 — цепочка PDF → Word → распознавание из текста → HTML)**
 - Запрос пользователя: «организуй экспорт сначала pdf в word потом распознавание и представление в html». Word — редактируемое промежуточное звено: экспортировал → поправил ошибки в Word → загрузил обратно → распознавание из исправленного текста → представление в HTML (v32.2).
 - Backend (index.js):
   - `extractPageTextsFromWordFile(buffer, filename)` — файл → массив текстов страниц. .txt — как есть; .doc/.htm (Word MIME HTML) — `htmlToTextWithTables` (таблицы → Markdown-строки «| a | b | c |»); .docx — `extractTextFromDocx`: ZIP центральный каталог вручную + Node zlib.inflateRawSync для word/document.xml (новых зависимостей НЕТ), w:tc → « | », w:tr/w:p → переносы; порядок замен важен: `</w:p>` перед `</w:tc>` гасим (иначе каждая ячейка на своей строке). Деление на страницы по маркерам «══════ СТРАНИЦА N из M ══════» (принимаются и =), преамбула до первого маркера дописывается в стр. 1 (заголовок «CUENTAS ANUALES … REGISTRO MERCANTIL» нужен детектору).

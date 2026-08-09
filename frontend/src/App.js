@@ -635,6 +635,7 @@ function App() {
   const [serverStatus, setServerStatus] = useState('checking');
 
   const [selectedFiles, setSelectedFiles] = useState([]);
+  const pdfExpandedRef = useRef(false); // файлы — JPEG-страницы из PDF (v32.4): распознаём как ОДИН документ
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
   const [previewUrls, setPreviewUrls] = useState([]);
   const [previewUrl, setPreviewUrl] = useState(null);
@@ -968,6 +969,7 @@ function App() {
   const handleFileSelect = async (e) => {
     const picked = Array.from(e.target.files).filter(f => f.type.startsWith('image/') || isPdfFile(f) || isWordFile(f));
     if (picked.length > 0) {
+      pdfExpandedRef.current = picked.some(isPdfFile); // v32.4: PDF → JPEG → один документ
       setPreparingPdf(picked.some(isPdfFile));
       const files = await expandFilesWithPdf(picked);
       setPreparingPdf(false);
@@ -987,6 +989,7 @@ function App() {
     e.preventDefault();
     const picked = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/') || isPdfFile(f) || isWordFile(f));
     if (picked.length > 0) {
+      pdfExpandedRef.current = picked.some(isPdfFile); // v32.4: PDF → JPEG → один документ
       setPreparingPdf(picked.some(isPdfFile));
       const files = await expandFilesWithPdf(picked);
       setPreparingPdf(false);
@@ -1308,6 +1311,11 @@ function App() {
         return;
       }
       if (multiPageMode === 'single') {
+        return recognizeDocumentPages(selectedFiles);
+      }
+      // v32.4 (лучший результат по тестам): PDF → JPEG-страницы → распознаём как ОДИН документ,
+      // минуя smart-классификацию (явный режим «по страницам» по-прежнему уважаем)
+      if (pdfExpandedRef.current) {
         return recognizeDocumentPages(selectedFiles);
       }
       return recognizeSelectedFilesSmart(selectedFiles);
@@ -3631,7 +3639,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-10 · v32.3 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
+              сборка 2026-08-10 · v32.4 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
               <button
                 onClick={configureLocalOcr}
                 title="Задать адрес локального OCR (HTTPS-туннель cloudflared)"
@@ -3689,7 +3697,9 @@ ${bodyHtml}
                           ? 'КАЖДАЯ страница — в СВОЮ карточку'
                           : multiPageMode === 'single'
                             ? 'СТРАНИЦЫ ОДНОГО документа (одна карточка)'
-                            : 'AI сам решит: отдельные документы или страницы одного'}
+                            : pdfExpandedRef.current
+                              ? '📄 PDF → JPEG: будет распознан как ОДИН документ (лучший режим)'
+                              : 'AI сам решит: отдельные документы или страницы одного'}
                       </p>
                     )}
                   </div>
