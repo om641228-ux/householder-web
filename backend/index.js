@@ -559,9 +559,9 @@ function looksLikeEmptySkeleton(text) {
   if (s.startsWith('(')) return false; // служебный маркер
   const lines = s.split('\n').map(l => l.trim()).filter(Boolean);
   if (!lines.length) return true;
-  const skeletonLines = lines.filter(l => l.length >= 8 && /^[|_\-—–+\s.:]*$/.test(l)).length;
+  const skeletonLines = lines.filter(l => l.length >= 8 && /^[|_\-—–+*\s.:]*$/.test(l)).length;
   if (skeletonLines >= 4 && skeletonLines >= lines.length * 0.5) return true;
-  const visibleChars = lines.join('').replace(/[|_\-—–+\s.:]/g, '').length;
+  const visibleChars = lines.join('').replace(/[|_\-—–+*\s.:]/g, '').length;
   if (visibleChars < 40) return true; // почти пусто: повторная попытка не повредит
   return false;
 }
@@ -575,13 +575,14 @@ async function extractPageTextWithGemini(pageBuffer, mimeType, pageNum, totalPag
   const inline = { inlineData: { data: pageBuffer.toString('base64'), mimeType: mimeType || 'application/pdf' } };
   const prompt = `Это страница ${pageNum} из ${totalPages} отсканированного многостраничного документа (договор, эскритура купли-продажи, банковская выписка, полис, счёт, коммерческое предложение).
 Извлеки ВЕСЬ текст этой страницы ДОСЛОВНО, на языке оригинала (НЕ переводи), сохраняя порядок строк и, по возможности, структуру (подписи полей, таблицы построчно).
-ПРАВИЛА ДЛЯ ТАБЛИЦ: выпиши КАЖДУЮ строку таблицы отдельной строкой текста, перечисляя содержимое ВСЕХ ячеек через " | ". Если ячейку не удаётся прочитать — впиши [неразборчиво], но НЕ оставляй её молча пустой. ЗАПРЕЩЕНО выводить пустую рамку таблицы (строки из одних символов | и -) без содержимого.
+ПРАВИЛА ДЛЯ ТАБЛИЦ: выпиши КАЖДУЮ строку таблицы отдельной строкой текста, перечисляя содержимое ВСЕХ ячеек через " | ". Если ячейку не удаётся прочитать — впиши [неразборчиво], но НЕ оставляй её молча пустой. ЗАПРЕЩЕНО выводить пустую рамку таблицы (строки из одних символов | и -) без содержимого. Заполнители форм — длинные ряды точек или звёздочек (........, ********) — НЕ выводи: вместо них один пробел.
 Не добавляй ничего от себя: ни JSON, ни markdown, ни комментарии, ни сводки — только текст страницы.
 Если на странице нет текста (чистое фото/пустая) — верни одну строку: (страница без текста)`;
   const retryPrompt = `Это страница ${pageNum} из ${totalPages} отсканированного документа с ТАБЛИЦАМИ и мелким текстом.
-В предыдущей попытке содержимое таблиц потерялось. Прочитай страницу МАКСИМАЛЬНО внимательно, как будто разглядываешь её по фрагментам с увеличением:
+В предыдущей попытке содержимое таблиц потерялось (остались только ряды точек/звёздочек). Прочитай страницу МАКСИМАЛЬНО внимательно, как будто разглядываешь её по фрагментам с увеличением:
 - Сначала выпиши весь текст ВНЕ таблиц (заголовки, реквизиты, подписи, даты, адреса).
-- Затем КАЖДУЮ таблицу — строго построчно: одна строка таблицы = одна строка текста, ячейки через " | ", включая номера, наименования, количества, цены и суммы. Не пропускай и не объединяй строки. Если ячейка пуста В ОРИГИНАЛЕ — так и напиши: (пусто).
+- Затем КАЖДУЮ таблицу — строго построчно: одна строка таблицы = одна строка текста, ячейки через " | ", включая номера касилий, наименования и суммы. Не пропускай и не объединяй строки. Если ячейка пуста В ОРИГИНАЛЕ — так и напиши: (пусто).
+- Заполнители форм — длинные ряды точек или звёздочек (............, ************) — НЕ выводи вообще: вместо них просто пробел между названием и значением.
 Текст выводи на языке оригинала, без перевода, без markdown и комментариев.`;
   const mk = (maxTok, temp) => genAI.getGenerativeModel({
     model: DEFAULT_GEMINI_MODEL,
@@ -687,6 +688,10 @@ function buildDocumentSummaryPrompt(textSample) {
   "supply_address": "ПОЛНЫЙ адрес недвижимости/объекта как напечатан (ищи внимательно: Dirección, Finca, sitio, Calle) или null",
   "cups": null, "meter_number": null, "consumption": null, "consumption_unit": null,
   "object": "Duqe — если адрес содержит Reykjavik; Maria — если Callao; Kit — если Alcojora; иначе null",
+  "party_a": "первая сторона договора/выдавший орган НА ЯЗЫКЕ ОРИГИНАЛА (arrendador, vendedor, banco, Ayuntamiento de..., empresa) — ТОЛЬКО для contract/municipality/bank/tax, иначе null",
+  "party_b": "вторая сторона/получатель НА ЯЗЫКЕ ОРИГИНАЛА (arrendatario, comprador, cliente, contribuyente) или null",
+  "doc_kind": "для официальных документов: contract (договор), certificate (справка/certificado), power_of_attorney (доверенность/poder), bank_correspondence (письма/выписки банка), gov_correspondence (переписка с госорганами: AEAT, Ayuntamiento, Seguridad Social) — иначе null",
+  "summary": "1-2 предложения: о чём документ (предмет договора, сумма, сроки) НА ИСПАНСКОМ — или null",
   "items": [],
   "raw_text": null, "raw_text_ru": null
 }
@@ -711,6 +716,9 @@ function looksLikeAnnualAccounts(text) {
   if (/importe\s+neto\s+de\s+la\s+cifra\s+de\s+negocios/i.test(t)) score += 2;
   if (/activo\s+(?:no\s+)?corriente|patrimonio\s+neto/i.test(t)) score += 1;
   if (/gastos\s+de\s+personal|otros\s+gastos\s+de\s+explotaci[oó]n/i.test(t)) score += 1;
+  // Modelo 200 (Impuesto sobre Sociedades) — та же механика касилий/таблиц (v33)
+  if (/impuesto\s+sobre\s+sociedades/i.test(t)) score += 2;
+  if (/modelo\s*200\b/i.test(t)) score += 1;
   return score >= 4;
 }
 
@@ -719,7 +727,7 @@ function looksLikeAnnualAccounts(text) {
 function buildAnnualAccountsSample(pageTexts, maxLen = 22000) {
   // Финансовые листы (баланс/P&L) + идентификационные (IDA: NIF, denominación, domicilio,
   // CNAE, fechas de inicio/cierre) + titular real / presentación — всё нужно в сводке
-  const re = /balance|situaci[oó]n|cuenta\s+de\s+p|activo|pasivo|patrimonio|casilla|resultado|ingresos|gastos|acreedores|deudores|efectivo|amortizaci|identificaci[oó]n|denominaci[oó]n|domicilio|cnae|titular\s+real|presentaci[oó]n\s+de\s+cuentas|fecha\s+de\s+(inicio|cierre)|[oó]rgano\s+de\s+administraci|personal\s+asalariado/i;
+  const re = /balance|situaci[oó]n|cuenta\s+de\s+p|activo|pasivo|patrimonio|casilla|resultado|ingresos|gastos|acreedores|deudores|efectivo|amortizaci|identificaci[oó]n|denominaci[oó]n|domicilio|cnae|titular\s+real|presentaci[oó]n\s+de\s+cuentas|fecha\s+de\s+(inicio|cierre)|[oó]rgano\s+de\s+administraci|personal\s+asalariado|liquidaci|cuota|base\s+imponible|devolver|ingresar|deducci|devengad|soportad|autoliquidaci/i;
   const picked = pageTexts
     .map((t, i) => ({ t, i }))
     .filter(p => re.test(p.t) && !/^\((ошибка|страница без текста|страница не распознана)/.test(p.t));
@@ -743,7 +751,7 @@ function buildAnnualAccountsSample(pageTexts, maxLen = 22000) {
 // items = строки отчётности {section, casilla, name (ES), name_ru, total (текущий год), prev_total (прошлый год), text_value}
 // + служебные строки section="ΣBANK" — ключевые итоги для сверки с банком на фронтенде
 function buildAnnualAccountsPrompt(textSample) {
-  return `Ты анализируешь пакет ГОДОВОЙ ОТЧЁТНОСТИ испанской компании (Cuentas Anuales для Registro Mercantil): идентификационные листы (IDA), Balance de Situación (баланс), Cuenta de Pérdidas y Ganancias (отчёт о прибылях и убытках). Текст получен OCR и может содержать ошибки — восстанавливай смысл, игнорируй дубликаты.
+  return `Ты анализируешь пакет ГОДОВОЙ ОТЧЁТНОСТИ испанской компании (Cuentas Anuales для Registro Mercantil): идентификационные листы (IDA), Balance de Situación (баланс), Cuenta de Pérdidas y Ganancias (отчёт о прибылях и убытках). Это также может быть налоговая декларация MODELO 200 (Impuesto sobre Sociedades) — её страницы «Cuenta de pérdidas y ganancias» с касилиями вида 00255 разбирай так же (section "PA"; страницы liquidación — section "LIQ"; в store_name укажи "Modelo 200 {год} — {compañía}"). Текст получен OCR и может содержать ошибки — восстанавливай смысл, игнорируй дубликаты.
 Верни ТОЛЬКО JSON, без markdown и комментариев.
 
 ПРАВИЛА:
@@ -857,6 +865,219 @@ function ensureAnnualBankSummary(items) {
     row('deudores_comerciales', 'Дебиторская задолженность', findByName(/deudores\s+comerciales/i))
   ].filter(Boolean);
   return derived.length ? [...items, ...derived] : items;
+}
+
+// ========== ЗАПОЛНЕННЫЕ НАЛОГОВЫЕ ФОРМЫ (AEAT / Agencia Tributaria Canaria) — v34 ==========
+// Modelo 303 (IVA), 130/131 (IRPF), 111/115 (retenciones), 190/347/349/390 (resúmenes),
+// IGIC 400/415/420/425 и т.п. Годовая отчётность и Modelo 200 — НЕ сюда (они annual_accounts).
+function looksLikeTaxForm(text) {
+  const t = String(text || '');
+  let score = 0;
+  if (/agencia\s+(?:estatal\s+de\s+)?(?:administraci[oó]n\s+)?tributaria|\bAEAT\b|hacienda\s+(?:estatal|canaria)|administraci[oó]n\s+de\s+hacienda/i.test(t)) score += 2;
+  if (/\bmodelo\s*(?:n[ºo°]\s*)?\d{3}\b/i.test(t)) score += 2;
+  if (/autoliquidaci[oó]n|declaraci[oó]n\s+(?:trimestral|anual|informativa|resumen)|liquidaci[oó]n\s+(?:del\s+)?impuesto/i.test(t)) score += 2;
+  if (/\bIVA\b|valor\s+a[ñn]adido|\bIGIC\b|\bIRPF\b|retenciones?\s+(?:a\s+)?cuenta/i.test(t)) score += 1;
+  if (/casilla\s*(?:n[ºo°]\s*)?\d{1,5}|\[\s*\d{1,4}\s*\]/i.test(t)) score += 1;
+  if (/ejercicio\s*[:]?\s*20\d{2}|per[ií]odo\s*[:]?\s*(?:[1-4]T|0[1-9]|1[0-2])/i.test(t)) score += 1;
+  if (/a\s+ingresar|a\s+devolver|a\s+compensar|cuota\s+(?:a\s+ingresar|devengada|soportada|deducible)/i.test(t)) score += 1;
+  return score >= 4;
+}
+
+// Номер modelo из текста формы («Modelo 303», «MOD. 400»)
+function extractModeloNumber(text) {
+  const s = String(text || '');
+  const m = /\bmodelo\s*(?:n[ºo°]\s*)?(\d{3})\b/i.exec(s) || /\bmod\.?\s*(\d{3})\b/i.exec(s);
+  return m ? m[1] : null;
+}
+
+// Промпт структурирования налоговой формы: items = касильи {section DATOS/LIQ/RES, casilla,
+// name (ES), name_ru, total, text_value} + служебные ΣBANK-строки для сверки платежа с банком
+function buildTaxFormPrompt(textSample) {
+  return `Ты анализируешь ЗАПОЛНЕННУЮ НАЛОГОВУЮ ФОРМУ Испании/Канарских островов (AEAT или Agencia Tributaria Canaria): Modelo 303 (IVA), 130/131 (IRPF pagos fraccionados), 111/115 (retenciones), 190/347/349/390 (declaraciones informativas/resumen anual), IGIC Modelo 400/415/420/425 и подобные — autoliquidación/declaración с касильями. Текст получен OCR и может содержать ошибки — восстанавливай смысл, игнорируй дубликаты.
+Верни ТОЛЬКО JSON, без markdown и комментариев.
+
+ПРАВИЛА:
+1. Каждая ЗАПОЛНЕННАЯ касилья/строка — объект в items: section ("DATOS" — идентификация declarante и período; "LIQ" — devengación, deducciones, liquidación; "RES" — resultado), casilla (номер как напечатан; нет номера — null), name (название НА ИСПАНСКОМ как напечатано, НЕ переводи), name_ru (точный перевод), total (значение ЧИСЛОМ: суммы в евро со знаком; проценты — числом; пустые касильи НЕ включай), prev_total — null, text_value — текстовое значение (NIF, apellidos y nombre, denominación, período) вместо total.
+2. В КОНЦЕ items добавь служебные строки section "ΣBANK" (для сверки платежа налога с банком) — name строго из списка: "ejercicio" (год числом), "base_imponible" (сумма баз, если есть), "cuota" (cuota devengada / a deducir — итог расчёта до resultado), "resultado" (resultado de la autoliquidación: a ingresar — со знаком ПЛЮС, a devolver/compensar — со знаком МИНУС).
+3. Испанский формат чисел: 1.234,56 → 1234.56; минус может стоять в скобках или после числа.
+4. store_name — "Modelo {NNN} {ejercicio} {período} — {apellidos y nombre / denominación}" (язык оригинала), store_name_ru — перевод. receipt_date — fecha de presentación, иначе последний день período (YYYY-MM-DD). total_amount — resultado (число со знаком). invoice_number — NIF declarante. valid_from/valid_to — начало и конец período. provider — "AEAT" или "Agencia Tributaria Canaria".
+5. document_type — СТРОГО "tax_form". subtype — "tax".
+
+Верни ТОЛЬКО JSON:
+{
+  "store_name": "Modelo 303 2026 1T — ISERA 2020, S.L.",
+  "store_name_ru": "Форма 303 (НДС) 2026, 1 квартал — ISERA 2020, S.L.",
+  "receipt_date": "2026-04-20",
+  "receipt_time": null,
+  "total_amount": 1234.56,
+  "subtotal": null, "tax_amount": null, "tax_rate": null,
+  "currency": "EUR",
+  "payment_method": null, "country": "Spain",
+  "document_type": "tax_form",
+  "subtype": "tax",
+  "provider": "AEAT",
+  "valid_from": "2026-01-01",
+  "valid_to": "2026-03-31",
+  "invoice_number": "B76825199",
+  "contract_number": null,
+  "supply_address": null,
+  "cups": null, "meter_number": null, "consumption": null, "consumption_unit": null,
+  "object": null,
+  "items": [
+    { "section": "DATOS", "casilla": null, "name": "NIF del declarante", "name_ru": "NIF декларанта", "total": null, "prev_total": null, "text_value": "B76825199" },
+    { "section": "LIQ", "casilla": "01", "name": "Base imponible — IVA devengado", "name_ru": "Налоговая база — начисленный НДС", "total": 602122.09, "prev_total": null, "text_value": null },
+    { "section": "RES", "casilla": "71", "name": "Resultado — a ingresar", "name_ru": "Результат — к уплате", "total": 1234.56, "prev_total": null, "text_value": null },
+    { "section": "ΣBANK", "casilla": "Σ", "name": "resultado", "name_ru": "Результат декларации (сверка с банком)", "total": 1234.56, "prev_total": null, "text_value": null }
+  ]
+}
+
+Текст формы (выборка страниц):
+
+${textSample}`;
+}
+
+// Страховка для налоговых форм: если модель не вернула ΣBANK — минимум год и resultado
+function ensureTaxFormBankSummary(items, data) {
+  if (!Array.isArray(items)) items = [];
+  if (items.some(it => it && it.section === 'ΣBANK')) return items;
+  const rows = [];
+  const src = [...items.map(i => String((i && i.name) || '')), String((data && data.store_name) || '')].join(' ');
+  const ym = src.match(/20\d{2}/);
+  if (ym) rows.push({ section: 'ΣBANK', casilla: 'Σ', name: 'ejercicio', name_ru: 'Налоговый год', total: parseInt(ym[0], 10), prev_total: null, text_value: null });
+  if (data && typeof data.total_amount === 'number') {
+    rows.push({ section: 'ΣBANK', casilla: 'Σ', name: 'resultado', name_ru: 'Результат декларации (к уплате + / к возврату −)', total: data.total_amount, prev_total: null, text_value: null });
+  }
+  return rows.length ? [...items, ...rows] : items;
+}
+
+// ========== ПОСТРАНИЧНОЕ ХРАНЕНИЕ document_pages (v33) ==========
+// Отдельная таблица: оригинал OCR/vision, рабочий текст (после конвертации в таблицу),
+// перевод — для каждой страницы. Позволяет переводить/перестраивать карточку БЕЗ повторного OCR.
+// Таблица создаётся миграцией v22; если её ещё нет — просто пропускаем (best-effort).
+let documentPagesAvailable = null; // null = не проверяли; false = таблицы нет (миграция не выполнена)
+
+// raw_text → [{num, text}] по маркерам «══════ СТРАНИЦА N из M ══════»
+function splitRawPages(rawText) {
+  const s = String(rawText || '');
+  if (!s.trim()) return [];
+  const re = /^══════ СТРАНИЦА (\d+) из (\d+) ══════\s*$/gm;
+  const marks = [];
+  let m;
+  while ((m = re.exec(s)) !== null) marks.push({ num: parseInt(m[1], 10), idx: m.index, end: m.index + m[0].length });
+  if (!marks.length) return [{ num: 1, text: s.trim() }];
+  return marks.map((mk, i) => ({
+    num: mk.num,
+    text: s.slice(mk.end, i + 1 < marks.length ? marks[i + 1].idx : s.length).trim()
+  }));
+}
+
+async function saveDocumentPages(receiptId, receiptData) {
+  if (documentPagesAvailable === false) return;
+  const workPages = splitRawPages(receiptData.raw_text);
+  if (!workPages.length) return;
+  const rawPages = Array.isArray(receiptData._pagesRaw) ? receiptData._pagesRaw : [];
+  const ruPages = splitRawPages(receiptData.raw_text_ru);
+  const ruByNum = {};
+  ruPages.forEach(p => { ruByNum[p.num] = p.text; });
+  const rows = workPages.map((p, i) => ({
+    receipt_id: receiptId,
+    page_num: p.num,
+    page_kind: looksLikeFormTablePage(p.text) ? 'form_table' : (looksLikeEmptySkeleton(p.text) ? 'empty' : 'text'),
+    page_text_raw: rawPages[i] || null,
+    page_text: p.text,
+    page_text_ru: ruByNum[p.num] || null
+  }));
+  const { error } = await supabaseAdmin.from('document_pages').upsert(rows, { onConflict: 'receipt_id,page_num' });
+  if (error) {
+    documentPagesAvailable = false;
+    console.warn('document_pages недоступна (выполните supabase-migration-v22.sql):', error.message);
+    return;
+  }
+  documentPagesAvailable = true;
+  console.log(`document_pages: сохранено ${rows.length} стр. для receipt ${receiptId}`);
+}
+
+// ========== ДЕТАЛЬНЫЕ ТАБЛИЦЫ ПО ТИПАМ ДОКУМЕНТОВ (v34, миграция v23) ==========
+// 1) чеки/фактуры — receipts (уже есть); 2) договоры/справки/доверенности/переписка —
+// contract_documents; 3) коммерческие предложения — proposals; 4) налоговые формы —
+// tax_forms. Все строки связаны receipt_id → receipts(id) ON DELETE CASCADE.
+// Запись best-effort: таблицы нет (миграция не выполнена) — одно предупреждение, дальше пропуск.
+const detailTablesAvailable = {}; // table -> false, когда таблицы нет в БД
+
+async function upsertDetail(table, row) {
+  if (detailTablesAvailable[table] === false) return;
+  const { error } = await supabaseAdmin.from(table).upsert(row, { onConflict: 'receipt_id' });
+  if (error) {
+    detailTablesAvailable[table] = false;
+    console.warn(`${table} недоступна (выполните supabase-migration-v23.sql):`, error.message);
+  }
+}
+
+async function saveDocumentDetails(receiptId, d) {
+  if (!d || typeof d !== 'object') return;
+  const dt = d.document_type;
+  // 2) Договоры, справки, доверенности, переписка с банками/госорганами
+  const KIND_BY_TYPE = { contract: 'contract', municipality: 'gov_correspondence', bank: 'bank_correspondence', tax: 'gov_correspondence' };
+  const kind = d.doc_kind || KIND_BY_TYPE[dt] || null;
+  if (kind) {
+    await upsertDetail('contract_documents', {
+      receipt_id: receiptId,
+      doc_kind: kind,
+      title: d.store_name || null,
+      party_a: d.party_a || null,
+      party_b: d.party_b || null,
+      doc_date: d.receipt_date || null,
+      valid_from: d.valid_from || null,
+      valid_until: d.valid_to || null,
+      summary: d.summary || null,
+      summary_ru: d.store_name_ru || null
+    });
+  }
+  // 3) Коммерческие предложения (presupuesto/oferta/cotización)
+  if (dt === 'proposal') {
+    await upsertDetail('proposals', {
+      receipt_id: receiptId,
+      vendor_name: d.store_name || null,
+      vendor_nif: d.invoice_number || null,
+      proposal_number: d.contract_number || d.invoice_number || null,
+      proposal_date: d.receipt_date || null,
+      valid_until: d.valid_to || null,
+      total: (typeof d.total_amount === 'number') ? d.total_amount : null,
+      currency: d.currency || 'EUR',
+      notes: d.summary || null
+    });
+  }
+  // 4) Налоговые формы и годовая отчётность: касильи + итоги для сверки
+  if (dt === 'tax_form' || dt === 'annual_accounts') {
+    const items = Array.isArray(d.items) ? d.items : [];
+    const casillas = items
+      .filter(it => it && it.section !== 'ΣBANK' && (it.casilla || it.text_value))
+      .map(it => ({
+        section: it.section || null,
+        casilla: it.casilla != null ? String(it.casilla) : null,
+        name: it.name || null,
+        name_ru: it.name_ru || null,
+        value: (typeof it.total === 'number') ? it.total : null,
+        prev_value: (typeof it.prev_total === 'number') ? it.prev_total : null,
+        text_value: it.text_value || null
+      }));
+    const totals = {};
+    for (const it of items) {
+      if (it && it.section === 'ΣBANK' && it.name) totals[it.name] = (typeof it.total === 'number') ? it.total : null;
+    }
+    const modelo = extractModeloNumber(d.store_name) || extractModeloNumber(String(d.raw_text || '').slice(0, 6000));
+    const ym = /(20\d{2})/.exec(d.store_name || '') || /(20\d{2})/.exec(d.receipt_date || '');
+    await upsertDetail('tax_forms', {
+      receipt_id: receiptId,
+      modelo: modelo || (dt === 'annual_accounts' ? 'CUENTAS' : null),
+      ejercicio: ym ? Number(ym[1]) : null,
+      periodo: (() => { const pm = /([1-4]T|0[1-9]|1[0-2])\b/.exec(d.store_name || ''); return pm ? pm[1] : null; })(),
+      taxpayer_nif: d.invoice_number || null,
+      taxpayer_name: d.store_name || null,
+      casillas,
+      totals
+    });
+  }
 }
 
 // Разбор суммы в европейском/русском формате: "60 736,00" | "60.736,00" | "60,736.00" | "60736"
@@ -997,17 +1218,28 @@ async function extractPageTextsFromWordFile(buffer, filename) {
   return pages.length ? pages : [text.trim()];
 }
 
+// Маршрутизация по текстам страниц: 3+ страниц — документный конвейер;
+// 1-2 страницы — чековая схема, КРОМЕ годовой отчётности и налоговых форм (v34):
+// короткие формы (Modelo 130/303 на 1-2 стр.) тоже идут документным конвейером с касильями
+function shouldUseDocumentPipeline(pageTexts) {
+  if (pageTexts.length > 2) return true;
+  const joined = pageTexts.join('\n').slice(0, 40000);
+  return looksLikeAnnualAccounts(joined) || looksLikeTaxForm(joined);
+}
+
 // Сборка документа из готовых текстов страниц: перевод по страницам + модули + JSON-сводка
 async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
   const pageCount = pageTexts.length;
 
-  // Годовая отчётность (v32): детект по исходным текстам страниц
+  // Годовая отчётность (v32) и налоговые формы (v34): детект по исходным текстам страниц
   const isAnnualAccounts = looksLikeAnnualAccounts(pageTexts.join('\n').slice(0, 40000));
+  const isTaxForm = !isAnnualAccounts && looksLikeTaxForm(pageTexts.join('\n').slice(0, 40000));
+  const isFormDoc = isAnnualAccounts || isTaxForm;
 
   // v32.1: страницы-формы (баланс/P&L) СНАЧАЛА конвертируем в Markdown-таблицы,
   // затем переводим и разбираем построчно — таблица не рассыпается в точки
   let effTexts = pageTexts;
-  if (isAnnualAccounts) {
+  if (isFormDoc) {
     effTexts = await runWithConcurrency(pageTexts, async (t) => {
       if (!looksLikeFormTablePage(t)) return t;
       try {
@@ -1019,7 +1251,7 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
         return t;
       }
     }, 3);
-    console.log(`Годовая отчётность: в таблицы сконвертировано ${effTexts.filter((t, i) => t !== pageTexts[i]).length}/${pageCount} стр.`);
+    console.log(`${isAnnualAccounts ? 'Годовая отчётность' : 'Налоговая форма'}: в таблицы сконвертировано ${effTexts.filter((t, i) => t !== pageTexts[i]).length}/${pageCount} стр.`);
   }
 
   const raw_text = effTexts.map((t, i) => `══════ СТРАНИЦА ${i + 1} из ${pageCount} ══════\n${t}`).join('\n\n');
@@ -1037,13 +1269,15 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
 
   // JSON-сводка полей (начало + конец документа; для годовой отчётности — страницы с балансом/P&L,
   // уже сконвертированные в таблицы — касильи извлекаются точнее)
-  const sample = isAnnualAccounts
+  const sample = isFormDoc
     ? buildAnnualAccountsSample(effTexts)
     : `${raw_text.slice(0, 12000)}\n\n…(середина документа опущена)…\n\n${raw_text.slice(-5000)}`;
   let data;
   try {
     data = parseAIResponse(await callTextChain(
-      isAnnualAccounts ? buildAnnualAccountsPrompt(sample) : buildDocumentSummaryPrompt(sample)
+      isAnnualAccounts ? buildAnnualAccountsPrompt(sample)
+        : isTaxForm ? buildTaxFormPrompt(sample)
+        : buildDocumentSummaryPrompt(sample)
     ));
   } catch (e) {
     console.error('Сводка документа не удалась:', e.message);
@@ -1052,6 +1286,10 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
   if (isAnnualAccounts) {
     data.document_type = 'annual_accounts';
     data.items = ensureAnnualBankSummary(data.items);
+  } else if (isTaxForm) {
+    data.document_type = 'tax_form';
+    if (!data.subtype) data.subtype = 'tax';
+    data.items = ensureTaxFormBankSummary(data.items, data);
   }
   data.raw_text = raw_text;
   data.raw_text_ru = raw_text_ru;
@@ -1076,6 +1314,7 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
   }
   if (docType && docType !== 'auto') data.document_type = docType;
   else if (!data.store_name && !data.receipt_date) data.document_type = 'other';
+  data._pagesRaw = pageTexts; // v33: исходные тексты vision/OCR (до табличной конвертации) → document_pages
   return data;
 }
 
@@ -1489,7 +1728,7 @@ function parseAIResponse(text) {
       country: data.country || data.address || null,
       document_type: (() => {
       const raw = String(data.document_type || data.doc_type || data.type || '').toLowerCase().trim();
-      if (['receipt', 'invoice', 'bill', 'insurance', 'bank', 'contract', 'municipality', 'tax', 'proposal', 'annual_accounts', 'other'].includes(raw)) return raw;
+      if (['receipt', 'invoice', 'bill', 'insurance', 'bank', 'contract', 'municipality', 'tax', 'proposal', 'annual_accounts', 'tax_form', 'other'].includes(raw)) return raw;
       return /invoice|factura|фактур/i.test(raw) ? 'invoice' : 'receipt';
     })(),
       subtype: (() => {
@@ -1521,6 +1760,15 @@ function parseAIResponse(text) {
         return detectObjectByAddress(data.supply_address || '', data.raw_text || '');
       })(),
       items: normalizeItems(data.items || data.products || data.goods || []),
+      // v34: реквизиты официальных документов (договоры/справки/доверенности/переписка)
+      // → детальная таблица contract_documents; в receipts НЕ сохраняются (отсекаются маппингом)
+      party_a: data.party_a || null,
+      party_b: data.party_b || null,
+      doc_kind: (() => {
+        const raw = String(data.doc_kind || '').toLowerCase().trim();
+        return ['contract', 'certificate', 'power_of_attorney', 'bank_correspondence', 'gov_correspondence'].includes(raw) ? raw : null;
+      })(),
+      summary: data.summary || data.document_summary || null,
       raw_text: Array.isArray(data.raw_text)
         ? data.raw_text.map(x => String(x)).join('\n')
         : (data.raw_text || data.full_text || data.text || jsonStr),
@@ -1794,8 +2042,11 @@ async function saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod) {
     .insert([filteredRecord])
     .select()
     .single();
-  
+
   if (error) throw error;
+  // v33: постраничное хранение (document_pages) — best-effort, на сохранение чека не влияет
+  try { await saveDocumentPages(data.id, receiptData); } catch (e) { console.warn('document_pages:', e.message); }
+  try { await saveDocumentDetails(data.id, receiptData); } catch (e) { console.warn('document details:', e.message); }
   return data;
 }
 
@@ -1954,7 +2205,7 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
       const pageTexts = await extractPageTextsFromWordFile(req.file.buffer, fname);
       if (!pageTexts.length) return res.status(400).json({ error: 'Не удалось извлечь текст из файла (пустой или неподдерживаемый формат)' });
       console.log(`Word/text-импорт: ${fname} → страниц: ${pageTexts.length}`);
-      let rd = pageTexts.length > 2
+      let rd = shouldUseDocumentPipeline(pageTexts)
         ? await finalizeDocumentFromPageTexts(pageTexts, currency, docType)
         : await finalizeReceiptFromPageTexts(pageTexts, currency, docType);
       rd = await ensureRawTextRu(rd);
@@ -2276,6 +2527,29 @@ app.post('/api/upload-ocr-text', upload.array('pages', 60), async (req, res) => 
     const badPages = rawTexts
       .map((t, i) => isDegenerateOcrText(String(t || '').replace(/<\|det\|>[\s\S]*?<\|\/det\|>/g, '')) ? i + 1 : 0)
       .filter(Boolean);
+    // v33: дожим мусорных страниц облачным зрением — если локальный OCR дал
+    // пустоту/звёздочки/повторы, а страница прислана файлом, пробуем Gemini.
+    if (badPages.length && cloud?.enabled && Array.isArray(req.files) && req.files.length) {
+      const fileByPage = {};
+      for (const f of req.files) { const m = /(\d+)/.exec(f.originalname || ''); if (m) fileByPage[Number(m[1])] = f; }
+      const retryResults = await runWithConcurrency(badPages, 2, async (pn) => {
+        const f = (req.files.length === rawTexts.length ? req.files[pn - 1] : null) || fileByPage[pn];
+        if (!f || !f.buffer) return null;
+        if (f.mimetype === 'application/pdf' || /\.pdf$/i.test(f.originalname || '')) return null;
+        try {
+          const txt = await extractPageTextWithGemini(f.buffer, f.mimetype || 'image/jpeg', pn, rawTexts.length);
+          return txt && !isDegenerateOcrText(txt) ? { pn, txt } : null;
+        } catch { return null; }
+      });
+      const recovered = retryResults.filter(Boolean);
+      if (recovered.length) {
+        for (const r of recovered) rawTexts[r.pn - 1] = r.txt;
+        const recSet = new Set(recovered.map(r => r.pn));
+        const stillBad = badPages.filter(pn => !recSet.has(pn));
+        badPages.splice(0, badPages.length, ...stillBad);
+        console.log(`upload-ocr-text: облако восстановило стр. ${recovered.map(r => r.pn).join(', ')}`);
+      }
+    }
     if (badPages.length && badPages.length === rawTexts.length) {
       return res.status(422).json({
         error: `Локальный OCR зациклился на стр. ${badPages.join(', ')} — в тексте одни повторы. ` +
@@ -2301,10 +2575,10 @@ app.post('/api/upload-ocr-text', upload.array('pages', 60), async (req, res) => 
     const paymentStatusOverride = sanitizePaymentStatus(req.body.payment_status);
 
     // Карточка из текстов (v28.5): 1-2 страницы — почти всегда чек/фактура → чековая схема
-    // С ТОВАРАМИ; 3+ страниц — документный конвейер (сводка полей без позиций)
-    const receiptData = pageTexts.length <= 2
-      ? await finalizeReceiptFromPageTexts(pageTexts, currency, docType)
-      : await finalizeDocumentFromPageTexts(pageTexts, currency, docType);
+    // С ТОВАРАМИ; 3+ страниц (или отчётность/налоговая форма, v34) — документный конвейер
+    const receiptData = shouldUseDocumentPipeline(pageTexts)
+      ? await finalizeDocumentFromPageTexts(pageTexts, currency, docType)
+      : await finalizeReceiptFromPageTexts(pageTexts, currency, docType);
     receiptData.docType = docType === 'auto' ? (receiptData.document_type || 'receipt') : docType;
     receiptData.object = (object && object !== 'other') ? object : (receiptData.object || 'other');
     if (subtypeOverride) receiptData.subtype = subtypeOverride;
@@ -2808,7 +3082,7 @@ app.post('/api/bulk-update-currency', requireAuth, async (req, res) => {
 app.post('/api/bulk-update-type', requireAuth, async (req, res) => {
   try {
     const { ids, document_type } = req.body;
-    const ALLOWED_TYPES = ['receipt', 'invoice', 'bill', 'insurance', 'bank', 'contract', 'municipality', 'tax', 'proposal', 'other'];
+    const ALLOWED_TYPES = ['receipt', 'invoice', 'bill', 'insurance', 'bank', 'contract', 'municipality', 'tax', 'proposal', 'annual_accounts', 'tax_form', 'other'];
     if (!ALLOWED_TYPES.includes(document_type)) {
       return res.status(400).json({ error: `document_type должен быть одним из: ${ALLOWED_TYPES.join(', ')}` });
     }

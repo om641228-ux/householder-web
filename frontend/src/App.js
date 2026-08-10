@@ -62,6 +62,7 @@ const DOC_TYPE_LABELS = {
   tax: '💰 Налоговая',
   proposal: '🤝 Комм. предложение',
   annual_accounts: '📊 Годовая отчётность',
+  tax_form: '📋 Налоговая форма',
   other: '📎 Другое'
 };
 const ITEMS_PER_PAGE_OPTIONS = [10, 20, 50, 'all'];
@@ -2208,7 +2209,8 @@ function App() {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     const year = (r.valid_to || r.receipt_date || '').slice(0, 4) || 'ejercicio';
-    a.download = `cuentas_anuales_${year}_${r.id || 'export'}.csv`;
+    const prefix = r.document_type === 'tax_form' ? 'formulario' : 'cuentas_anuales';
+    a.download = `${prefix}_${year}_${r.id || 'export'}.csv`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -2249,7 +2251,7 @@ function App() {
   const downloadAnnualWord = (r) => {
     const { yearCur } = computeAnnualBankCmp(r);
     const items = Array.isArray(r.items) ? r.items : [];
-    const denomItem = items.find(it => it && it.section === 'IDA' && /denominaci[oó]n/i.test(String(it.name || '')) && it.text_value);
+    const denomItem = items.find(it => it && ['IDA', 'DATOS'].includes(it.section) && /denominaci[oó]n|apellidos\s+y\s+nombre|raz[oó]n\s+social/i.test(String(it.name || '')) && it.text_value);
     const denom = denomItem ? String(denomItem.text_value) : (r.store_name || 'documento');
     const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const rawText = String(r.raw_text || '');
@@ -2259,17 +2261,20 @@ function App() {
       if (m) return `<h3 style="page-break-before:always">══════ ${m[1]} ══════</h3>` + mdPageToWordHtml(chunk.slice(m[0].length));
       return mdPageToWordHtml(chunk);
     }).join('\n');
+    const docTitleRaw = r.document_type === 'tax_form'
+      ? (r.store_name || `Formulario fiscal ${yearCur || ''}`)
+      : `CUENTAS ANUALES ${yearCur || ''} — ${denom} — REGISTRO MERCANTIL`;
     const word = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
-<head><meta charset="utf-8"><title>Cuentas Anuales ${yearCur || ''} — ${esc(denom)}</title></head>
+<head><meta charset="utf-8"><title>${esc(docTitleRaw)}</title></head>
 <body style="font-family:'Times New Roman',serif">
-<h2>CUENTAS ANUALES ${yearCur || ''} — ${esc(denom)} — REGISTRO MERCANTIL</h2>
+<h2>${esc(docTitleRaw)}</h2>
 <p style="color:#666;font-size:10pt">Текст, восстановленный распознаванием. Исправьте ошибки и загрузите файл обратно — распознавание выполнится из текста Word, без OCR. Заголовки «══════ СТРАНИЦА N из M ══════» НЕ удаляйте — по ним файл делится на страницы.</p>
 ${bodyHtml}
 </body></html>`;
     const blob = new Blob(['﻿' + word], { type: 'application/msword;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `cuentas_anuales_${yearCur || 'ejercicio'}_${r.id || 'export'}.doc`;
+    a.download = `${r.document_type === 'tax_form' ? 'formulario' : 'cuentas_anuales'}_${yearCur || 'ejercicio'}_${r.id || 'export'}.doc`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -2310,7 +2315,12 @@ ${bodyHtml}
         const status = diff == null ? '—' : (Math.abs(diff) <= tol ? '✅' : '⚠️');
         return { key, labelEs, labelRu, rep, bankVal, bankLabel, diff, status };
       };
-      cmp = [
+      cmp = r.document_type === 'tax_form' ? [
+        // Налоговая форма (v34): resultado сверяем со списаниями (уплата налога), база/cuota — справочно
+        mkRow('resultado', 'Resultado (a ingresar + / a devolver −)', 'Результат декларации', (totals.resultado?.cur != null && totals.resultado.cur > 0) ? bankOut : null, `списания со счёта за ${yearCur}`),
+        mkRow('base_imponible', 'Base imponible', 'Налоговая база', null, ''),
+        mkRow('cuota', 'Cuota', 'Сумма налога по расчёту', null, '')
+      ] : [
         mkRow('ingresos', 'Ingresos (casilla 40100)', 'Доходы по отчёту', bankIn, `поступления на счёт за ${yearCur}`),
         mkRow('gastos_explotacion', 'Gastos de explotación', 'Расходы по отчёту (по модулю)', bankOut, `списания со счёта за ${yearCur}`),
         mkRow('efectivo', 'Efectivo (casilla 12700)', 'Денежные средства на 31.12', bankBal, `остаток по выписке на 31.12.${yearCur}`)
@@ -2338,15 +2348,18 @@ ${bodyHtml}
       return 2;
     };
     const nif = r.invoice_number || '';
-    const denomItem = rows.find(it => it.section === 'IDA' && /denominaci[oó]n/i.test(String(it.name || '')) && it.text_value);
+    const denomItem = rows.find(it => ['IDA', 'DATOS'].includes(it.section) && /denominaci[oó]n|apellidos\s+y\s+nombre|raz[oó]n\s+social/i.test(String(it.name || '')) && it.text_value);
     const denom = denomItem ? String(denomItem.text_value) : (r.store_name || '');
     const SECTION_META = {
       IDA: ['DATOS GENERALES DE IDENTIFICACIÓN', 'Идентификационные данные', 'IDA1'],
       BA: ['BALANCE DE SITUACIÓN ABREVIADO', 'Баланс (сокращённый)', 'BA'],
       PA: ['CUENTA DE PÉRDIDAS Y GANANCIAS ABREVIADA', 'Отчёт о прибылях и убытках (сокращённый)', 'PA'],
+      LIQ: ['LIQUIDACIÓN — CÁLCULO DEL IMPUESTO', 'Расчёт налога', 'LIQ'],
+      DATOS: ['DATOS DEL DECLARANTE', 'Данные декларанта', 'DATOS'],
+      RES: ['RESULTADO DE LA DECLARACIÓN', 'Результат декларации', 'RES'],
       OTROS: ['OTROS DATOS', 'Прочее', '']
     };
-    const secOrder = [...new Set(rows.map(it => it.section))].sort((a, b) => ['IDA', 'BA', 'PA'].indexOf(a) - ['IDA', 'BA', 'PA'].indexOf(b));
+    const secOrder = [...new Set(rows.map(it => it.section))].sort((a, b) => ['IDA', 'DATOS', 'BA', 'PA', 'LIQ', 'RES'].indexOf(a) - ['IDA', 'DATOS', 'BA', 'PA', 'LIQ', 'RES'].indexOf(b));
     const formHeader = code => `
       <table class="aaf-fh"><tr>
         <td style="width:22%"><span class="aaf-lbl">NIF:</span> <b>${esc(nif)}</b></td>
@@ -2435,6 +2448,9 @@ ${bodyHtml}
       IDA: 'Identificación — Идентификация',
       BA: 'Balance de Situación — Баланс',
       PA: 'Cuenta de Pérdidas y Ganancias — Прибыли и убытки',
+      LIQ: 'Liquidación — Ликвидация (расчёт налога)',
+      DATOS: 'Datos del declarante — Данные декларанта',
+      RES: 'Resultado — Результат декларации',
       OTROS: 'Otros — Прочее'
     };
     const { totals, yearCur, yearPrev, cmp, mvtsCount } = computeAnnualBankCmp(r);
@@ -3396,12 +3412,12 @@ ${bodyHtml}
                 {!editMode && (
                 <div className="info-block">
                   <h3>Основная информация</h3>
-                  <p><strong>{viewModal.document_type === 'annual_accounts' ? 'Документ' : 'Магазин'}:</strong> <HighlightText text={viewModal.store_name || viewModal.store_name_ru || '—'} query={searchQuery} /></p>
+                  <p><strong>{['annual_accounts', 'tax_form'].includes(viewModal.document_type) ? 'Документ' : 'Магазин'}:</strong> <HighlightText text={viewModal.store_name || viewModal.store_name_ru || '—'} query={searchQuery} /></p>
                   {viewModal.store_name_ru && viewModal.store_name && viewModal.store_name_ru !== viewModal.store_name && (
                     <p style={{ marginTop: -6 }}><strong>Название (рус):</strong> <HighlightText text={viewModal.store_name_ru} query={searchQuery} /></p>
                   )}
                   <p><strong>Дата:</strong> {formatDate(viewModal.receipt_date)} {viewModal.receipt_time}</p>
-                  <p><strong>{viewModal.document_type === 'annual_accounts' ? 'Resultado — Результат года' : 'Итого'}:</strong> {formatAmount(viewModal.total_amount, viewModal.currency)}</p>
+                  <p><strong>{viewModal.document_type === 'annual_accounts' ? 'Resultado — Результат года' : viewModal.document_type === 'tax_form' ? 'Resultado — Результат декларации' : 'Итого'}:</strong> {formatAmount(viewModal.total_amount, viewModal.currency)}</p>
                   <p><strong>Тип:</strong> {DOC_TYPE_LABELS[viewModal.document_type] || viewModal.document_type || '🧾 Чек'}</p>
                   <p><strong>Объект:</strong> <HighlightText text={viewModal.object || '—'} query={searchQuery} /></p>
                   {viewModal.subtype && <p><strong>Подтип:</strong> {SUBTYPE_LABELS[viewModal.subtype] || viewModal.subtype}</p>}
@@ -3459,7 +3475,7 @@ ${bodyHtml}
                   })()}
                 </div>
                 )}
-                {viewModal.document_type === 'annual_accounts' ? (
+                {['annual_accounts', 'tax_form'].includes(viewModal.document_type) ? (
                   renderAnnualAccountsCard(viewModal)
                 ) : (
                 <div className="info-block">
@@ -3639,7 +3655,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-10 · v32.4 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
+              сборка 2026-08-10 · v34 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
               <button
                 onClick={configureLocalOcr}
                 title="Задать адрес локального OCR (HTTPS-туннель cloudflared)"
