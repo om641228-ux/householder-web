@@ -756,9 +756,11 @@ function App() {
   const [savingEdit, setSavingEdit] = useState(false);
 
   // При открытии другого чека галерея начинается с первой страницы, режим редактирования сбрасывается
-  useEffect(() => { setModalPageIdx(0); setEditMode(false); setPageTextLang('ru'); setAnnualFormView(false); }, [viewModal?.id]);
+  useEffect(() => { setModalPageIdx(0); setEditMode(false); setPageTextLang('ru'); setAnnualFormView(false); setDocTextPage(0); setDocTextMode('both'); }, [viewModal?.id]);
   const [annualFormView, setAnnualFormView] = useState(false); // годовая отчётность: таблица | вид официальной формы (v32.2)
-  const [pageTextLang, setPageTextLang] = useState('ru'); // текст страницы рядом с галереей: перевод | оригинал
+  const [pageTextLang, setPageTextLang] = useState('ru'); // текст страницы рядом с галереей: перевод | оригинал | обе
+  const [docTextPage, setDocTextPage] = useState(0);     // двуязычный просмотр документа (v35): страница
+  const [docTextMode, setDocTextMode] = useState('both'); // both (построчно/колонки) | ru | orig
   // Ширина окна — адаптивная раскладка карточки документа (<900px: изображение и перевод — вертикально, для мобильных)
   const [winWidth, setWinWidth] = useState(window.innerWidth);
   useEffect(() => {
@@ -2442,6 +2444,129 @@ ${bodyHtml}
     setTimeout(() => URL.revokeObjectURL(url), 60000);
   };
 
+  // ========== ДВУЯЗЫЧНЫЙ ПРОСМОТР ТЕКСТА ДОКУМЕНТА (v35) ==========
+  // Для многостраничных документов (договоры, формы, импорт из Word): постраничная навигация
+  // + режимы «⇄ Оба» / «🇷🇺 Перевод» / «Оригинал».
+  // В режиме «Оба»: если число строк оригинала и перевода совпадает — ПОСТРОЧНО: строка
+  // оригинала, под ней серая строка перевода; Markdown-таблицы сливаются в одну — в каждой
+  // ячейке значение оригинала, а перевод (если отличается) серым под ним. Если строки
+  // разъехались — две колонки 50/50 с синхронной страницей.
+  const renderDocTextBilingual = (r) => {
+    const orig = String(r.raw_text || '');
+    const ru = String(r.raw_text_ru || '');
+    const pageCount = Math.max(1, (orig.match(/^═{2,}\s*СТРАНИЦА\s+\d+\s+из\s+\d+/gim) || []).length);
+    const pageIdx = Math.min(docTextPage, pageCount - 1);
+    const pageOrig = pageCount > 1 ? extractRawPage(orig, pageIdx + 1) : orig;
+    const pageRu = pageCount > 1 ? extractRawPage(ru, pageIdx + 1) : ru;
+    const modeBtn = (mode, label, enabled = true) => (
+      <button key={mode} onClick={() => setDocTextMode(mode)} disabled={!enabled}
+        style={{ padding: '3px 10px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: enabled ? 'pointer' : 'not-allowed', border: docTextMode === mode ? '1px solid #2980b9' : '1px solid #ccd6dd', background: docTextMode === mode ? '#eaf3fb' : '#fff', color: enabled ? '#2c3e50' : '#b2bec3' }}>
+        {label}
+      </button>
+    );
+    const preStyle = { margin: 0, fontSize: 13, lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere', color: '#2c3e50', fontFamily: 'inherit' };
+    const nav = pageCount > 1 && (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
+        <button onClick={() => setDocTextPage(Math.max(0, pageIdx - 1))} disabled={pageIdx === 0} style={{ padding: '2px 9px', borderRadius: 6, border: '1px solid #ccd6dd', background: '#fff', cursor: pageIdx === 0 ? 'default' : 'pointer', fontSize: 13 }}>‹</button>
+        <select value={pageIdx} onChange={e => setDocTextPage(Number(e.target.value))} style={{ padding: '2px 6px', borderRadius: 6, border: '1px solid #ccd6dd', fontSize: 12 }}>
+          {Array.from({ length: pageCount }, (_, i) => <option key={i} value={i}>Стр. {i + 1} из {pageCount}</option>)}
+        </select>
+        <button onClick={() => setDocTextPage(Math.min(pageCount - 1, pageIdx + 1))} disabled={pageIdx >= pageCount - 1} style={{ padding: '2px 9px', borderRadius: 6, border: '1px solid #ccd6dd', background: '#fff', cursor: pageIdx >= pageCount - 1 ? 'default' : 'pointer', fontSize: 13 }}>›</button>
+      </span>
+    );
+    const isTblRow = l => { const t = l.trim(); return t.length > 2 && t.startsWith('|') && t.endsWith('|'); };
+    const isSepRow = l => /^\|[\s\-:|]+\|$/.test(l.trim());
+    const rowCells = l => l.trim().slice(1, -1).split('|').map(c => c.trim());
+    const renderBoth = () => {
+      const ol = pageOrig.split('\n');
+      const rl = pageRu.split('\n');
+      if (!pageRu || ol.length !== rl.length) {
+        // Число строк различается — две колонки, синхронно по странице
+        return (
+          <div style={{ display: 'table', width: '100%', tableLayout: 'fixed' }}>
+            <div style={{ display: 'table-cell', width: '50%', verticalAlign: 'top', paddingRight: 8, borderRight: '1px solid #e0e6ed', boxSizing: 'border-box' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#6e6e73', marginBottom: 4, textTransform: 'uppercase' }}>Оригинал</div>
+              <pre style={preStyle}><HighlightText text={pageOrig} query={searchQuery} /></pre>
+            </div>
+            <div style={{ display: 'table-cell', width: '50%', verticalAlign: 'top', paddingLeft: 8, boxSizing: 'border-box' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#6e6e73', marginBottom: 4, textTransform: 'uppercase' }}>Русский перевод</div>
+              {pageRu
+                ? <pre style={preStyle}><HighlightText text={pageRu} query={searchQuery} /></pre>
+                : <p style={{ color: '#95a5a6', fontSize: 12 }}>Перевода этой страницы нет</p>}
+            </div>
+          </div>
+        );
+      }
+      // Строки 1:1 — построчно; таблицы сливаем по ячейкам (перевод серым под оригиналом)
+      const out = [];
+      let tblPairs = [];
+      const flushTbl = () => {
+        if (!tblPairs.length) return;
+        const pairs = tblPairs;
+        out.push(
+          <table key={`tbl-${out.length}`} style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, margin: '6px 0', background: '#fff' }}>
+            <tbody>
+              {pairs.map((pr, i) => {
+                const oc = pr[0], rc = pr[1];
+                const n = Math.max(oc.length, rc.length);
+                return (
+                  <tr key={i} style={i === 0 ? { fontWeight: 700, background: '#f5f5f7' } : undefined}>
+                    {Array.from({ length: n }, (_, j) => {
+                      const o = oc[j] || '';
+                      const t = rc[j] || '';
+                      return (
+                        <td key={j} style={{ border: '1px solid #d2d2d7', padding: '3px 6px', verticalAlign: 'top' }}>
+                          <HighlightText text={o} query={searchQuery} />
+                          {t && t !== o && <div style={{ color: '#6e6e73', fontSize: 11 }}><HighlightText text={t} query={searchQuery} /></div>}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        );
+        tblPairs = [];
+      };
+      for (let i = 0; i < ol.length; i++) {
+        const o = ol[i], t = rl[i];
+        if (isSepRow(o)) continue; // разделитель Markdown-таблицы
+        if (isTblRow(o) && isTblRow(t)) { tblPairs.push([rowCells(o), rowCells(t)]); continue; }
+        if (isTblRow(o) && !isTblRow(t)) { tblPairs.push([rowCells(o), []]); continue; }
+        flushTbl();
+        if (!o.trim() && !t.trim()) continue;
+        out.push(
+          <div key={`ln-${i}`} style={{ margin: '2px 0' }}>
+            {o.trim() ? <div style={preStyle}><HighlightText text={o} query={searchQuery} /></div> : null}
+            {t.trim() && t.trim() !== o.trim() ? <div style={{ ...preStyle, color: '#6e6e73', fontSize: 12 }}><HighlightText text={t} query={searchQuery} /></div> : null}
+          </div>
+        );
+      }
+      flushTbl();
+      return <div>{out}</div>;
+    };
+    const body = docTextMode === 'orig'
+      ? <pre style={preStyle}><HighlightText text={pageOrig} query={searchQuery} /></pre>
+      : docTextMode === 'ru'
+        ? (pageRu ? <pre style={preStyle}><HighlightText text={pageRu} query={searchQuery} /></pre> : <p style={{ color: '#95a5a6', fontSize: 12 }}>Перевода этой страницы нет</p>)
+        : renderBoth();
+    return (
+      <div className="info-block">
+        <h3 style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <span>Текст документа</span>
+          {modeBtn('both', '⇄ Оба', !!(pageOrig && pageRu))}
+          {modeBtn('ru', '🇷🇺 Перевод', !!pageRu)}
+          {modeBtn('orig', 'Оригинал', !!pageOrig)}
+          {nav}
+        </h3>
+        <div style={{ maxHeight: '60vh', overflowY: 'auto', overflowX: 'hidden', background: '#f8f9fa', border: '1px solid #e0e6ed', borderRadius: 8, padding: '10px 12px' }}>
+          {body}
+        </div>
+      </div>
+    );
+  };
+
   const renderAnnualAccountsCard = (r) => {
     const items = Array.isArray(r.items) ? r.items : [];
     const SECTION_LABELS = {
@@ -3243,7 +3368,8 @@ ${bodyHtml}
                     // Перевод/оригинал выбранной страницы — рядом с изображением
                     const pageRu = extractRawPage(viewModal.raw_text_ru, idx + 1);
                     const pageOrig = extractRawPage(viewModal.raw_text, idx + 1);
-                    const effLang = (pageTextLang === 'ru' && pageRu) ? 'ru' : (pageTextLang === 'orig' && pageOrig) ? 'orig' : (pageRu ? 'ru' : 'orig');
+                    const bothMode = pageTextLang === 'both' && pageRu && pageOrig; // v35: оригинал + перевод одновременно
+                    const effLang = bothMode ? 'both' : (pageTextLang === 'ru' && pageRu) ? 'ru' : (pageTextLang === 'orig' && pageOrig) ? 'orig' : (pageRu ? 'ru' : 'orig');
                     const pageText = effLang === 'ru' ? pageRu : pageOrig;
                     const langBtn = (lang, label, enabled) => (
                       <button key={lang} onClick={() => setPageTextLang(lang)} disabled={!enabled}
@@ -3273,13 +3399,23 @@ ${bodyHtml}
                     const textPanel = !hasPageText ? null : (
                       <div style={{ textAlign: 'left', boxSizing: 'border-box' }}>
                         <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
+                          {langBtn('both', '⇄ Оба', !!(pageRu && pageOrig))}
                           {langBtn('ru', '🇷🇺 Перевод', !!pageRu)}
                           {langBtn('orig', 'Оригинал', !!pageOrig)}
                           <span style={{ fontSize: 11, color: '#95a5a6', alignSelf: 'center' }}>стр. {idx + 1}</span>
                         </div>
+                        {bothMode ? (
+                          <div style={{ maxHeight: isNarrowModal ? '45vh' : '55vh', overflowY: 'auto', overflowX: 'hidden', background: '#f8f9fa', border: '1px solid #e0e6ed', borderRadius: 8, padding: '10px 12px', fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere', color: '#2c3e50' }}>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: '#6e6e73', textTransform: 'uppercase', marginBottom: 3 }}>Оригинал</div>
+                            <div>{pageOrig}</div>
+                            <div style={{ fontSize: 11, fontWeight: 700, color: '#6e6e73', textTransform: 'uppercase', margin: '10px 0 3px', borderTop: '1px solid #e0e6ed', paddingTop: 8 }}>Русский перевод</div>
+                            <div>{pageRu}</div>
+                          </div>
+                        ) : (
                         <div style={{ maxHeight: isNarrowModal ? '45vh' : '55vh', overflowY: 'auto', overflowX: 'hidden', background: '#f8f9fa', border: '1px solid #e0e6ed', borderRadius: 8, padding: '10px 12px', fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere', color: '#2c3e50' }}>
                           {pageText}
                         </div>
+                        )}
                       </div>
                     );
                     return (
@@ -3496,6 +3632,14 @@ ${bodyHtml}
                   </table>
                 </div>
                 )}
+                {/* Многостраничный документ (договор/форма/импорт из Word, v35) — двуязычный
+                    постраничный просмотр; одностраничные чеки — как раньше, два блока */}
+                {(() => {
+                  const pageMarks = (String(viewModal.raw_text || '').match(/^═{2,}\s*СТРАНИЦА\s+\d+\s+из\s+\d+/gim) || []).length;
+                  if (pageMarks >= 2) return renderDocTextBilingual(viewModal);
+                  return null;
+                })() || (
+                  <>
                 {viewModal.raw_text && (
                   <div className="info-block">
                     <h3>Распознанный текст — оригинал</h3>
@@ -3520,6 +3664,8 @@ ${bodyHtml}
                     )}
                   </div>
                 ) : null}
+                  </>
+                )}
               </div>
             </div>
             <div className="modal-footer" style={{ flexShrink: 0 }}>
@@ -3655,7 +3801,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-10 · v34 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
+              сборка 2026-08-10 · v35 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
               <button
                 onClick={configureLocalOcr}
                 title="Задать адрес локального OCR (HTTPS-туннель cloudflared)"

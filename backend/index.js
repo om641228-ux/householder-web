@@ -1201,6 +1201,8 @@ async function extractPageTextsFromWordFile(buffer, filename) {
     text = /<html|<table|<w:|<meta\s/i.test(raw) ? htmlToTextWithTables(raw) : raw.trim();
   }
   if (!text || text.trim().length < 10) return [];
+  // Служебная строка-инструкция нашего Word-экспорта (v32.3) — не часть документа, вычищаем
+  text = text.replace(/^Текст, восстановленный распознаванием\..*$/gim, '').replace(/\n{3,}/g, '\n\n');
   const re = /[═=]{3,}\s*СТРАНИЦА\s+\d+\s+из\s+\d+\s*[═=]{3,}/gi;
   const marks = [];
   let m;
