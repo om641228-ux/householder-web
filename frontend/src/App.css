@@ -105,17 +105,17 @@ body {
    ============================================ */
 .tabs-inline {
   display: flex;
-  gap: 4px;
-  background: var(--bg-card);
+  gap: 2px;
+  background: rgba(120, 120, 128, 0.12);
   border: 1px solid var(--border);
   border-radius: 999px;
-  padding: 4px;
+  padding: 3px;
   box-shadow: var(--shadow-sm);
   align-items: center;
 }
 
 .tabs-inline button {
-  padding: 7px 14px;
+  padding: 6px 14px;
   border: none;
   background: transparent;
   color: var(--text-secondary);
@@ -146,14 +146,15 @@ body {
   background: linear-gradient(135deg, #7c3aed, #6d28d9);
   color: white;
   border: none;
-  padding: 9px 18px;
-  border-radius: var(--radius-sm);
+  padding: 7px 14px;
+  border-radius: 999px;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
   transition: var(--transition);
   box-shadow: var(--shadow-sm);
   white-space: nowrap;
+  line-height: 1.2;
 }
 
 .model-toggle-btn:hover {
@@ -742,7 +743,7 @@ body {
   box-shadow: var(--shadow-sm);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
 }
 
 .receipt-card:hover {
@@ -785,13 +786,14 @@ body {
   background: #e0e7ff;
   color: var(--primary-dark);
   flex-shrink: 0;
+  line-height: 1.2;
 }
 
 .receipt-card .date {
   font-size: 12px;
   color: var(--text-muted);
   margin-left: 0;
-  margin-bottom: 2px;
+  margin-bottom: 1px;
 }
 
 .receipt-card .amount {
@@ -799,21 +801,21 @@ body {
   font-weight: 700;
   color: var(--accent);
   margin-left: 0;
-  margin-bottom: 2px;
-  margin-top: 2px;
+  margin-bottom: 1px;
+  margin-top: 1px;
 }
 
 .receipt-card .items-count {
   font-size: 12px;
   color: var(--text-secondary);
   margin-left: 0;
-  margin-bottom: 4px;
+  margin-bottom: 3px;
 }
 
 .receipt-card .receipt-thumb {
   width: 100%;
   height: auto;
-  max-height: 220px;
+  max-height: 240px;
   object-fit: contain;
   border-radius: var(--radius-sm);
   margin-top: 4px;
@@ -838,7 +840,7 @@ body {
 .receipt-actions {
   display: flex;
   gap: 8px;
-  margin-top: 6px;
+  margin-top: 5px;
   margin-left: 0;
 }
 
@@ -1332,23 +1334,23 @@ mark {
    ============================================ */
 .model-selector-wrap {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 4px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
 }
 
 .model-active-badge {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 8px;
+  padding: 3px 10px;
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: 999px;
   font-size: 12px;
   color: var(--text-secondary);
   box-shadow: var(--shadow-sm);
+  line-height: 1.2;
 }
 
 .model-active-badge .provider-badge {
