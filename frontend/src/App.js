@@ -4319,7 +4319,15 @@ ${bodyHtml}
                         isPdfUrl(receipt.photo_url || receipt.image_url) ? (
                           <div className="no-image-thumb">📄 PDF</div>
                         ) : (
-                          <img src={fixImageUrl(receipt.photo_url || receipt.image_url)} alt="Чек" className="receipt-thumb" onError={(e) => { e.target.style.display = 'none'; }} />
+                          <img 
+                            src={fixImageUrl(receipt.photo_url || receipt.image_url)} 
+                            alt="Чек" 
+                            className="receipt-thumb" 
+                            onError={(e) => { e.target.style.display = 'none'; }}
+                            onClick={(e) => { e.stopPropagation(); setFullscreenImage(fixImageUrl(receipt.photo_url || receipt.image_url)); }}
+                            style={{ cursor: 'zoom-in' }}
+                            title="Нажмите для увеличения"
+                          />
                         )
                       ) : (
                         <div className="no-image-thumb"> Чек</div>
