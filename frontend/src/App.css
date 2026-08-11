@@ -242,12 +242,11 @@ body {
 .upload-toolbar .btn-folder {
   padding: 10px 18px;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: 999px;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
   transition: var(--transition);
-  box-shadow: var(--shadow-sm);
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -289,23 +288,24 @@ body {
 
 .toolbar-controls {
   display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap: 6px;
+  flex-wrap: nowrap;
   align-items: center;
-  margin-left: auto;
+  margin-left: 0;
+  width: 100%;
 }
 
 .control-group.compact {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   min-width: auto;
   flex: 0 0 auto;
 }
 
 .control-group.compact label {
   margin-bottom: 0;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
   text-transform: uppercase;
@@ -314,19 +314,19 @@ body {
 }
 
 .control-group.compact select {
-  padding: 8px 28px 8px 10px;
-  font-size: 13px;
+  padding: 6px 24px 6px 8px;
+  font-size: 12px;
   font-weight: 500;
-  min-width: 120px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-card);
+  min-width: auto;
+  border: none;
+  border-radius: 999px;
+  background: rgba(120, 120, 128, 0.08);
   color: var(--text);
   cursor: pointer;
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
   background-repeat: no-repeat;
-  background-position: right 10px center;
+  background-position: right 8px center;
 }
 
 /* ============================================
@@ -347,9 +347,24 @@ body {
   font-weight: 700;
   cursor: pointer;
   transition: var(--transition);
-  box-shadow: var(--shadow-sm);
   letter-spacing: 0.3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
+
+.model-active-badge-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  background: rgba(255,255,255,0.18);
+  border-radius: 999px;
+  font-size: 12px;
+  color: white;
+  margin-right: 8px;
+}
+
 
 .recognize-main-btn:hover:not(:disabled) {
   transform: translateY(-1px);

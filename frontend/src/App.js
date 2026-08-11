@@ -3177,12 +3177,6 @@ ${bodyHtml}
             <button className="model-toggle-btn" onClick={() => { setModelModalOpen(true); loadModels(); }}>
               Выбор модели
             </button>
-            <div className="model-active-badge">
-              <span className="provider-badge" style={{ backgroundColor: getProviderColor(activeModelDisplay.provider) }}>
-                {activeModelDisplay.provider}
-              </span>
-              <span className="model-active-name">{activeModelDisplay.displayName}</span>
-            </div>
           </div>
           <nav className="tabs-inline">
             <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>Загрузка</button>
@@ -3762,6 +3756,12 @@ ${bodyHtml}
               disabled={!selectedFiles.length || recognizing}
               style={recognizing ? { position: 'relative', overflow: 'hidden' } : {}}
             >
+              <span className="model-active-badge-inline">
+                <span className="provider-badge" style={{ backgroundColor: getProviderColor(activeModelDisplay.provider) }}>
+                  {activeModelDisplay.provider}
+                </span>
+                <span className="model-active-name">{activeModelDisplay.displayName}</span>
+              </span>
               {recognizing && progressStage ? (
                 <>
                   <span style={{
