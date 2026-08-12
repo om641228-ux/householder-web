@@ -4424,7 +4424,7 @@ ${bodyHtml}
                   {stat('Счета без платежа в банке', unpaidBills.length, '#e74c3c', '#fdecea')}
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 6 }}>
-                  <select value={bankFilter} onChange={e => setBankFilter(e.target.value)} style={{ padding: '6px 14px', borderRadius: 999, border: '1px solid #d2d2d7', fontSize: 14, background: '#fff', color: '#1d1d1f', outline: 'none', appearance: 'none', WebkitAppearance: 'none', backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236e6e73' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E")', backgroundRepeat: 'no-repeat', backgroundPosition: 'right 10px center', paddingRight: 28 }}>
+                  <select value={bankFilter} onChange={e => setBankFilter(e.target.value)} style={{ padding: '6px 14px', borderRadius: 999, border: '1px solid #d2d2d7', fontSize: 14, background: '#fff', color: '#1d1d1f', outline: 'none' }}>
                     <option value="all">Все движения</option>
                     <option value="out">Только платежи</option>
                     <option value="in">Только поступления</option>
