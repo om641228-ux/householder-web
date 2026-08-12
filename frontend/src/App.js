@@ -4411,17 +4411,19 @@ ${bodyHtml}
             const sumVis = sumOf(visible);
             return (
               <>
-                <h3 style={{ margin: '4px 0 6px', fontSize: 22 }}>🏦</h3>
                 {bankMovements.length === 0 && !bankLoading && (
                   <div style={{ background: 'linear-gradient(180deg,#ffffff,#ececf0)', border: '1px solid #d2d2d7', borderRadius: 12, padding: 12, marginBottom: 4 }}>
                     Выписка ещё не загружена. Откройте вкладку «Загрузка» → кнопка «🏦 Выписка банка» и выберите Excel-файл (.xlsx) из банка — движения появятся здесь, а фактуры с совпавшими суммами сами получат статус 🟢 Оплачено.
                   </div>
                 )}
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'nowrap', marginBottom: 4, overflowX: 'auto' }}>
-                  {stat('Движений в выписке', bankMovements.length, '#2c3e50', '#f4f6f7')}
-                  {stat('Привязано автоматически', matched.length, '#27ae60', '#e8f8ef')}
-                  {stat('Платежи без фактуры', unmatchedOut.length, '#e67e22', '#fdf2e3')}
-                  {stat('Счета без платежа в банке', unpaidBills.length, '#e74c3c', '#fdecea')}
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4, overflowX: 'auto' }}>
+                  <span style={{ fontSize: 22, lineHeight: 1, flexShrink: 0 }}>🏦</span>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'nowrap', flex: 1 }}>
+                    {stat('Движений в выписке', bankMovements.length, '#2c3e50', '#f4f6f7')}
+                    {stat('Привязано автоматически', matched.length, '#27ae60', '#e8f8ef')}
+                    {stat('Платежи без фактуры', unmatchedOut.length, '#e67e22', '#fdf2e3')}
+                    {stat('Счета без платежа в банке', unpaidBills.length, '#e74c3c', '#fdecea')}
+                  </div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 0 }}>
                   <select value={bankFilter} onChange={e => setBankFilter(e.target.value)} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ddd', fontSize: 14, background: '#fff', color: '#333', height: 36, boxSizing: 'border-box' }}>
