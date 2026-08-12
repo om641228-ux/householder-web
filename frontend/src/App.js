@@ -4417,14 +4417,14 @@ ${bodyHtml}
                     Выписка ещё не загружена. Откройте вкладку «Загрузка» → кнопка «🏦 Выписка банка» и выберите Excel-файл (.xlsx) из банка — движения появятся здесь, а фактуры с совпавшими суммами сами получат статус 🟢 Оплачено.
                   </div>
                 )}
-                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 2 }}>
                   {stat('Движений в выписке', bankMovements.length, '#2c3e50', '#f4f6f7')}
                   {stat('Привязано автоматически', matched.length, '#27ae60', '#e8f8ef')}
                   {stat('Платежи без фактуры', unmatchedOut.length, '#e67e22', '#fdf2e3')}
                   {stat('Счета без платежа в банке', unpaidBills.length, '#e74c3c', '#fdecea')}
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 6 }}>
-                  <select value={bankFilter} onChange={e => setBankFilter(e.target.value)} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ddd', fontSize: 14, background: '#fff', color: '#333' }}>
+                  <select value={bankFilter} onChange={e => setBankFilter(e.target.value)} style={{ padding: '6px 14px', borderRadius: 999, border: '1px solid #d2d2d7', fontSize: 14, background: '#fff', color: '#1d1d1f', outline: 'none', appearance: 'none', WebkitAppearance: 'none', backgroundImage: 'url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236e6e73' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E")', backgroundRepeat: 'no-repeat', backgroundPosition: 'right 10px center', paddingRight: 28 }}>
                     <option value="all">Все движения</option>
                     <option value="out">Только платежи</option>
                     <option value="in">Только поступления</option>
@@ -4445,7 +4445,7 @@ ${bodyHtml}
                 <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', fontSize: 12, color: '#555', marginBottom: 10, background: '#f4f6f7', borderRadius: 8, padding: '6px 10px' }}>
                   <span>Показано строк: <b>{visible.length}</b> из {bankMovements.length}</span>
                   <span>Σ по фильтру: <b style={{ color: '#e74c3c' }}>−{formatAmount(sumVis.out, 'EUR')}</b> / <b style={{ color: '#27ae60' }}>+{formatAmount(sumVis.inc, 'EUR')}</b></span>
-                  <span style={{ marginLeft: 'auto' }}>Σ всей выписки: <b style={{ color: '#e74c3c' }}>−{formatAmount(sumAll.out, 'EUR')}</b> / <b style={{ color: '#27ae60' }}>+{formatAmount(sumAll.inc, 'EUR')}</b></span>
+                  <span style={{ marginLeft: 'auto', textAlign: 'right' }}>Σ всей выписки:<br/><b style={{ color: '#e74c3c' }}>−{formatAmount(sumAll.out, 'EUR')}</b> / <b style={{ color: '#27ae60' }}>+{formatAmount(sumAll.inc, 'EUR')}</b></span>
                 </div>
                 {bankLoading && <div className="loading-center"><div className="spinner"></div><p>Загрузка движений...</p></div>}
                 {!bankLoading && visible.map(m => {
