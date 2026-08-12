@@ -4118,28 +4118,27 @@ ${bodyHtml}
                 {dupFocusId && (
                   <button className="bulk-btn bulk-btn-gray" onClick={() => { setDupFocusId(null); setShowDuplicates(false); }}>👁 Показать все</button>
                 )}
-                {selectedReceiptIds.size === 1 && !showDuplicates && (
-                  (() => {
-                    const rid = Array.from(selectedReceiptIds)[0];
-                    const r = receipts.find(x => x.id === rid);
-                    if (!r) return null;
-                    const g = duplicateGroups.find(g => g.ids.includes(rid));
-                    const n = g ? g.ids.length : 0;
-                    return (
-                      <button
-                        className="bulk-btn bulk-btn-gray"
-                        onClick={() => {
-                          if (!g) { alert('У этой карточки нет дубликатов'); return; }
-                          setDupFocusId(rid);
-                          setShowDuplicates(true);
-                        }}
-                        style={!g ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
-                      >
-                        👯 Показать копии ({n})
-                      </button>
-                    );
-                  })()
-                )}
+                {selectedReceiptIds.size === 1 && !showDuplicates && (() => {
+                  const rid = Array.from(selectedReceiptIds)[0];
+                  const r = receipts.find(x => x.id === rid);
+                  if (!r) return null;
+                  const g = duplicateGroups.find(g => g.ids.includes(rid));
+                  const n = g ? g.ids.length : 0;
+                  return (
+                    <button
+                      key="dup-btn"
+                      className="bulk-btn bulk-btn-gray"
+                      onClick={() => {
+                        if (!g) { alert('У этой карточки нет дубликатов'); return; }
+                        setDupFocusId(rid);
+                        setShowDuplicates(true);
+                      }}
+                      style={!g ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
+                    >
+                      👯 Показать копии ({n})
+                    </button>
+                  );
+                })()}
               </div>
             </div>
           )}
