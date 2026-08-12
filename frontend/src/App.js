@@ -4370,9 +4370,9 @@ ${bodyHtml}
             const unmatchedOut = out.filter(m => !m.matched_receipt_id);
             const unpaidBills = receipts.filter(r => ['bill', 'invoice'].includes(r.document_type) && !r.bank_movement_id && r.payment_status !== 'paid');
             const stat = (label, value, color, bg) => (
-              <div key={label} style={{ flex: '1 1 150px', background: 'linear-gradient(180deg,#ffffff,#ececf0)', border: '1px solid #d2d2d7', borderRadius: 12, padding: '10px 14px' }}>
-                <div style={{ fontSize: 22, fontWeight: 800, color: '#1d1d1f' }}>{value}</div>
-                <div style={{ fontSize: 12, color: '#6e6e73' }}>{label}</div>
+              <div key={label} style={{ flex: '1 1 150px', background: 'linear-gradient(180deg,#ffffff,#ececf0)', border: '1px solid #d2d2d7', borderRadius: 12, padding: '8px 12px' }}>
+                <div style={{ fontSize: 20, fontWeight: 800, color: '#1d1d1f' }}>{value}</div>
+                <div style={{ fontSize: 11, color: '#6e6e73' }}>{label}</div>
               </div>
             );
             const q = bankSearch.trim().toLowerCase();
@@ -4417,14 +4417,14 @@ ${bodyHtml}
                     Выписка ещё не загружена. Откройте вкладку «Загрузка» → кнопка «🏦 Выписка банка» и выберите Excel-файл (.xlsx) из банка — движения появятся здесь, а фактуры с совпавшими суммами сами получат статус 🟢 Оплачено.
                   </div>
                 )}
-                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
                   {stat('Движений в выписке', bankMovements.length, '#2c3e50', '#f4f6f7')}
                   {stat('Привязано автоматически', matched.length, '#27ae60', '#e8f8ef')}
                   {stat('Платежи без фактуры', unmatchedOut.length, '#e67e22', '#fdf2e3')}
                   {stat('Счета без платежа в банке', unpaidBills.length, '#e74c3c', '#fdecea')}
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 6 }}>
-                  <select value={bankFilter} onChange={e => setBankFilter(e.target.value)} style={{ padding: '6px 10px', borderRadius: 6 }}>
+                  <select value={bankFilter} onChange={e => setBankFilter(e.target.value)} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ddd', fontSize: 14, background: '#fff', color: '#333' }}>
                     <option value="all">Все движения</option>
                     <option value="out">Только платежи</option>
                     <option value="in">Только поступления</option>
@@ -4442,10 +4442,10 @@ ${bodyHtml}
                   <button onClick={rematchBank} title="Повторно запустить автопривязку (после загрузки новых фактур)" style={{ padding: '6px 12px', borderRadius: 6, border: 'none', background: '#8e44ad', color: '#fff', cursor: 'pointer' }}>🔁 Автопривязка</button>
                   <button onClick={loadBankMovements} style={{ padding: '6px 12px', borderRadius: 6, border: 'none', background: '#3498db', color: '#fff', cursor: 'pointer' }}>🔄 Обновить</button>
                 </div>
-                <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12, color: '#555', marginBottom: 10, background: '#f4f6f7', borderRadius: 8, padding: '6px 10px' }}>
+                <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', fontSize: 12, color: '#555', marginBottom: 10, background: '#f4f6f7', borderRadius: 8, padding: '6px 10px' }}>
                   <span>Показано строк: <b>{visible.length}</b> из {bankMovements.length}</span>
                   <span>Σ по фильтру: <b style={{ color: '#e74c3c' }}>−{formatAmount(sumVis.out, 'EUR')}</b> / <b style={{ color: '#27ae60' }}>+{formatAmount(sumVis.inc, 'EUR')}</b></span>
-                  <span>Σ всей выписки: <b style={{ color: '#e74c3c' }}>−{formatAmount(sumAll.out, 'EUR')}</b> / <b style={{ color: '#27ae60' }}>+{formatAmount(sumAll.inc, 'EUR')}</b></span>
+                  <span style={{ marginLeft: 'auto' }}>Σ всей выписки: <b style={{ color: '#e74c3c' }}>−{formatAmount(sumAll.out, 'EUR')}</b> / <b style={{ color: '#27ae60' }}>+{formatAmount(sumAll.inc, 'EUR')}</b></span>
                 </div>
                 {bankLoading && <div className="loading-center"><div className="spinner"></div><p>Загрузка движений...</p></div>}
                 {!bankLoading && visible.map(m => {
