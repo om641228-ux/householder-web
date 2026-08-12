@@ -50,6 +50,13 @@ body {
   min-height: 100vh;
 }
 
+.upload-section {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 16px 8px;
+}
+
 /* ============================================
    HEADER
    ============================================ */

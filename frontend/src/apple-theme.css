@@ -183,7 +183,13 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--apple-blue); }
 .result-raw-text,
 .raw-text,
 .preview-container,
-.upload-section,
+.upload-section {
+  background: transparent;
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+}
+
 .receipt-card {
   background: var(--apple-card);
   border: 1px solid rgba(0, 0, 0, 0.06) !important;
