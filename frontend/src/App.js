@@ -4087,7 +4087,7 @@ ${bodyHtml}
               </div>
 
               {/* Нижняя строка — Сменить... во всю ширину */}
-              <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 6, overflowX: 'auto', width: '100%', padding: '4px 0' }}>
+              <div className="bulk-actions-row bulk-actions-row-full" style={{ display: 'flex', flexWrap: 'nowrap', gap: 6, overflowX: 'auto' }}>
                 <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeObject(v); e.target.value = ''; }}>
                   <option value="">Сменить объект...</option>
                   {objectsList.map(o => <option key={o} value={o}>{o}</option>)}
