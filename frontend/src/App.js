@@ -4088,26 +4088,26 @@ ${bodyHtml}
 
               {/* Нижняя строка — Сменить... во всю ширину */}
               <div className="bulk-actions-row bulk-actions-row-full">
-                <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkUpdateObject(selectedReceiptIds, v); e.target.value = ''; }}>
+                <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeObject(v); e.target.value = ''; }}>
                   <option value="">Сменить объект...</option>
-                  {objects.map(o => <option key={o.name} value={o.name}>{o.name}</option>)}
+                  {objectsList.map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
-                <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkUpdateType(selectedReceiptIds, v); e.target.value = ''; }}>
+                <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeType(v); e.target.value = ''; }}>
                   <option value="">Сменить тип...</option>
                   {Object.entries(DOC_TYPE_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
                 </select>
-                <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkUpdateSubtype(selectedReceiptIds, v); e.target.value = ''; }}>
+                <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeSubtype(v); e.target.value = ''; }}>
                   <option value="">Сменить подтип...</option>
                   {Object.entries(SUBTYPE_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
                 </select>
-                <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkUpdatePaymentStatus(selectedReceiptIds, v); e.target.value = ''; }}>
+                <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangePaymentStatus(v); e.target.value = ''; }}>
                   <option value="">Сменить оплату...</option>
                   <option value="to_pay">🟠 К оплате</option>
                   <option value="paid">🟢 Оплачено</option>
                   <option value="underpaid">🔴 Недоплачено</option>
                   <option value="__clear">✖ Очистить статус</option>
                 </select>
-                <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkUpdateCurrency(selectedReceiptIds, v); e.target.value = ''; }}>
+                <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeCurrency(v); e.target.value = ''; }}>
                   <option value="">Сменить валюту...</option>
                   <option value="AED">AED</option>
                   <option value="EUR">EUR</option>
@@ -4123,8 +4123,8 @@ ${bodyHtml}
                     const rid = Array.from(selectedReceiptIds)[0];
                     const r = receipts.find(x => x.id === rid);
                     if (!r) return null;
-                    const g = duplicateGroups.find(g => g.ids.includes(rid));
-                    const n = g ? g.ids.length : 0;
+                    const g = dupGroups.find(group => group.some(x => x.id === rid));
+                    const n = g ? g.length : 0;
                     return (
                       <button
                         className="bulk-btn bulk-btn-gray"
