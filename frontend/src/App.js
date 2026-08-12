@@ -4087,7 +4087,7 @@ ${bodyHtml}
               </div>
 
               {/* Нижняя строка — Сменить... во всю ширину */}
-              <div className="bulk-actions-row bulk-actions-row-full">
+              <div className="bulk-actions-row bulk-actions-row-full" style={{ display: 'flex', flexWrap: 'nowrap', gap: 6, overflowX: 'auto' }}>
                 <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeObject(v); e.target.value = ''; }}>
                   <option value="">Сменить объект...</option>
                   {objectsList.map(o => <option key={o} value={o}>{o}</option>)}
@@ -4118,28 +4118,27 @@ ${bodyHtml}
                 {dupFocusId && (
                   <button className="bulk-btn bulk-btn-gray" onClick={() => { setDupFocusId(null); setShowDuplicates(false); }}>👁 Показать все</button>
                 )}
-                {selectedReceiptIds.size === 1 && !showDuplicates && (
-                  (() => {
-                    const rid = Array.from(selectedReceiptIds)[0];
-                    const r = receipts.find(x => x.id === rid);
-                    if (!r) return null;
-                    const g = dupGroups.find(group => group.some(x => x.id === rid));
-                    const n = g ? g.length : 0;
-                    return (
-                      <button
-                        className="bulk-btn bulk-btn-gray"
-                        onClick={() => {
-                          if (!g) { alert('У этой карточки нет дубликатов'); return; }
-                          setDupFocusId(rid);
-                          setShowDuplicates(true);
-                        }}
-                        style={!g ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
-                      >
-                        👯 Показать копии ({n})
-                      </button>
-                    );
-                  })()
-                )}
+                {selectedReceiptIds.size === 1 && !showDuplicates && (() => {
+                  const rid = Array.from(selectedReceiptIds)[0];
+                  const r = receipts.find(x => x.id === rid);
+                  if (!r) return null;
+                  const g = dupGroups.find(group => group.some(x => x.id === rid));
+                  const n = g ? g.length : 0;
+                  return (
+                    <button
+                      key="dup-btn"
+                      className="bulk-btn bulk-btn-gray"
+                      onClick={() => {
+                        if (!g) { alert('У этой карточки нет дубликатов'); return; }
+                        setDupFocusId(rid);
+                        setShowDuplicates(true);
+                      }}
+                      style={!g ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
+                    >
+                      👯 Показать копии ({n})
+                    </button>
+                  );
+                })()}
               </div>
             </div>
           )}
