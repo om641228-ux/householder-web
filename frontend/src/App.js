@@ -4087,36 +4087,36 @@ ${bodyHtml}
               </div>
 
               {/* Нижняя строка — Сменить... во всю ширину */}
-              <div className="bulk-actions-row bulk-actions-row-full" style={{ display: 'flex', flexWrap: 'nowrap', gap: 6, overflowX: 'auto' }}>
-                <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeObject(v); e.target.value = ''; }}>
+              <div className="bulk-actions-row bulk-actions-row-full" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                <select className="bulk-select" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeObject(v); e.target.value = ''; }}>
                   <option value="">Сменить объект...</option>
                   {objectsList.map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
-                <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeType(v); e.target.value = ''; }}>
+                <select className="bulk-select" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeType(v); e.target.value = ''; }}>
                   <option value="">Сменить тип...</option>
                   {Object.entries(DOC_TYPE_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
                 </select>
-                <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeSubtype(v); e.target.value = ''; }}>
+                <select className="bulk-select" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeSubtype(v); e.target.value = ''; }}>
                   <option value="">Сменить подтип...</option>
                   {Object.entries(SUBTYPE_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
                 </select>
-                <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangePaymentStatus(v); e.target.value = ''; }}>
+                <select className="bulk-select" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangePaymentStatus(v); e.target.value = ''; }}>
                   <option value="">Сменить оплату...</option>
                   <option value="to_pay">🟠 К оплате</option>
                   <option value="paid">🟢 Оплачено</option>
                   <option value="underpaid">🔴 Недоплачено</option>
                   <option value="__clear">✖ Очистить статус</option>
                 </select>
-                <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeCurrency(v); e.target.value = ''; }}>
+                <select className="bulk-select" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeCurrency(v); e.target.value = ''; }}>
                   <option value="">Сменить валюту...</option>
                   <option value="AED">AED</option>
                   <option value="EUR">EUR</option>
                   <option value="USD">USD</option>
                   <option value="RUB">RUB</option>
                 </select>
-                <button className="bulk-btn bulk-btn-gray" onClick={deselectAll}>✖ Сбросить</button>
+                <button className="bulk-btn bulk-btn-gray" style={{ flex: '0 0 auto' }} onClick={deselectAll}>✖ Сбросить</button>
                 {dupFocusId && (
-                  <button className="bulk-btn bulk-btn-gray" onClick={() => { setDupFocusId(null); setShowDuplicates(false); }}>👁 Показать все</button>
+                  <button className="bulk-btn bulk-btn-gray" style={{ flex: '0 0 auto' }} onClick={() => { setDupFocusId(null); setShowDuplicates(false); }}>👁 Показать все</button>
                 )}
                 {selectedReceiptIds.size === 1 && !showDuplicates && (() => {
                   const rid = Array.from(selectedReceiptIds)[0];
