@@ -1578,3 +1578,61 @@ mark {
     justify-content: center;
   }
 }
+
+/* ===== Панель массовых действий ===== */
+.bulk-actions-panel {
+  background: transparent;
+  border: none;
+  padding: 12px 4px;
+  margin-bottom: 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bulk-actions-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.bulk-actions-row-full {
+  width: 100%;
+}
+
+.bulk-btn {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+.bulk-btn-danger { background: #e74c3c; color: white; }
+.bulk-btn-success { background: #27ae60; color: white; }
+.bulk-btn-purple { background: #9b59b6; color: white; }
+.bulk-btn-teal { background: #16a085; color: white; }
+.bulk-btn-gray {
+  background: rgba(120, 120, 128, 0.12);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.bulk-select {
+  padding: 6px 24px 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 13px;
+  background: var(--bg-card);
+  color: var(--text);
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+}

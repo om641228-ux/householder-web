@@ -4066,75 +4066,81 @@ ${bodyHtml}
           </div>
 
           {selectedReceiptIds.size > 0 && (
-            <div style={{ background: 'linear-gradient(180deg,#ffffff,#ececf0)', border: '1px solid #d2d2d7', padding: '12px 15px', borderRadius: 12, marginBottom: 15, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-              <span> Выбрано: <strong>{selectedReceiptIds.size}</strong></span>
-              {user?.role === 'admin' && (
-                <button onClick={bulkDelete} style={{ background: '#e74c3c', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}> Удалить</button>
-              )}
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <select
-                  value={exportMode}
-                  onChange={e => setExportMode(e.target.value)}
-                  style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ccc', fontSize: 14, background: '#fff' }}
-                >
-                  <option value="all">Все (Excel + Фото + Текст)</option>
-                  <option value="excel"> Excel (CSV)</option>
-                  <option value="photo"> Фото</option>
-                  <option value="text"> Текст</option>
-                </select>
-                <button
-                  onClick={handleExport}
-                  style={{ background: '#27ae60', color: 'white', border: 'none', padding: '6px 14px', borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 14 }}
-                >
-                  Загрузить
-                </button>
+            <div className="bulk-actions-panel">
+              {/* Верхняя строка — основные действия */}
+              <div className="bulk-actions-row">
+                <span> Выбрано: <strong>{selectedReceiptIds.size}</strong></span>
+                {user?.role === 'admin' && (
+                  <button className="bulk-btn bulk-btn-danger" onClick={bulkDelete}>🗑 Удалить</button>
+                )}
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <select className="bulk-select" value={exportMode} onChange={(e) => setExportMode(e.target.value)}>
+                    <option value="all">Все (Excel + Фото + Текст)</option>
+                    <option value="excel">📊 Только Excel</option>
+                    <option value="photos">📷 Только фото</option>
+                    <option value="text">📝 Только текст</option>
+                  </select>
+                  <button className="bulk-btn bulk-btn-success" onClick={handleExport}>⬇ Загрузить</button>
+                </div>
+                <button className="bulk-btn bulk-btn-purple" onClick={() => bulkReprocess()}>🔄 Перераспознать</button>
+                <button className="bulk-btn bulk-btn-teal" onClick={() => bulkTranslate()}>🌐 Перевести</button>
               </div>
-              <button onClick={() => bulkReprocess()} style={{ background: '#9b59b6', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}> Перераспознать</button>
-              <button onClick={() => bulkTranslate()} style={{ background: '#16a085', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}> Перевести</button>
-              <select onChange={e => { if (e.target.value) bulkChangeObject(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
-                <option value="">Сменить объект...</option>
-                {objectsList.map(o => <option key={o} value={o}>{o}</option>)}
-              </select>
-              <select onChange={e => { if (e.target.value) bulkChangeType(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
-                <option value="">Сменить тип...</option>
-                {Object.entries(DOC_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-              </select>
-              <select onChange={e => { if (e.target.value) bulkChangeSubtype(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
-                <option value="">Сменить подтип...</option>
-                {Object.entries(SUBTYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-              </select>
-              <select onChange={e => { if (e.target.value) bulkChangePaymentStatus(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
-                <option value="">Сменить оплату...</option>
-                {Object.entries(PAYMENT_STATUS_META).map(([v, m]) => <option key={v} value={v}>{m.label}</option>)}
-                <option value="__clear">✖ Очистить статус</option>
-              </select>
-              <select onChange={e => { if (e.target.value) bulkChangeCurrency(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
-                <option value="">Сменить валюту...</option>
-                <option value="AED">AED</option>
-                <option value="EUR">EUR</option>
-                <option value="USD">USD</option>
-                <option value="RUB">RUB</option>
-              </select>
-              {selectedReceiptIds.size === 1 && (() => {
-                const selId = [...selectedReceiptIds][0];
-                const grp = dupGroups.find(g => g.some(r => r.id === selId));
-                return (
-                  <button
-                    onClick={() => {
-                      if (!grp) { alert('У выбранной карточки нет копий — дубликаты не найдены (совпадение ищется по названию + дате + сумме).'); return; }
-                      setDupFocusId(selId); setShowDuplicates(false); setCurrentPage(1);
-                    }}
-                    disabled={!grp}
-                    title={grp
-                      ? `Показать группу дубликатов этой карточки: ${grp.length} шт. (оригинал + копии)`
-                      : 'У выбранной карточки нет копий'}
-                    style={{ background: grp ? '#e67e22' : '#bdc3c7', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: grp ? 'pointer' : 'not-allowed' }}
-                  >
-                    👯 Показать копии{grp ? ` (${grp.length})` : ''}
-                  </button>
-                );
-              })()}
-              <button onClick={deselectAll} style={{ background: '#95a5a6', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}>Сбросить</button>
+
+              {/* Нижняя строка — Сменить... во всю ширину */}
+              <div className="bulk-actions-row bulk-actions-row-full">
+                <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkUpdateObject(selectedReceiptIds, v); e.target.value = ''; }}>
+                  <option value="">Сменить объект...</option>
+                  {objects.map(o => <option key={o.name} value={o.name}>{o.name}</option>)}
+                </select>
+                <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkUpdateType(selectedReceiptIds, v); e.target.value = ''; }}>
+                  <option value="">Сменить тип...</option>
+                  {Object.entries(DOC_TYPE_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                </select>
+                <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkUpdateSubtype(selectedReceiptIds, v); e.target.value = ''; }}>
+                  <option value="">Сменить подтип...</option>
+                  {Object.entries(SUBTYPE_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                </select>
+                <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkUpdatePaymentStatus(selectedReceiptIds, v); e.target.value = ''; }}>
+                  <option value="">Сменить оплату...</option>
+                  <option value="to_pay">🟠 К оплате</option>
+                  <option value="paid">🟢 Оплачено</option>
+                  <option value="underpaid">🔴 Недоплачено</option>
+                  <option value="__clear">✖ Очистить статус</option>
+                </select>
+                <select className="bulk-select" onChange={(e) => { const v = e.target.value; if (!v) return; bulkUpdateCurrency(selectedReceiptIds, v); e.target.value = ''; }}>
+                  <option value="">Сменить валюту...</option>
+                  <option value="AED">AED</option>
+                  <option value="EUR">EUR</option>
+                  <option value="USD">USD</option>
+                  <option value="RUB">RUB</option>
+                </select>
+                <button className="bulk-btn bulk-btn-gray" onClick={deselectAll}>✖ Сбросить</button>
+                {dupFocusId && (
+                  <button className="bulk-btn bulk-btn-gray" onClick={() => { setDupFocusId(null); setShowDuplicates(false); }}>👁 Показать все</button>
+                )}
+                {selectedReceiptIds.size === 1 && !showDuplicates && (
+                  (() => {
+                    const rid = Array.from(selectedReceiptIds)[0];
+                    const r = receipts.find(x => x.id === rid);
+                    if (!r) return null;
+                    const g = duplicateGroups.find(g => g.ids.includes(rid));
+                    const n = g ? g.ids.length : 0;
+                    return (
+                      <button
+                        className="bulk-btn bulk-btn-gray"
+                        onClick={() => {
+                          if (!g) { alert('У этой карточки нет дубликатов'); return; }
+                          setDupFocusId(rid);
+                          setShowDuplicates(true);
+                        }}
+                        style={!g ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
+                      >
+                        👯 Показать копии ({n})
+                      </button>
+                    );
+                  })()
+                )}
+              </div>
             </div>
           )}
 
