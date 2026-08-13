@@ -4369,9 +4369,9 @@ ${bodyHtml}
             const unmatchedOut = out.filter(m => !m.matched_receipt_id);
             const unpaidBills = receipts.filter(r => ['bill', 'invoice'].includes(r.document_type) && !r.bank_movement_id && r.payment_status !== 'paid');
             const stat = (label, value, color, bg) => (
-              <div key={label} style={{ flex: '1 1 0', minWidth: 120, background: 'linear-gradient(180deg,#ffffff,#ececf0)', border: '1px solid #d2d2d7', borderRadius: 8, padding: '4px 8px' }}>
-                <div style={{ fontSize: 18, fontWeight: 800, color: '#1d1d1f' }}>{value}</div>
-                <div style={{ fontSize: 10, color: '#6e6e73', lineHeight: 1.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</div>
+              <div key={label} style={{ flex: '0 0 auto', display: 'flex', alignItems: 'baseline', gap: 6, background: 'linear-gradient(180deg,#ffffff,#ececf0)', border: '1px solid #d2d2d7', borderRadius: 999, padding: '3px 12px', whiteSpace: 'nowrap' }}>
+                <span style={{ fontSize: 16, fontWeight: 800, color }}>{value}</span>
+                <span style={{ fontSize: 12, color: '#6e6e73' }}>{label}</span>
               </div>
             );
             const q = bankSearch.trim().toLowerCase();
@@ -4415,14 +4415,12 @@ ${bodyHtml}
                     Выписка ещё не загружена. Откройте вкладку «Загрузка» → кнопка «🏦 Выписка банка» и выберите Excel-файл (.xlsx) из банка — движения появятся здесь, а фактуры с совпавшими суммами сами получат статус 🟢 Оплачено.
                   </div>
                 )}
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4, overflowX: 'auto' }}>
-                  <span style={{ fontSize: 22, lineHeight: 1, flexShrink: 0 }}>🏦</span>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'nowrap', flex: 1 }}>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4, overflowX: 'auto', flexWrap: 'nowrap' }}>
+                  <span style={{ fontSize: 18, lineHeight: 1, flexShrink: 0 }}>🏦</span>
                     {stat('Движений в выписке', bankMovements.length, '#2c3e50', '#f4f6f7')}
                     {stat('Привязано автоматически', matched.length, '#27ae60', '#e8f8ef')}
                     {stat('Платежи без фактуры', unmatchedOut.length, '#e67e22', '#fdf2e3')}
                     {stat('Счета без платежа в банке', unpaidBills.length, '#e74c3c', '#fdecea')}
-                  </div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 0 }}>
                   <select value={bankFilter} onChange={e => setBankFilter(e.target.value)} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ddd', fontSize: 14, background: '#fff', color: '#333', height: 36, boxSizing: 'border-box' }}>
