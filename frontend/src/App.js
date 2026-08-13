@@ -708,11 +708,7 @@ function App() {
   const [linkPicker, setLinkPicker] = useState(null);   // движение, для которого открыт выбор фактуры
   const [linkSearch, setLinkSearch] = useState('');
   const [linkSaving, setLinkSaving] = useState(false);
-  // Вкладка «Налоги» (v30): выбранный квартал для автозаполнения + черновик форм
-  const [taxQuarter, setTaxQuarter] = useState(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${Math.floor(now.getMonth() / 3) + 1}T`;
-  });
+  // Вкладка «Налоги» (v30): черновик форм (отдельный выбор квартала убран в v30.5 — платежи следуют за диапазоном «с/по»)
   const [taxDraft, setTaxDraft] = useState(null);
   const [taxFormPopup, setTaxFormPopup] = useState(null); // {form:'420'|'130', q:<квартал из taxDraft>} — попап заполненной модели (v30.2)
   const [taxShowOptional, setTaxShowOptional] = useState(false);
@@ -4548,7 +4544,10 @@ ${bodyHtml}
         }).sort((a, b) => a.dl - b.dl);
         const shown = events.filter(ev => taxShowOptional || !ev.optional);
         const soon = shown.filter(ev => ev.daysLeft >= 0 && ev.daysLeft <= 35);
-        const [qFrom, qTo] = taxQuarterRange(taxQuarter);
+        // Платежи банка показываются сразу за ВЕСЬ выбранный диапазон расчёта налогов («с … по …»), отдельного выбора квартала больше нет
+        const qRangeKeys = [taxQFrom, taxQTo].sort();
+        const [qFrom] = taxQuarterRange(qRangeKeys[0]);
+        const [, qTo] = taxQuarterRange(qRangeKeys[1]);
         const qOut = bankMovements.filter(m => Number(m.amount) < 0 && m.operation_date && m.operation_date >= qFrom && m.operation_date <= qTo);
         const fmtD = d => d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
         // Опции кварталов покрывают все годы, за которые есть движения в банке (плюс текущий ±1)
@@ -4567,10 +4566,6 @@ ${bodyHtml}
               <button onClick={() => setTaxCalOpen(v => !v)} style={taxIconBtn(taxCalOpen)} title="Календарь налоговых дедлайнов">📅</button>
               <button onClick={() => setTaxGuideOpen(v => !v)} style={taxIconBtn(taxGuideOpen)} title="Справочник: какие налоги и какие документы подавать">📚</button>
             </div>
-            <p style={{ margin: '0 0 14px', fontSize: 13, color: '#7f8c8d' }}>
-              Календарь подачи, справочник форм, галка «есть фактура» и автозаполнение черновиков из банка.
-              Черновики — помощник для переноса цифр в официальную веб-форму, а не налоговая консультация.
-            </p>
 
             {/* ОПОВЕЩЕНИЕ: за месяц до дедлайна — что подать и что подготовить */}
             {soon.length > 0 && (
@@ -4641,37 +4636,6 @@ ${bodyHtml}
             </div>
             )}
 
-            {/* ПЛАТЕЖИ БАНКА ЗА КВАРТАЛ + ГАЛКА «ЕСТЬ ФАКТУРА» */}
-            <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 10, padding: '12px 16px', marginBottom: 14 }}>
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
-                <h3 style={{ margin: 0 }}>💶 Платежи из банка за квартал — отметьте, по каким есть фактура</h3>
-                <select value={taxQuarter} onChange={e => setTaxQuarter(e.target.value)} style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #ccc' }}>
-                  {quarterOptions.map(k => <option key={k} value={k}>{k.replace('-', ' · ')}</option>)}
-                </select>
-                <button onClick={loadBankMovements} style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #ccc', background: '#fff', cursor: 'pointer' }}>🔄 Обновить движения</button>
-                <span style={{ fontSize: 13, color: '#7f8c8d' }}>{qFrom} … {qTo} · исходящих: {qOut.length} · с фактурой: {qOut.filter(m => m.has_invoice || m.matched_receipt_id).length}</span>
-              </div>
-              {qOut.length === 0 && <p style={{ color: '#7f8c8d', fontSize: 13 }}>Нет исходящих платежей за этот квартал — загрузите выписку банка на вкладке «Загрузка» (🏦 Выписка банка).</p>}
-              {qOut.map(m => {
-                const linked = m.matched_receipt_id ? receipts.find(r => String(r.id) === String(m.matched_receipt_id)) : null;
-                return (
-                  <div key={m.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f0f0f0', fontSize: 13, flexWrap: 'wrap' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', minWidth: 150, fontWeight: 700, color: m.has_invoice ? '#1e8449' : '#95a5a6' }}
-                      title="Галка = по этому платежу есть фактура → платёж попадает в расходы modelo 130/420">
-                      <input type="checkbox" checked={!!m.has_invoice} onChange={() => toggleInvoiceFlag(m)} />
-                      📄 есть фактура
-                    </label>
-                    <span style={{ minWidth: 92, color: '#7f8c8d' }}>{m.operation_date}</span>
-                    <span style={{ flex: '1 1 220px' }}>{m.counterparty || m.concept || '—'}</span>
-                    <span style={{ minWidth: 100, textAlign: 'right', fontWeight: 700, color: '#c0392b' }}>{formatAmount(Math.abs(Number(m.amount)), 'EUR')}</span>
-                    {linked
-                      ? <button onClick={() => openReceiptById(linked.id)} style={{ fontSize: 12, border: '1px solid #27ae60', color: '#1e8449', background: '#eafaf1', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>🔗 {(linked.store_name || 'фактура')} · {formatAmount(linked.total_amount, linked.currency || 'EUR')}</button>
-                      : <span style={{ fontSize: 12, color: '#b2babb' }}>не привязан</span>}
-                  </div>
-                );
-              })}
-            </div>
-
             {/* АВТОЗАПОЛНЕНИЕ ФОРМ ИЗ БАНКА ЗА ДИАПАЗОН КВАРТАЛОВ (v30.1) */}
             <div style={{ background: 'linear-gradient(135deg,#ffffff,#e8e8ed)', border: '2px solid #c7c7cc', borderRadius: 12, padding: '12px 16px' }}>
               <h3 style={{ margin: '0 0 6px' }}>🤖 Автозаполнение форм из банка</h3>
@@ -4698,6 +4662,34 @@ ${bodyHtml}
                 </button>
                 <span style={{ fontSize: 12, color: '#7f8c8d' }}>диапазон подставлен автоматически по датам движений в базе; при смене «с/по» формы заполняются сразу</span>
               </div>
+            </div>
+
+            {/* ПЛАТЕЖИ БАНКА ЗА ВЫБРАННЫЙ ДИАПАЗОН + ГАЛКА «ЕСТЬ ФАКТУРА» (ниже расчётов; диапазон общий с автозаполнением — v30.5) */}
+            <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 10, padding: '12px 16px', marginTop: 14 }}>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+                <h3 style={{ margin: 0 }}>💶 Платежи из банка за выбранный диапазон — отметьте, по каким есть фактура</h3>
+                <button onClick={loadBankMovements} style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #ccc', background: '#fff', cursor: 'pointer' }}>🔄 Обновить движения</button>
+                <span style={{ fontSize: 13, color: '#7f8c8d' }}>{qFrom} … {qTo} · исходящих: {qOut.length} · с фактурой: {qOut.filter(m => m.has_invoice || m.matched_receipt_id).length}</span>
+              </div>
+              {qOut.length === 0 && <p style={{ color: '#7f8c8d', fontSize: 13 }}>Нет исходящих платежей за этот диапазон — загрузите выписку банка на вкладке «Загрузка» (🏦 Выписка банка).</p>}
+              {qOut.map(m => {
+                const linked = m.matched_receipt_id ? receipts.find(r => String(r.id) === String(m.matched_receipt_id)) : null;
+                return (
+                  <div key={m.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f0f0f0', fontSize: 13, flexWrap: 'wrap' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', minWidth: 150, fontWeight: 700, color: m.has_invoice ? '#1e8449' : '#95a5a6' }}
+                      title="Галка = по этому платежу есть фактура → платёж попадает в расходы modelo 130/420">
+                      <input type="checkbox" checked={!!m.has_invoice} onChange={() => toggleInvoiceFlag(m)} />
+                      📄 есть фактура
+                    </label>
+                    <span style={{ minWidth: 92, color: '#7f8c8d' }}>{m.operation_date}</span>
+                    <span style={{ flex: '1 1 220px' }}>{m.counterparty || m.concept || '—'}</span>
+                    <span style={{ minWidth: 100, textAlign: 'right', fontWeight: 700, color: '#c0392b' }}>{formatAmount(Math.abs(Number(m.amount)), 'EUR')}</span>
+                    {linked
+                      ? <button onClick={() => openReceiptById(linked.id)} style={{ fontSize: 12, border: '1px solid #27ae60', color: '#1e8449', background: '#eafaf1', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>🔗 {(linked.store_name || 'фактура')} · {formatAmount(linked.total_amount, linked.currency || 'EUR')}</button>
+                      : <span style={{ fontSize: 12, color: '#b2babb' }}>не привязан</span>}
+                  </div>
+                );
+              })}
             </div>
 
             {/* МОДАЛКА ЧЕРНОВИКА ФОРМ (диапазон кварталов, v30.1) */}
