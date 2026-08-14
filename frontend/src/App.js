@@ -624,6 +624,729 @@ function HighlightText({ text, query, style = {} }) {
 
 const ReceiptScanner = registerPlugin('ReceiptScannerPlugin');
 
+// ========== CRM (вкладка «🤝 CRM», v32): календарь с задачами, контрагенты, справочник ==========
+// контактов, таймлайн исполнения заданий, закрытие задания исполнителем с подтверждением постановщика.
+// Цикл задачи: «В работе» → исполнитель отмечает «✅ Выполнена» → «На подтверждении» →
+// постановщик «👍 Подтвердить закрытие» («Закрыта») или «↩ На доработку» (снова «В работе»).
+// Каждый шаг фиксируется в таймлайне задачи (автор, время, комментарий).
+// Хранение — localStorage браузера (crm_*_v1): бэкенд и Supabase не требуются. При переносе
+// на сервер достаточно заменить crmLoad/crmSave на запросы к API (по образцу /api/receipts).
+const CRM_LS_TASKS = 'crm_tasks_v1';
+const CRM_LS_CPS = 'crm_counterparties_v1';
+const CRM_LS_CONTACTS = 'crm_contacts_v1';
+const CRM_STATUS_META = {
+  open:            { label: '🔵 В работе',         color: '#0071e3', bg: '#e8f0fe' },
+  pending_confirm: { label: '🟠 На подтверждении', color: '#e67e22', bg: '#fdf2e3' },
+  closed:          { label: '🟢 Закрыта',          color: '#27ae60', bg: '#e8f8ef' }
+};
+const CRM_PRIORITY_META = {
+  high:   { label: '🔴 Высокий', color: '#e74c3c' },
+  normal: { label: '⚪ Обычный', color: '#8e8e93' },
+  low:    { label: '🔵 Низкий',  color: '#0071e3' }
+};
+const CRM_CP_TYPE_LABELS = { client: '🤝 Клиент', supplier: '📦 Поставщик', partner: '🏢 Партнёр', other: '📎 Прочее' };
+const CRM_ACTION_META = {
+  created:   { label: 'создал(а) задачу',          color: '#0071e3' },
+  edited:    { label: 'отредактировал(а) задачу',  color: '#8e8e93' },
+  comment:   { label: 'добавил(а) комментарий',    color: '#8e8e93' },
+  done:      { label: 'отметил(а) выполненной',    color: '#e67e22' },
+  confirmed: { label: 'подтвердил(а) закрытие ✅', color: '#27ae60' },
+  returned:  { label: 'вернул(а) на доработку ↩',  color: '#e74c3c' }
+};
+const CRM_WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+
+function crmLoad(key) {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : null; } catch (e) { return null; }
+}
+function crmSave(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) { /* quota — молча пропускаем */ }
+}
+function crmUid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+function crmTodayIso() {
+  const n = new Date();
+  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
+}
+function crmFmtTs(ts) {
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' }) + ' ' +
+         d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+}
+function crmFmtDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso + 'T00:00:00');
+  return isNaN(d.getTime()) ? iso : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+// Демо-данные при первом открытии CRM (удаляются как обычные записи)
+function crmSeed() {
+  const now = Date.now();
+  const today = crmTodayIso();
+  const cpId = crmUid(), contactId = crmUid();
+  const cps = [{ id: cpId, name: 'ООО «Пример»', type: 'client', phone: '+7 900 000-00-00', email: 'info@primer.ru', address: '', comment: 'Демо-контрагент — можно отредактировать или удалить.', createdAt: now }];
+  const contacts = [{ id: contactId, counterpartyId: cpId, name: 'Иван Иванов', position: 'Менеджер', phone: '+7 900 000-00-01', email: 'ivan@primer.ru', comment: 'Демо-контакт.', createdAt: now }];
+  const tasks = [
+    { id: crmUid(), title: 'Пример: согласовать договор аренды', description: 'Отправить контрагенту проект договора и получить правки.', counterpartyId: cpId, contactId, assignee: '', createdBy: 'CRM', createdAt: now - 86400000, dueDate: today, priority: 'normal', status: 'open',
+      timeline: [{ ts: now - 86400000, actor: 'CRM', action: 'created', note: 'Демо-задача: нажмите «✅ Выполнена», затем «👍 Подтвердить закрытие» — весь путь запишется в историю.' }] },
+    { id: crmUid(), title: 'Пример: запросить акт сверки', description: '', counterpartyId: cpId, contactId: '', assignee: '', createdBy: 'CRM', createdAt: now - 2 * 86400000, dueDate: today, priority: 'low', status: 'open',
+      timeline: [{ ts: now - 2 * 86400000, actor: 'CRM', action: 'created', note: '' }] }
+  ];
+  return { tasks, cps, contacts };
+}
+
+function CrmTab({ user }) {
+  const currentUser = (user && user.name && user.name !== 'admin' && !String(user.name).startsWith('user'))
+    ? user.name
+    : (user && user.email ? user.email.split('@')[0] : (user && user.role === 'admin' ? 'Admin' : 'User'));
+
+  const [tasks, setTasks] = useState(() => crmLoad(CRM_LS_TASKS));
+  const [cps, setCps] = useState(() => crmLoad(CRM_LS_CPS));
+  const [contacts, setContacts] = useState(() => crmLoad(CRM_LS_CONTACTS));
+  const [section, setSection] = useState('calendar'); // calendar | tasks | cps | contacts
+
+  // Календарь
+  const [calYear, setCalYear] = useState(() => new Date().getFullYear());
+  const [calMonth, setCalMonth] = useState(() => new Date().getMonth());
+  const [selectedDate, setSelectedDate] = useState(crmTodayIso);
+
+  // Задачи: фильтры и лента событий
+  const [taskFilter, setTaskFilter] = useState('active'); // active | open | pending_confirm | overdue | closed | all
+  const [taskSearch, setTaskSearch] = useState('');
+  const [showFeed, setShowFeed] = useState(false);
+  const [expandedTl, setExpandedTl] = useState({});
+
+  // Модалки: задача / контрагент / контакт / действие со статусом
+  const [taskModal, setTaskModal] = useState(null);       // null | {} | {id}
+  const [taskForm, setTaskForm] = useState({});
+  const [cpModal, setCpModal] = useState(null);           // null | {} | {id}
+  const [cpForm, setCpForm] = useState({});
+  const [contactModal, setContactModal] = useState(null); // null | {} | {id}
+  const [contactForm, setContactForm] = useState({});
+  const [actionModal, setActionModal] = useState(null);   // null | {type:'done'|'confirm'|'return'|'comment', taskId}
+  const [actionNote, setActionNote] = useState('');
+
+  // Поиск в справочниках
+  const [cpSearch, setCpSearch] = useState('');
+  const [contactSearch, setContactSearch] = useState('');
+  const [contactCpFilter, setContactCpFilter] = useState('');
+
+  // Первый запуск: демо-данные (только если всех трёх ключей нет вообще)
+  useEffect(() => {
+    if (tasks === null && cps === null && contacts === null) {
+      const seed = crmSeed();
+      setTasks(seed.tasks); setCps(seed.cps); setContacts(seed.contacts);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Автосохранение в localStorage при любом изменении
+  useEffect(() => { if (tasks !== null) crmSave(CRM_LS_TASKS, tasks); }, [tasks]);
+  useEffect(() => { if (cps !== null) crmSave(CRM_LS_CPS, cps); }, [cps]);
+  useEffect(() => { if (contacts !== null) crmSave(CRM_LS_CONTACTS, contacts); }, [contacts]);
+
+  const tasksL = tasks || [], cpsL = cps || [], contactsL = contacts || [];
+  const todayIso = crmTodayIso();
+  const cpById = (id) => cpsL.find(c => c.id === id) || null;
+  const contactById = (id) => contactsL.find(c => c.id === id) || null;
+  const isOverdue = (t) => t.status !== 'closed' && !!t.dueDate && t.dueDate < todayIso;
+
+  // ---- стили (apple-theme: пилюльные кнопки, мягкие карточки, #0071e3) ----
+  const stCard = { background: '#fff', border: '1px solid #e0e0e0', borderRadius: 12, padding: '12px 16px' };
+  const stPill = (active) => ({ padding: '7px 14px', borderRadius: 999, border: `1px solid ${active ? '#0071e3' : '#d2d2d7'}`, background: active ? '#0071e3' : '#fff', color: active ? '#fff' : '#1d1d1f', fontSize: 13, fontWeight: 600, cursor: 'pointer' });
+  const stInput = { padding: '8px 10px', borderRadius: 8, border: '1px solid #c7c7cc', fontSize: 14, width: '100%', boxSizing: 'border-box' };
+  const stBtn = { background: '#0071e3', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: 999, fontWeight: 600, cursor: 'pointer', fontSize: 13 };
+  const stBtnGhost = { background: '#fff', color: '#1d1d1f', border: '1px solid #d2d2d7', padding: '6px 12px', borderRadius: 999, cursor: 'pointer', fontSize: 12 };
+  const stBadge = (color, bg) => ({ display: 'inline-block', fontSize: 11, fontWeight: 700, color, background: bg, borderRadius: 8, padding: '2px 8px' });
+  const stOverlay = { position: 'fixed', inset: 0, zIndex: 2500, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 };
+  const stModal = { background: '#fff', borderRadius: 14, padding: '18px 20px', width: '100%', maxWidth: 520, maxHeight: '88vh', overflow: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,0.25)' };
+  const stField = { marginBottom: 10 };
+  const stLabel = { display: 'block', fontSize: 12, fontWeight: 600, color: '#6e6e73', marginBottom: 4 };
+
+  // ---- операции с задачами (каждая пишет событие в таймлайн) ----
+  const logEvent = (t, action, note) => [...(t.timeline || []), { ts: Date.now(), actor: currentUser, action, note: note || '' }];
+
+  const openTaskModal = (task, presetDate) => {
+    if (task) {
+      setTaskModal({ id: task.id });
+      setTaskForm({ title: task.title, description: task.description || '', counterpartyId: task.counterpartyId || '', contactId: task.contactId || '', assignee: task.assignee || '', dueDate: task.dueDate || '', priority: task.priority || 'normal' });
+    } else {
+      setTaskModal({});
+      setTaskForm({ title: '', description: '', counterpartyId: '', contactId: '', assignee: '', dueDate: presetDate || todayIso, priority: 'normal' });
+    }
+  };
+  const saveTask = () => {
+    if (!taskForm.title || !taskForm.title.trim()) { alert('Введите название задачи'); return; }
+    const data = {
+      title: taskForm.title.trim(), description: (taskForm.description || '').trim(),
+      counterpartyId: taskForm.counterpartyId || '', contactId: taskForm.contactId || '',
+      assignee: (taskForm.assignee || '').trim(), dueDate: taskForm.dueDate || '',
+      priority: taskForm.priority || 'normal'
+    };
+    if (taskModal && taskModal.id) {
+      setTasks(prev => (prev || []).map(t => t.id === taskModal.id ? { ...t, ...data, timeline: logEvent(t, 'edited', '') } : t));
+    } else {
+      const t = { id: crmUid(), createdAt: Date.now(), createdBy: currentUser, status: 'open', timeline: [], ...data };
+      t.timeline = logEvent(t, 'created', data.dueDate ? `Срок: ${crmFmtDate(data.dueDate)}` : '');
+      setTasks(prev => [t, ...(prev || [])]);
+    }
+    setTaskModal(null);
+  };
+  const removeTask = (t) => {
+    if (!window.confirm(`Удалить задачу «${t.title}»? История исполнения будет удалена.`)) return;
+    setTasks(prev => (prev || []).filter(x => x.id !== t.id));
+  };
+
+  // Действия со статусом: done (исполнитель), confirm/return (постановщик), comment (все)
+  const openAction = (type, taskId) => { setActionModal({ type, taskId }); setActionNote(''); };
+  const submitAction = () => {
+    if (!actionModal) return;
+    const { type, taskId } = actionModal;
+    const note = actionNote.trim();
+    if ((type === 'return' || type === 'comment') && !note) { alert('Напишите комментарий'); return; }
+    setTasks(prev => (prev || []).map(t => {
+      if (t.id !== taskId) return t;
+      if (type === 'done')    return { ...t, status: 'pending_confirm', doneAt: Date.now(), timeline: logEvent(t, 'done', note) };
+      if (type === 'confirm') return { ...t, status: 'closed', closedAt: Date.now(), timeline: logEvent(t, 'confirmed', note) };
+      if (type === 'return')  return { ...t, status: 'open', timeline: logEvent(t, 'returned', note) };
+      return { ...t, timeline: logEvent(t, 'comment', note) };
+    }));
+    setActionModal(null);
+  };
+
+  // ---- контрагенты ----
+  const openCpModal = (cp) => {
+    setCpModal(cp ? { id: cp.id } : {});
+    setCpForm(cp
+      ? { name: cp.name, type: cp.type || 'client', phone: cp.phone || '', email: cp.email || '', address: cp.address || '', comment: cp.comment || '' }
+      : { name: '', type: 'client', phone: '', email: '', address: '', comment: '' });
+  };
+  const saveCp = () => {
+    if (!cpForm.name || !cpForm.name.trim()) { alert('Введите название контрагента'); return; }
+    const data = { ...cpForm, name: cpForm.name.trim() };
+    if (cpModal && cpModal.id) setCps(prev => (prev || []).map(c => c.id === cpModal.id ? { ...c, ...data } : c));
+    else setCps(prev => [{ id: crmUid(), createdAt: Date.now(), ...data }, ...(prev || [])]);
+    setCpModal(null);
+  };
+  const removeCp = (cp) => {
+    const nC = contactsL.filter(c => c.counterpartyId === cp.id).length;
+    const nT = tasksL.filter(t => t.counterpartyId === cp.id).length;
+    if (!window.confirm(`Удалить контрагента «${cp.name}»?` +
+        (nC ? `\n${nC} контакт(ов) останутся без привязки.` : '') +
+        (nT ? `\n${nT} задач(и) потеряют привязку.` : ''))) return;
+    setCps(prev => (prev || []).filter(c => c.id !== cp.id));
+    setContacts(prev => (prev || []).map(c => c.counterpartyId === cp.id ? { ...c, counterpartyId: '' } : c));
+  };
+
+  // ---- контакты ----
+  const openContactModal = (ct, presetCpId) => {
+    setContactModal(ct ? { id: ct.id } : {});
+    setContactForm(ct
+      ? { name: ct.name, counterpartyId: ct.counterpartyId || '', position: ct.position || '', phone: ct.phone || '', email: ct.email || '', comment: ct.comment || '' }
+      : { name: '', counterpartyId: presetCpId || '', position: '', phone: '', email: '', comment: '' });
+  };
+  const saveContact = () => {
+    if (!contactForm.name || !contactForm.name.trim()) { alert('Введите имя контакта'); return; }
+    const data = { ...contactForm, name: contactForm.name.trim() };
+    if (contactModal && contactModal.id) setContacts(prev => (prev || []).map(c => c.id === contactModal.id ? { ...c, ...data } : c));
+    else setContacts(prev => [{ id: crmUid(), createdAt: Date.now(), ...data }, ...(prev || [])]);
+    setContactModal(null);
+  };
+  const removeContact = (ct) => {
+    if (!window.confirm(`Удалить контакт «${ct.name}»?`)) return;
+    setContacts(prev => (prev || []).filter(c => c.id !== ct.id));
+    setTasks(prev => (prev || []).map(t => t.contactId === ct.id ? { ...t, contactId: '' } : t));
+  };
+
+  // ---- производные данные ----
+  const knownAssignees = [...new Set(tasksL.flatMap(t => [t.assignee, t.createdBy]).concat([currentUser]).filter(n => n && n !== 'CRM'))];
+  const cntOpen = tasksL.filter(t => t.status === 'open').length;
+  const cntPending = tasksL.filter(t => t.status === 'pending_confirm').length;
+  const cntOverdue = tasksL.filter(isOverdue).length;
+  const cntClosedMonth = tasksL.filter(t => {
+    if (t.status !== 'closed' || !t.closedAt) return false;
+    const d = new Date(t.closedAt), n = new Date();
+    return d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth();
+  }).length;
+
+  const filteredTasks = tasksL.filter(t => {
+    if (taskFilter === 'active' && t.status === 'closed') return false;
+    if (taskFilter === 'open' && t.status !== 'open') return false;
+    if (taskFilter === 'pending_confirm' && t.status !== 'pending_confirm') return false;
+    if (taskFilter === 'closed' && t.status !== 'closed') return false;
+    if (taskFilter === 'overdue' && !isOverdue(t)) return false;
+    if (taskSearch) {
+      const hay = [t.title, t.description, t.assignee, t.createdBy, (cpById(t.counterpartyId) || {}).name, (contactById(t.contactId) || {}).name]
+        .filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(taskSearch.toLowerCase())) return false;
+    }
+    return true;
+  }).sort((a, b) => String(a.dueDate || '9999').localeCompare(String(b.dueDate || '9999')));
+
+  const feed = tasksL
+    .flatMap(t => (t.timeline || []).map(ev => ({ ...ev, taskTitle: t.title })))
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, 30);
+
+  const filteredCps = cpsL.filter(c => !cpSearch ||
+    [c.name, c.phone, c.email, c.comment].filter(Boolean).join(' ').toLowerCase().includes(cpSearch.toLowerCase()));
+  const filteredContacts = contactsL.filter(c => {
+    if (contactCpFilter && c.counterpartyId !== contactCpFilter) return false;
+    if (contactSearch) {
+      const hay = [c.name, c.position, c.phone, c.email, c.comment, (cpById(c.counterpartyId) || {}).name].filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(contactSearch.toLowerCase())) return false;
+    }
+    return true;
+  });
+
+  // ---- календарь (неделя с понедельника) ----
+  const tasksByDate = {};
+  tasksL.forEach(t => { if (t.dueDate) { (tasksByDate[t.dueDate] = tasksByDate[t.dueDate] || []).push(t); } });
+  const leadBlanks = (new Date(calYear, calMonth, 1).getDay() + 6) % 7;
+  const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+  const calCells = [];
+  for (let i = 0; i < leadBlanks; i++) calCells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) calCells.push(d);
+  while (calCells.length % 7) calCells.push(null);
+  const shiftMonth = (delta) => {
+    const d = new Date(calYear, calMonth + delta, 1);
+    setCalYear(d.getFullYear()); setCalMonth(d.getMonth());
+  };
+
+  // ---- рендеры ----
+  const renderTimeline = (events) => (
+    <div style={{ marginTop: 10, borderLeft: '2px solid #e5e5ea', paddingLeft: 16 }}>
+      {(events || []).map((ev, i) => {
+        const meta = CRM_ACTION_META[ev.action] || { label: ev.action, color: '#8e8e93' };
+        return (
+          <div key={i} style={{ position: 'relative', padding: '3px 0 9px' }}>
+            <span style={{ position: 'absolute', left: -21, top: 7, width: 9, height: 9, borderRadius: '50%', background: meta.color, border: '2px solid #fff', boxShadow: `0 0 0 1px ${meta.color}` }} />
+            <div style={{ fontSize: 13 }}>
+              <strong>{ev.actor}</strong> {meta.label}
+              {ev.taskTitle ? <span style={{ color: '#0071e3' }}> — {ev.taskTitle}</span> : null}
+              <span style={{ color: '#8e8e93' }}> · {crmFmtTs(ev.ts)}</span>
+            </div>
+            {ev.note ? <div style={{ fontSize: 13, color: '#555', fontStyle: 'italic', marginTop: 2 }}>«{ev.note}»</div> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  const renderTaskCard = (t) => {
+    const meta = CRM_STATUS_META[t.status] || CRM_STATUS_META.open;
+    const pr = CRM_PRIORITY_META[t.priority] || CRM_PRIORITY_META.normal;
+    const cp = cpById(t.counterpartyId);
+    const ct = contactById(t.contactId);
+    const over = isOverdue(t);
+    const iAmAssignee = !t.assignee || t.assignee === currentUser; // пустой исполнитель = закрыть может любой
+    const iAmCreator = t.createdBy === currentUser;
+    const expanded = !!expandedTl[t.id];
+    return (
+      <div key={t.id} style={{ ...stCard, marginBottom: 10, borderLeft: `4px solid ${meta.color}`, background: over ? '#fff9f8' : '#fff' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 240px' }}>
+            <div style={{ fontWeight: 700, fontSize: 15, textDecoration: t.status === 'closed' ? 'line-through' : 'none', color: t.status === 'closed' ? '#6e6e73' : '#1d1d1f' }}>{t.title}</div>
+            {t.description ? <div style={{ fontSize: 13, color: '#555', marginTop: 3, whiteSpace: 'pre-wrap' }}>{t.description}</div> : null}
+          </div>
+          <span style={stBadge(meta.color, meta.bg)}>{meta.label}</span>
+          <span style={stBadge(pr.color, '#f5f5f7')}>{pr.label}</span>
+          {over ? <span style={stBadge('#e74c3c', '#fdecea')}>⏰ Просрочена</span> : null}
+        </div>
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 13, color: '#555', marginTop: 8 }}>
+          <span>📅 Срок: <strong>{crmFmtDate(t.dueDate)}</strong></span>
+          <span>👤 Исполнитель: <strong>{t.assignee || 'любой'}</strong></span>
+          <span>✍️ Постановщик: {t.createdBy}</span>
+          {cp ? <span>🏢 {cp.name}</span> : null}
+          {ct ? <span>📇 {ct.name}{ct.position ? ` (${ct.position})` : ''}</span> : null}
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10, alignItems: 'center' }}>
+          {t.status === 'open' && iAmAssignee && (
+            <button onClick={() => openAction('done', t.id)} style={{ ...stBtn, background: '#27ae60', padding: '6px 12px', fontSize: 12 }}>✅ Выполнена</button>
+          )}
+          {t.status === 'pending_confirm' && iAmCreator && (
+            <>
+              <button onClick={() => openAction('confirm', t.id)} style={{ ...stBtn, background: '#27ae60', padding: '6px 12px', fontSize: 12 }}>👍 Подтвердить закрытие</button>
+              <button onClick={() => openAction('return', t.id)} style={{ ...stBtnGhost, color: '#e74c3c', borderColor: '#e74c3c' }}>↩ На доработку</button>
+            </>
+          )}
+          {t.status === 'open' && !iAmAssignee && (
+            <span style={{ fontSize: 12, color: '#8e8e93' }}>закрыть может только исполнитель: {t.assignee}</span>
+          )}
+          {t.status === 'pending_confirm' && !iAmCreator && (
+            <span style={{ fontSize: 12, color: '#8e8e93' }}>ждёт подтверждения постановщика: {t.createdBy}</span>
+          )}
+          {t.status !== 'closed' && (
+            <button onClick={() => openAction('comment', t.id)} style={stBtnGhost}>💬 Комментарий</button>
+          )}
+          {(iAmCreator || iAmAssignee) && t.status !== 'closed' && (
+            <button onClick={() => openTaskModal(t)} style={stBtnGhost}>✎ Изменить</button>
+          )}
+          <button onClick={() => setExpandedTl(prev => ({ ...prev, [t.id]: !prev[t.id] }))} style={stBtnGhost}>🕓 История ({(t.timeline || []).length}) {expanded ? '▲' : '▼'}</button>
+          {iAmCreator && (
+            <button onClick={() => removeTask(t)} style={{ ...stBtnGhost, color: '#e74c3c' }}>🗑</button>
+          )}
+        </div>
+        {expanded && renderTimeline(t.timeline)}
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ padding: '6px 15px 20px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '4px 0 10px' }}>
+        <h2 style={{ margin: 0 }}>🤝 CRM</h2>
+        <button onClick={() => setSection('calendar')} style={stPill(section === 'calendar')}>📅 Календарь</button>
+        <button onClick={() => setSection('tasks')} style={stPill(section === 'tasks')}>📋 Задачи ({tasksL.filter(t => t.status !== 'closed').length})</button>
+        <button onClick={() => setSection('cps')} style={stPill(section === 'cps')}>👥 Контрагенты ({cpsL.length})</button>
+        <button onClick={() => setSection('contacts')} style={stPill(section === 'contacts')}>📇 Контакты ({contactsL.length})</button>
+        <button onClick={() => openTaskModal(null)} style={{ ...stBtn, marginLeft: 'auto' }}>＋ Новая задача</button>
+      </div>
+      <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 10 }}>
+        Данные CRM хранятся локально в этом браузере (localStorage), сервер не используется. Вы вошли как <strong>{currentUser}</strong>:
+        задачу закрывает исполнитель («✅ Выполнена»), постановщик подтверждает закрытие или возвращает на доработку.
+      </div>
+
+      {/* Сводка по задачам */}
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+        {[
+          { label: 'В работе', n: cntOpen, color: '#0071e3' },
+          { label: 'На подтверждении', n: cntPending, color: '#e67e22' },
+          { label: 'Просрочено', n: cntOverdue, color: '#e74c3c' },
+          { label: 'Закрыто за месяц', n: cntClosedMonth, color: '#27ae60' }
+        ].map(x => (
+          <div key={x.label} style={{ ...stCard, padding: '10px 16px', minWidth: 130 }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: x.color }}>{x.n}</div>
+            <div style={{ fontSize: 12, color: '#6e6e73' }}>{x.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* ======== РАЗДЕЛ: КАЛЕНДАРЬ ======== */}
+      {section === 'calendar' && (
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+          <div style={{ ...stCard, flex: '1 1 560px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <button onClick={() => shiftMonth(-1)} style={stBtnGhost}>←</button>
+              <strong style={{ fontSize: 16, minWidth: 150, textAlign: 'center' }}>{MONTH_NAMES[calMonth]} {calYear}</strong>
+              <button onClick={() => shiftMonth(1)} style={stBtnGhost}>→</button>
+              <button onClick={() => { const n = new Date(); setCalYear(n.getFullYear()); setCalMonth(n.getMonth()); setSelectedDate(crmTodayIso()); }} style={stBtnGhost}>Сегодня</button>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 4 }}>
+              {CRM_WEEKDAYS.map(w => <div key={w} style={{ textAlign: 'center', fontSize: 12, fontWeight: 700, color: '#8e8e93', padding: '4px 0' }}>{w}</div>)}
+              {calCells.map((d, i) => {
+                if (!d) return <div key={i} />;
+                const iso = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+                const dayTasks = tasksByDate[iso] || [];
+                const isToday = iso === todayIso;
+                const isSel = iso === selectedDate;
+                return (
+                  <div key={i} onClick={() => setSelectedDate(iso)}
+                    style={{ minHeight: 64, borderRadius: 8, padding: 4, cursor: 'pointer', border: isSel ? '2px solid #0071e3' : '1px solid #e5e5ea', background: isToday ? '#e8f0fe' : '#fff' }}>
+                    <div style={{ fontSize: 12, fontWeight: isToday ? 800 : 600, color: isToday ? '#0071e3' : '#1d1d1f' }}>{d}</div>
+                    {dayTasks.slice(0, 3).map(t => {
+                      const m = CRM_STATUS_META[t.status] || CRM_STATUS_META.open;
+                      return (
+                        <div key={t.id} title={t.title} style={{ fontSize: 10, marginTop: 2, padding: '1px 4px', borderRadius: 4, background: m.bg, color: m.color, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', borderLeft: isOverdue(t) ? '2px solid #e74c3c' : 'none' }}>{t.title}</div>
+                      );
+                    })}
+                    {dayTasks.length > 3 ? <div style={{ fontSize: 10, color: '#8e8e93', marginTop: 1 }}>+{dayTasks.length - 3} ещё</div> : null}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div style={{ flex: '1 1 320px', minWidth: 300 }}>
+            <div style={{ ...stCard, marginBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <strong style={{ fontSize: 15 }}>📋 {crmFmtDate(selectedDate)}</strong>
+                <button onClick={() => openTaskModal(null, selectedDate)} style={{ ...stBtn, marginLeft: 'auto', padding: '6px 12px', fontSize: 12 }}>＋ Задача на этот день</button>
+              </div>
+              {(tasksByDate[selectedDate] || []).length === 0 && <div style={{ fontSize: 13, color: '#8e8e93', marginTop: 6 }}>На этот день задач нет.</div>}
+            </div>
+            {(tasksByDate[selectedDate] || []).map(renderTaskCard)}
+          </div>
+        </div>
+      )}
+
+      {/* ======== РАЗДЕЛ: ЗАДАЧИ ======== */}
+      {section === 'tasks' && (
+        <div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
+            {[['active', 'Активные'], ['open', 'В работе'], ['pending_confirm', 'На подтверждении'], ['overdue', 'Просроченные'], ['closed', 'Закрытые'], ['all', 'Все']].map(([k, label]) => (
+              <button key={k} onClick={() => setTaskFilter(k)} style={stPill(taskFilter === k)}>{label}</button>
+            ))}
+            <input value={taskSearch} onChange={e => setTaskSearch(e.target.value)} placeholder="🔍 поиск по задачам…" style={{ ...stInput, width: 220 }} />
+            <button onClick={() => setShowFeed(v => !v)} style={stPill(showFeed)}>🕓 Таймлайн всех событий</button>
+          </div>
+          {showFeed && (
+            <div style={{ ...stCard, marginBottom: 14 }}>
+              <strong style={{ fontSize: 15 }}>🕓 Таймлайн исполнения заданий (последние 30 событий)</strong>
+              {feed.length === 0
+                ? <div style={{ fontSize: 13, color: '#8e8e93', marginTop: 6 }}>Событий пока нет.</div>
+                : renderTimeline(feed)}
+            </div>
+          )}
+          {filteredTasks.length === 0 && <div style={{ ...stCard, color: '#8e8e93', fontSize: 14 }}>Задач по этому фильтру нет. Нажмите «＋ Новая задача».</div>}
+          {filteredTasks.map(renderTaskCard)}
+        </div>
+      )}
+
+      {/* ======== РАЗДЕЛ: КОНТРАГЕНТЫ ======== */}
+      {section === 'cps' && (
+        <div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+            <input value={cpSearch} onChange={e => setCpSearch(e.target.value)} placeholder="🔍 поиск контрагентов…" style={{ ...stInput, width: 260 }} />
+            <button onClick={() => openCpModal(null)} style={stBtn}>＋ Контрагент</button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 12 }}>
+            {filteredCps.map(cp => {
+              const cpContacts = contactsL.filter(c => c.counterpartyId === cp.id);
+              const cpOpenTasks = tasksL.filter(t => t.counterpartyId === cp.id && t.status !== 'closed').length;
+              return (
+                <div key={cp.id} style={stCard}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <strong style={{ fontSize: 15, flex: 1 }}>{cp.name}</strong>
+                    <span style={stBadge('#1d1d1f', '#f5f5f7')}>{CRM_CP_TYPE_LABELS[cp.type] || CRM_CP_TYPE_LABELS.other}</span>
+                  </div>
+                  <div style={{ fontSize: 13, color: '#555', marginTop: 6, display: 'grid', gap: 2 }}>
+                    {cp.phone ? <span>📞 {cp.phone}</span> : null}
+                    {cp.email ? <span>✉️ {cp.email}</span> : null}
+                    {cp.address ? <span>📍 {cp.address}</span> : null}
+                    {cp.comment ? <span style={{ fontStyle: 'italic' }}>💬 {cp.comment}</span> : null}
+                  </div>
+                  {cpContacts.length > 0 && (
+                    <div style={{ marginTop: 8, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                      {cpContacts.map(c => <span key={c.id} style={stBadge('#0071e3', '#e8f0fe')}>📇 {c.name}</span>)}
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', gap: 6, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                    {cpOpenTasks > 0 ? <span style={{ fontSize: 12, color: '#e67e22', fontWeight: 700 }}>📋 открытых задач: {cpOpenTasks}</span> : null}
+                    <button onClick={() => openContactModal(null, cp.id)} style={{ ...stBtnGhost, marginLeft: 'auto' }}>＋ Контакт</button>
+                    <button onClick={() => openCpModal(cp)} style={stBtnGhost}>✎</button>
+                    <button onClick={() => removeCp(cp)} style={{ ...stBtnGhost, color: '#e74c3c' }}>🗑</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {filteredCps.length === 0 && <div style={{ ...stCard, marginTop: 12, color: '#8e8e93', fontSize: 14 }}>Контрагентов нет — добавьте первого кнопкой «＋ Контрагент».</div>}
+        </div>
+      )}
+
+      {/* ======== РАЗДЕЛ: КОНТАКТЫ ======== */}
+      {section === 'contacts' && (
+        <div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+            <input value={contactSearch} onChange={e => setContactSearch(e.target.value)} placeholder="🔍 поиск контактов…" style={{ ...stInput, width: 240 }} />
+            <select value={contactCpFilter} onChange={e => setContactCpFilter(e.target.value)} style={{ ...stInput, width: 220 }}>
+              <option value="">Все контрагенты</option>
+              {cpsL.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <button onClick={() => openContactModal(null, contactCpFilter)} style={stBtn}>＋ Контакт</button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 12 }}>
+            {filteredContacts.map(ct => {
+              const cp = cpById(ct.counterpartyId);
+              return (
+                <div key={ct.id} style={stCard}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <strong style={{ fontSize: 15, flex: 1 }}>{ct.name}</strong>
+                    {ct.position ? <span style={stBadge('#6e6e73', '#f5f5f7')}>{ct.position}</span> : null}
+                  </div>
+                  <div style={{ fontSize: 13, color: '#555', marginTop: 6, display: 'grid', gap: 2 }}>
+                    {cp ? <span>🏢 {cp.name}</span> : <span style={{ color: '#8e8e93' }}>🏢 без контрагента</span>}
+                    {ct.phone ? <span>📞 {ct.phone}</span> : null}
+                    {ct.email ? <span>✉️ {ct.email}</span> : null}
+                    {ct.comment ? <span style={{ fontStyle: 'italic' }}>💬 {ct.comment}</span> : null}
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, marginTop: 10, justifyContent: 'flex-end' }}>
+                    <button onClick={() => openContactModal(ct)} style={stBtnGhost}>✎</button>
+                    <button onClick={() => removeContact(ct)} style={{ ...stBtnGhost, color: '#e74c3c' }}>🗑</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {filteredContacts.length === 0 && <div style={{ ...stCard, marginTop: 12, color: '#8e8e93', fontSize: 14 }}>Контактов нет — добавьте первый кнопкой «＋ Контакт».</div>}
+        </div>
+      )}
+
+      {/* ======== МОДАЛКА: ЗАДАЧА ======== */}
+      {taskModal && (
+        <div style={stOverlay} onClick={() => setTaskModal(null)}>
+          <div style={stModal} onClick={e => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 12px' }}>{taskModal.id ? '✎ Редактировать задачу' : '＋ Новая задача'}</h3>
+            <div style={stField}>
+              <label style={stLabel}>Название *</label>
+              <input autoFocus value={taskForm.title || ''} onChange={e => setTaskForm(f => ({ ...f, title: e.target.value }))} style={stInput} placeholder="Например: отправить акт сверки" />
+            </div>
+            <div style={stField}>
+              <label style={stLabel}>Описание</label>
+              <textarea value={taskForm.description || ''} onChange={e => setTaskForm(f => ({ ...f, description: e.target.value }))} style={{ ...stInput, minHeight: 60, resize: 'vertical' }} />
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ ...stField, flex: '1 1 160px' }}>
+                <label style={stLabel}>Срок исполнения</label>
+                <input type="date" value={taskForm.dueDate || ''} onChange={e => setTaskForm(f => ({ ...f, dueDate: e.target.value }))} style={stInput} />
+              </div>
+              <div style={{ ...stField, flex: '1 1 140px' }}>
+                <label style={stLabel}>Приоритет</label>
+                <select value={taskForm.priority || 'normal'} onChange={e => setTaskForm(f => ({ ...f, priority: e.target.value }))} style={stInput}>
+                  <option value="high">🔴 Высокий</option>
+                  <option value="normal">⚪ Обычный</option>
+                  <option value="low">🔵 Низкий</option>
+                </select>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ ...stField, flex: '1 1 180px' }}>
+                <label style={stLabel}>Контрагент</label>
+                <select value={taskForm.counterpartyId || ''} onChange={e => setTaskForm(f => ({ ...f, counterpartyId: e.target.value, contactId: '' }))} style={stInput}>
+                  <option value="">— не выбран —</option>
+                  {cpsL.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div style={{ ...stField, flex: '1 1 180px' }}>
+                <label style={stLabel}>Контакт</label>
+                <select value={taskForm.contactId || ''} onChange={e => setTaskForm(f => ({ ...f, contactId: e.target.value }))} style={stInput}>
+                  <option value="">— не выбран —</option>
+                  {contactsL.filter(c => !taskForm.counterpartyId || c.counterpartyId === taskForm.counterpartyId).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={stField}>
+              <label style={stLabel}>Исполнитель (пусто — отметить выполненной может любой)</label>
+              <input value={taskForm.assignee || ''} onChange={e => setTaskForm(f => ({ ...f, assignee: e.target.value }))} style={stInput} list="crm-assignees" placeholder={currentUser} />
+              <datalist id="crm-assignees">{knownAssignees.map(n => <option key={n} value={n} />)}</datalist>
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 6 }}>
+              <button onClick={() => setTaskModal(null)} style={stBtnGhost}>Отмена</button>
+              <button onClick={saveTask} style={stBtn}>💾 Сохранить</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======== МОДАЛКА: КОНТРАГЕНТ ======== */}
+      {cpModal && (
+        <div style={stOverlay} onClick={() => setCpModal(null)}>
+          <div style={stModal} onClick={e => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 12px' }}>{cpModal.id ? '✎ Контрагент' : '＋ Новый контрагент'}</h3>
+            <div style={stField}>
+              <label style={stLabel}>Название *</label>
+              <input autoFocus value={cpForm.name || ''} onChange={e => setCpForm(f => ({ ...f, name: e.target.value }))} style={stInput} placeholder="ООО «Ромашка»" />
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ ...stField, flex: '1 1 150px' }}>
+                <label style={stLabel}>Тип</label>
+                <select value={cpForm.type || 'client'} onChange={e => setCpForm(f => ({ ...f, type: e.target.value }))} style={stInput}>
+                  <option value="client">🤝 Клиент</option>
+                  <option value="supplier">📦 Поставщик</option>
+                  <option value="partner">🏢 Партнёр</option>
+                  <option value="other">📎 Прочее</option>
+                </select>
+              </div>
+              <div style={{ ...stField, flex: '1 1 170px' }}>
+                <label style={stLabel}>Телефон</label>
+                <input value={cpForm.phone || ''} onChange={e => setCpForm(f => ({ ...f, phone: e.target.value }))} style={stInput} />
+              </div>
+            </div>
+            <div style={stField}>
+              <label style={stLabel}>Email</label>
+              <input value={cpForm.email || ''} onChange={e => setCpForm(f => ({ ...f, email: e.target.value }))} style={stInput} />
+            </div>
+            <div style={stField}>
+              <label style={stLabel}>Адрес</label>
+              <input value={cpForm.address || ''} onChange={e => setCpForm(f => ({ ...f, address: e.target.value }))} style={stInput} />
+            </div>
+            <div style={stField}>
+              <label style={stLabel}>Комментарий</label>
+              <textarea value={cpForm.comment || ''} onChange={e => setCpForm(f => ({ ...f, comment: e.target.value }))} style={{ ...stInput, minHeight: 50, resize: 'vertical' }} />
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setCpModal(null)} style={stBtnGhost}>Отмена</button>
+              <button onClick={saveCp} style={stBtn}>💾 Сохранить</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======== МОДАЛКА: КОНТАКТ ======== */}
+      {contactModal && (
+        <div style={stOverlay} onClick={() => setContactModal(null)}>
+          <div style={stModal} onClick={e => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 12px' }}>{contactModal.id ? '✎ Контакт' : '＋ Новый контакт'}</h3>
+            <div style={stField}>
+              <label style={stLabel}>Имя *</label>
+              <input autoFocus value={contactForm.name || ''} onChange={e => setContactForm(f => ({ ...f, name: e.target.value }))} style={stInput} placeholder="Иван Иванов" />
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ ...stField, flex: '1 1 180px' }}>
+                <label style={stLabel}>Контрагент</label>
+                <select value={contactForm.counterpartyId || ''} onChange={e => setContactForm(f => ({ ...f, counterpartyId: e.target.value }))} style={stInput}>
+                  <option value="">— без контрагента —</option>
+                  {cpsL.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div style={{ ...stField, flex: '1 1 150px' }}>
+                <label style={stLabel}>Должность</label>
+                <input value={contactForm.position || ''} onChange={e => setContactForm(f => ({ ...f, position: e.target.value }))} style={stInput} placeholder="Менеджер" />
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ ...stField, flex: '1 1 160px' }}>
+                <label style={stLabel}>Телефон</label>
+                <input value={contactForm.phone || ''} onChange={e => setContactForm(f => ({ ...f, phone: e.target.value }))} style={stInput} />
+              </div>
+              <div style={{ ...stField, flex: '1 1 170px' }}>
+                <label style={stLabel}>Email</label>
+                <input value={contactForm.email || ''} onChange={e => setContactForm(f => ({ ...f, email: e.target.value }))} style={stInput} />
+              </div>
+            </div>
+            <div style={stField}>
+              <label style={stLabel}>Комментарий</label>
+              <textarea value={contactForm.comment || ''} onChange={e => setContactForm(f => ({ ...f, comment: e.target.value }))} style={{ ...stInput, minHeight: 50, resize: 'vertical' }} />
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setContactModal(null)} style={stBtnGhost}>Отмена</button>
+              <button onClick={saveContact} style={stBtn}>💾 Сохранить</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======== МОДАЛКА: ДЕЙСТВИЕ СО СТАТУСОМ (закрытие исполнителем / подтверждение / возврат / комментарий) ======== */}
+      {actionModal && (() => {
+        const t = tasksL.find(x => x.id === actionModal.taskId);
+        if (!t) return null;
+        const titles = { done: '✅ Отметить задачу выполненной', confirm: '👍 Подтвердить закрытие задачи', return: '↩ Вернуть задачу на доработку', comment: '💬 Комментарий к задаче' };
+        const hints = {
+          done: 'Задача перейдёт в статус «На подтверждении» — постановщик проверит результат и закроет её.',
+          confirm: 'Задача будет закрыта. Действие запишется в таймлайн.',
+          return: 'Задача вернётся в статус «В работе» — напишите, что нужно исправить.',
+          comment: 'Комментарий запишется в таймлайн задачи.'
+        };
+        const btnLabels = { done: '✅ Выполнена', confirm: '👍 Подтвердить', return: '↩ Вернуть', comment: '💬 Добавить' };
+        const btnColors = { done: '#27ae60', confirm: '#27ae60', return: '#e74c3c', comment: '#0071e3' };
+        return (
+          <div style={stOverlay} onClick={() => setActionModal(null)}>
+            <div style={stModal} onClick={e => e.stopPropagation()}>
+              <h3 style={{ margin: '0 0 6px' }}>{titles[actionModal.type]}</h3>
+              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>{t.title}</div>
+              <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 10 }}>{hints[actionModal.type]}</div>
+              <textarea autoFocus value={actionNote} onChange={e => setActionNote(e.target.value)}
+                placeholder={actionModal.type === 'comment' ? 'Комментарий…' : 'Комментарий (что сделано / что исправить)…'}
+                style={{ ...stInput, minHeight: 70, resize: 'vertical' }} />
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 }}>
+                <button onClick={() => setActionModal(null)} style={stBtnGhost}>Отмена</button>
+                <button onClick={submitAction} style={{ ...stBtn, background: btnColors[actionModal.type] }}>{btnLabels[actionModal.type]}</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
 function App() {
   const [token, setToken] = useState(localStorage.getItem('token') || null);
   const [user, setUser] = useState(null);
@@ -3187,6 +3910,10 @@ ${bodyHtml}
             <button className={activeTab === 'taxes' ? 'active' : ''} onClick={() => {setActiveTab('taxes'); loadReceipts(); loadBankMovements();}}>
               🧾 Налоги
             </button>
+            {/* Вкладка «CRM» (v32): календарь задач, контрагенты, контакты, таймлайн исполнения — локально, без бэкенда */}
+            <button className={activeTab === 'crm' ? 'active' : ''} onClick={() => setActiveTab('crm')}>
+              🤝 CRM
+            </button>
           </nav>
         </div>
         <div className="header-right">
@@ -4847,6 +5574,9 @@ ${bodyHtml}
           </div>
         );
       })()}
+
+      {/* Вкладка «CRM» (v32) */}
+      {activeTab === 'crm' && <CrmTab user={user} />}
 
       {scanResultOpen && (
         <div className="scan-overlay">
