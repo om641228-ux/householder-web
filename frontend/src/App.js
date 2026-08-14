@@ -729,13 +729,16 @@ function CrmTab({ user }) {
   const [contactSearch, setContactSearch] = useState('');
   const [contactCpFilter, setContactCpFilter] = useState('');
 
-  // Первый запуск: демо-данные (только если всех трёх ключей нет вообще)
+  // Первый запуск: демо-данные (только если всех трёх ключей нет в localStorage вообще).
+  // Читаем localStorage напрямую (а не state) — так эффект не зависит от переменных и линт чист.
   useEffect(() => {
-    if (tasks === null && cps === null && contacts === null) {
-      const seed = crmSeed();
-      setTasks(seed.tasks); setCps(seed.cps); setContacts(seed.contacts);
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    try {
+      if (localStorage.getItem(CRM_LS_TASKS) === null && localStorage.getItem(CRM_LS_CPS) === null && localStorage.getItem(CRM_LS_CONTACTS) === null) {
+        const seed = crmSeed();
+        setTasks(seed.tasks); setCps(seed.cps); setContacts(seed.contacts);
+      }
+    } catch (e) { /* localStorage недоступен (приватный режим) — CRM откроется пустой */ }
+  }, []);
 
   // Автосохранение в localStorage при любом изменении
   useEffect(() => { if (tasks !== null) crmSave(CRM_LS_TASKS, tasks); }, [tasks]);
