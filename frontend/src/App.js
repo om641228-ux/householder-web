@@ -624,13 +624,14 @@ function HighlightText({ text, query, style = {} }) {
 
 const ReceiptScanner = registerPlugin('ReceiptScannerPlugin');
 
-// ========== CRM (вкладка «🤝 CRM», v32): календарь с задачами, контрагенты, справочник ==========
+// ========== CRM (вкладка «🤝 CRM», v33): календарь с задачами, контрагенты, справочник ==========
 // контактов, таймлайн исполнения заданий, закрытие задания исполнителем с подтверждением постановщика.
 // Цикл задачи: «В работе» → исполнитель отмечает «✅ Выполнена» → «На подтверждении» →
 // постановщик «👍 Подтвердить закрытие» («Закрыта») или «↩ На доработку» (снова «В работе»).
 // Каждый шаг фиксируется в таймлайне задачи (автор, время, комментарий).
-// Хранение — localStorage браузера (crm_*_v1): бэкенд и Supabase не требуются. При переносе
-// на сервер достаточно заменить crmLoad/crmSave на запросы к API (по образцу /api/receipts).
+// Хранение (v33) — сервер: /api/crm* (Supabase, миграция supabase-migration-v21-crm.sql),
+// CRM общая для всей команды. Если сервер недоступен — автоматический fallback на
+// localStorage (crm_*_v1), как в v32; локальные данные переносятся на сервер один раз.
 const CRM_LS_TASKS = 'crm_tasks_v1';
 const CRM_LS_CPS = 'crm_counterparties_v1';
 const CRM_LS_CONTACTS = 'crm_contacts_v1';
@@ -693,7 +694,7 @@ function crmSeed() {
   return { tasks, cps, contacts };
 }
 
-function CrmTab({ user }) {
+function CrmTab({ user, token }) {
   const currentUser = (user && user.name && user.name !== 'admin' && !String(user.name).startsWith('user'))
     ? user.name
     : (user && user.email ? user.email.split('@')[0] : (user && user.role === 'admin' ? 'Admin' : 'User'));
@@ -729,16 +730,75 @@ function CrmTab({ user }) {
   const [contactSearch, setContactSearch] = useState('');
   const [contactCpFilter, setContactCpFilter] = useState('');
 
-  // Первый запуск: демо-данные (только если всех трёх ключей нет в localStorage вообще).
-  // Читаем localStorage напрямую (а не state) — так эффект не зависит от переменных и линт чист.
+  // Серверный режим (v33): данные CRM на бэкенде; при недоступности — локальный fallback
+  const [crmLoading, setCrmLoading] = useState(true);
+  const [useServer, setUseServer] = useState(false);
+  const [crmError, setCrmError] = useState(null);
+  const [crmRetry, setCrmRetry] = useState(0); // увеличение = перезагрузить CRM с сервера
+
+  // ---- Загрузка CRM (v33): с сервера; при недоступности — локальный режим (localStorage) ----
+  const crmApi = useCallback(async (path, options) => {
+    const res = await fetch(`${API_URL}${path}${path.includes('?') ? '&' : '?'}token=${token}`,
+      options ? { ...options, headers: { 'Content-Type': 'application/json' } } : undefined);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  }, [token]);
+
   useEffect(() => {
-    try {
-      if (localStorage.getItem(CRM_LS_TASKS) === null && localStorage.getItem(CRM_LS_CPS) === null && localStorage.getItem(CRM_LS_CONTACTS) === null) {
-        const seed = crmSeed();
-        setTasks(seed.tasks); setCps(seed.cps); setContacts(seed.contacts);
+    let cancelled = false;
+    setCrmLoading(true);
+    (async () => {
+      if (!token) { if (!cancelled) setCrmLoading(false); return; }
+      try {
+        let data = await crmApi('/api/crm');
+        // Одноразовый перенос локальных данных на сервер: если на сервере пусто, а в
+        // localStorage есть записи (CRM v32) — заливаем их с пересадкой id (строковые → bigserial)
+        let migratedFlag = null;
+        try { migratedFlag = localStorage.getItem('crm_migrated_v1'); } catch (e) {}
+        if (!(data.counterparties || []).length && !(data.contacts || []).length && !(data.tasks || []).length && !migratedFlag) {
+          const locCps = crmLoad(CRM_LS_CPS) || [];
+          const locContacts = crmLoad(CRM_LS_CONTACTS) || [];
+          const locTasks = crmLoad(CRM_LS_TASKS) || [];
+          if (locCps.length || locContacts.length || locTasks.length) {
+            const cpIdMap = {}, ctIdMap = {};
+            for (const cp of locCps) {
+              const r = await crmApi('/api/crm/counterparties', { method: 'POST', body: JSON.stringify({ name: cp.name, type: cp.type, phone: cp.phone, email: cp.email, address: cp.address, comment: cp.comment }) });
+              cpIdMap[cp.id] = r.counterparty.id;
+            }
+            for (const ct of locContacts) {
+              const r = await crmApi('/api/crm/contacts', { method: 'POST', body: JSON.stringify({ counterparty_id: cpIdMap[ct.counterpartyId] || null, name: ct.name, position: ct.position, phone: ct.phone, email: ct.email, comment: ct.comment }) });
+              ctIdMap[ct.id] = r.contact.id;
+            }
+            for (const t of locTasks) {
+              await crmApi('/api/crm/tasks', { method: 'POST', body: JSON.stringify({ title: t.title, description: t.description, counterparty_id: cpIdMap[t.counterpartyId] || null, contact_id: ctIdMap[t.contactId] || null, assignee: t.assignee, due_date: t.dueDate || null, priority: t.priority }) });
+            }
+            data = await crmApi('/api/crm');
+          }
+          try { localStorage.setItem('crm_migrated_v1', '1'); } catch (e) {}
+        }
+        if (cancelled) return;
+        setCps(data.counterparties || []);
+        setContacts(data.contacts || []);
+        setTasks(data.tasks || []);
+        setUseServer(true);
+        setCrmError(null);
+      } catch (e) {
+        if (cancelled) return;
+        // fallback: локальный режим, как в v32 (при совсем пустом localStorage — демо-данные)
+        const locCps = crmLoad(CRM_LS_CPS), locContacts = crmLoad(CRM_LS_CONTACTS), locTasks = crmLoad(CRM_LS_TASKS);
+        if (locCps === null && locContacts === null && locTasks === null) {
+          const seed = crmSeed();
+          setCps(seed.cps); setContacts(seed.contacts); setTasks(seed.tasks);
+        } else {
+          setCps(locCps || []); setContacts(locContacts || []); setTasks(locTasks || []);
+        }
+        setUseServer(false);
+        setCrmError('Сервер CRM недоступен — показаны локальные данные этого браузера. ' + e.message);
       }
-    } catch (e) { /* localStorage недоступен (приватный режим) — CRM откроется пустой */ }
-  }, []);
+      if (!cancelled) setCrmLoading(false);
+    })();
+  }, [token, crmApi, crmRetry]);
 
   // Автосохранение в localStorage при любом изменении
   useEffect(() => { if (tasks !== null) crmSave(CRM_LS_TASKS, tasks); }, [tasks]);
@@ -775,7 +835,7 @@ function CrmTab({ user }) {
       setTaskForm({ title: '', description: '', counterpartyId: '', contactId: '', assignee: '', dueDate: presetDate || todayIso, priority: 'normal' });
     }
   };
-  const saveTask = () => {
+  const saveTask = async () => {
     if (!taskForm.title || !taskForm.title.trim()) { alert('Введите название задачи'); return; }
     const data = {
       title: taskForm.title.trim(), description: (taskForm.description || '').trim(),
@@ -783,6 +843,20 @@ function CrmTab({ user }) {
       assignee: (taskForm.assignee || '').trim(), dueDate: taskForm.dueDate || '',
       priority: taskForm.priority || 'normal'
     };
+    if (useServer) {
+      try {
+        const body = JSON.stringify({ title: data.title, description: data.description, counterparty_id: data.counterpartyId || null, contact_id: data.contactId || null, assignee: data.assignee, due_date: data.dueDate || null, priority: data.priority });
+        if (taskModal && taskModal.id) {
+          const r = await crmApi(`/api/crm/tasks/${taskModal.id}`, { method: 'PUT', body });
+          setTasks(prev => (prev || []).map(t => t.id === taskModal.id ? r.task : t));
+        } else {
+          const r = await crmApi('/api/crm/tasks', { method: 'POST', body });
+          setTasks(prev => [r.task, ...(prev || [])]);
+        }
+        setTaskModal(null);
+      } catch (e) { alert('Не сохранилось на сервере: ' + e.message); }
+      return;
+    }
     if (taskModal && taskModal.id) {
       setTasks(prev => (prev || []).map(t => t.id === taskModal.id ? { ...t, ...data, timeline: logEvent(t, 'edited', '') } : t));
     } else {
@@ -792,18 +866,30 @@ function CrmTab({ user }) {
     }
     setTaskModal(null);
   };
-  const removeTask = (t) => {
+  const removeTask = async (t) => {
     if (!window.confirm(`Удалить задачу «${t.title}»? История исполнения будет удалена.`)) return;
+    if (useServer) {
+      try { await crmApi(`/api/crm/tasks/${t.id}`, { method: 'DELETE', body: '{}' }); }
+      catch (e) { alert('Не удалилось на сервере: ' + e.message); return; }
+    }
     setTasks(prev => (prev || []).filter(x => x.id !== t.id));
   };
 
   // Действия со статусом: done (исполнитель), confirm/return (постановщик), comment (все)
   const openAction = (type, taskId) => { setActionModal({ type, taskId }); setActionNote(''); };
-  const submitAction = () => {
+  const submitAction = async () => {
     if (!actionModal) return;
     const { type, taskId } = actionModal;
     const note = actionNote.trim();
     if ((type === 'return' || type === 'comment') && !note) { alert('Напишите комментарий'); return; }
+    if (useServer) {
+      try {
+        const r = await crmApi(`/api/crm/tasks/${taskId}/action`, { method: 'POST', body: JSON.stringify({ action: type, note }) });
+        setTasks(prev => (prev || []).map(t => t.id === taskId ? r.task : t));
+        setActionModal(null);
+      } catch (e) { alert(e.message); }
+      return;
+    }
     setTasks(prev => (prev || []).map(t => {
       if (t.id !== taskId) return t;
       if (type === 'done')    return { ...t, status: 'pending_confirm', doneAt: Date.now(), timeline: logEvent(t, 'done', note) };
@@ -821,21 +907,39 @@ function CrmTab({ user }) {
       ? { name: cp.name, type: cp.type || 'client', phone: cp.phone || '', email: cp.email || '', address: cp.address || '', comment: cp.comment || '' }
       : { name: '', type: 'client', phone: '', email: '', address: '', comment: '' });
   };
-  const saveCp = () => {
+  const saveCp = async () => {
     if (!cpForm.name || !cpForm.name.trim()) { alert('Введите название контрагента'); return; }
     const data = { ...cpForm, name: cpForm.name.trim() };
+    if (useServer) {
+      try {
+        if (cpModal && cpModal.id) {
+          const r = await crmApi(`/api/crm/counterparties/${cpModal.id}`, { method: 'PUT', body: JSON.stringify(data) });
+          setCps(prev => (prev || []).map(c => c.id === cpModal.id ? r.counterparty : c));
+        } else {
+          const r = await crmApi('/api/crm/counterparties', { method: 'POST', body: JSON.stringify(data) });
+          setCps(prev => [r.counterparty, ...(prev || [])]);
+        }
+        setCpModal(null);
+      } catch (e) { alert('Не сохранилось на сервере: ' + e.message); }
+      return;
+    }
     if (cpModal && cpModal.id) setCps(prev => (prev || []).map(c => c.id === cpModal.id ? { ...c, ...data } : c));
     else setCps(prev => [{ id: crmUid(), createdAt: Date.now(), ...data }, ...(prev || [])]);
     setCpModal(null);
   };
-  const removeCp = (cp) => {
+  const removeCp = async (cp) => {
     const nC = contactsL.filter(c => c.counterpartyId === cp.id).length;
     const nT = tasksL.filter(t => t.counterpartyId === cp.id).length;
     if (!window.confirm(`Удалить контрагента «${cp.name}»?` +
         (nC ? `\n${nC} контакт(ов) останутся без привязки.` : '') +
         (nT ? `\n${nT} задач(и) потеряют привязку.` : ''))) return;
+    if (useServer) {
+      try { await crmApi(`/api/crm/counterparties/${cp.id}`, { method: 'DELETE', body: '{}' }); }
+      catch (e) { alert('Не удалилось на сервере: ' + e.message); return; }
+    }
     setCps(prev => (prev || []).filter(c => c.id !== cp.id));
     setContacts(prev => (prev || []).map(c => c.counterpartyId === cp.id ? { ...c, counterpartyId: '' } : c));
+    setTasks(prev => (prev || []).map(t => t.counterpartyId === cp.id ? { ...t, counterpartyId: '' } : t));
   };
 
   // ---- контакты ----
@@ -845,15 +949,33 @@ function CrmTab({ user }) {
       ? { name: ct.name, counterpartyId: ct.counterpartyId || '', position: ct.position || '', phone: ct.phone || '', email: ct.email || '', comment: ct.comment || '' }
       : { name: '', counterpartyId: presetCpId || '', position: '', phone: '', email: '', comment: '' });
   };
-  const saveContact = () => {
+  const saveContact = async () => {
     if (!contactForm.name || !contactForm.name.trim()) { alert('Введите имя контакта'); return; }
     const data = { ...contactForm, name: contactForm.name.trim() };
+    if (useServer) {
+      try {
+        const body = JSON.stringify({ counterparty_id: data.counterpartyId || null, name: data.name, position: data.position, phone: data.phone, email: data.email, comment: data.comment });
+        if (contactModal && contactModal.id) {
+          const r = await crmApi(`/api/crm/contacts/${contactModal.id}`, { method: 'PUT', body });
+          setContacts(prev => (prev || []).map(c => c.id === contactModal.id ? r.contact : c));
+        } else {
+          const r = await crmApi('/api/crm/contacts', { method: 'POST', body });
+          setContacts(prev => [r.contact, ...(prev || [])]);
+        }
+        setContactModal(null);
+      } catch (e) { alert('Не сохранилось на сервере: ' + e.message); }
+      return;
+    }
     if (contactModal && contactModal.id) setContacts(prev => (prev || []).map(c => c.id === contactModal.id ? { ...c, ...data } : c));
     else setContacts(prev => [{ id: crmUid(), createdAt: Date.now(), ...data }, ...(prev || [])]);
     setContactModal(null);
   };
-  const removeContact = (ct) => {
+  const removeContact = async (ct) => {
     if (!window.confirm(`Удалить контакт «${ct.name}»?`)) return;
+    if (useServer) {
+      try { await crmApi(`/api/crm/contacts/${ct.id}`, { method: 'DELETE', body: '{}' }); }
+      catch (e) { alert('Не удалилось на сервере: ' + e.message); return; }
+    }
     setContacts(prev => (prev || []).filter(c => c.id !== ct.id));
     setTasks(prev => (prev || []).map(t => t.contactId === ct.id ? { ...t, contactId: '' } : t));
   };
@@ -1003,10 +1125,20 @@ function CrmTab({ user }) {
         <button onClick={() => openTaskModal(null)} style={{ ...stBtn, marginLeft: 'auto' }}>＋ Новая задача</button>
       </div>
       <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 10 }}>
-        Данные CRM хранятся локально в этом браузере (localStorage), сервер не используется. Вы вошли как <strong>{currentUser}</strong>:
-        задачу закрывает исполнитель («✅ Выполнена»), постановщик подтверждает закрытие или возвращает на доработку.
+        {useServer
+          ? <>Данные CRM хранятся на сервере (Supabase) и общие для всей команды. Вы вошли как <strong>{currentUser}</strong>: задачу закрывает исполнитель («✅ Выполнена»), постановщик подтверждает закрытие или возвращает на доработку.</>
+          : <>Данные CRM хранятся локально в этом браузере (localStorage). Вы вошли как <strong>{currentUser}</strong>: задачу закрывает исполнитель («✅ Выполнена»), постановщик подтверждает закрытие или возвращает на доработку.</>}
       </div>
 
+      {crmError && (
+        <div style={{ background: '#fdf2e3', border: '1px solid #e67e22', borderRadius: 10, padding: '8px 12px', fontSize: 13, marginBottom: 10, display: 'flex', gap: 10, alignItems: 'center' }}>
+          <span style={{ flex: 1 }}>⚠️ {crmError}</span>
+          <button onClick={() => setCrmRetry(n => n + 1)} style={stBtnGhost}>🔄 Повторить</button>
+        </div>
+      )}
+      {crmLoading && <div style={{ ...stCard, color: '#8e8e93', fontSize: 14, marginBottom: 10 }}>⏳ Загрузка CRM…</div>}
+
+      {!crmLoading && (<>
       {/* Сводка по задачам */}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
         {[
@@ -1171,6 +1303,8 @@ function CrmTab({ user }) {
           {filteredContacts.length === 0 && <div style={{ ...stCard, marginTop: 12, color: '#8e8e93', fontSize: 14 }}>Контактов нет — добавьте первый кнопкой «＋ Контакт».</div>}
         </div>
       )}
+
+      </>)}
 
       {/* ======== МОДАЛКА: ЗАДАЧА ======== */}
       {taskModal && (
@@ -5579,7 +5713,7 @@ ${bodyHtml}
       })()}
 
       {/* Вкладка «CRM» (v32) */}
-      {activeTab === 'crm' && <CrmTab user={user} />}
+      {activeTab === 'crm' && <CrmTab user={user} token={token} />}
 
       {scanResultOpen && (
         <div className="scan-overlay">

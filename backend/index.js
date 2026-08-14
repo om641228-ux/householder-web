@@ -3041,6 +3041,264 @@ app.post('/api/objects', requireAuth, async (req, res) => {
   }
 });
 
+// ========== CRM (v33): контрагенты, контакты, задачи с таймлайном исполнения ==========
+// Таблицы: supabase-migration-v21-crm.sql (crm_counterparties, crm_contacts, crm_tasks).
+// CRM — общая для всех пользователей (командное пространство): читают все авторизованные,
+// owner_id = создатель записи. Права на смену статуса проверяются по имени (req.user.name):
+//   done           — только исполнитель (assignee); пустой assignee = любой;
+//   confirm/return — только постановщик (created_by); admin может всё.
+// Фронт работает в camelCase — маппинг в snake_case здесь, на входе/выходе.
+const CRM_MIGRATION_HINT = 'Если ошибка про отсутствие таблицы — выполни supabase-migration-v21-crm.sql в SQL Editor проекта householder (Supabase)';
+const crmCpToApi = (r) => r && ({
+  id: r.id, name: r.name, type: r.type || 'client',
+  phone: r.phone || '', email: r.email || '', address: r.address || '', comment: r.comment || '',
+  createdAt: r.created_at ? Date.parse(r.created_at) : null
+});
+const crmContactToApi = (r) => r && ({
+  id: r.id, counterpartyId: r.counterparty_id || '', name: r.name, position: r.position || '',
+  phone: r.phone || '', email: r.email || '', comment: r.comment || '',
+  createdAt: r.created_at ? Date.parse(r.created_at) : null
+});
+const crmTaskToApi = (r) => r && ({
+  id: r.id, title: r.title, description: r.description || '',
+  counterpartyId: r.counterparty_id || '', contactId: r.contact_id || '',
+  assignee: r.assignee || '', createdBy: r.created_by || '',
+  dueDate: r.due_date || '', priority: r.priority || 'normal', status: r.status || 'open',
+  doneAt: r.done_at ? Date.parse(r.done_at) : null, closedAt: r.closed_at ? Date.parse(r.closed_at) : null,
+  timeline: Array.isArray(r.timeline) ? r.timeline : [],
+  createdAt: r.created_at ? Date.parse(r.created_at) : null
+});
+
+// GET /api/crm — все три раздела одним запросом (контрагенты + контакты + задачи)
+app.get('/api/crm', requireAuth, async (req, res) => {
+  try {
+    const [cps, contacts, tasks] = await Promise.all([
+      supabaseAdmin.from('crm_counterparties').select('*').order('name'),
+      supabaseAdmin.from('crm_contacts').select('*').order('name'),
+      supabaseAdmin.from('crm_tasks').select('*').order('created_at', { ascending: false })
+    ]);
+    if (cps.error) throw cps.error;
+    if (contacts.error) throw contacts.error;
+    if (tasks.error) throw tasks.error;
+    res.json({
+      counterparties: (cps.data || []).map(crmCpToApi),
+      contacts: (contacts.data || []).map(crmContactToApi),
+      tasks: (tasks.data || []).map(crmTaskToApi)
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: CRM_MIGRATION_HINT });
+  }
+});
+
+// ---- CRM: контрагенты ----
+app.post('/api/crm/counterparties', requireAuth, async (req, res) => {
+  try {
+    const { name, type, phone, email, address, comment } = req.body || {};
+    if (!name || !String(name).trim()) return res.status(400).json({ error: 'Поле name обязательно' });
+    const { data, error } = await supabaseAdmin
+      .from('crm_counterparties')
+      .insert([{ owner_id: req.user.id, name: String(name).trim(), type: type || 'client', phone: phone || null, email: email || null, address: address || null, comment: comment || null }])
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ counterparty: crmCpToApi(data) });
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: CRM_MIGRATION_HINT });
+  }
+});
+
+app.put('/api/crm/counterparties/:id', requireAuth, async (req, res) => {
+  try {
+    const FIELDS = ['name', 'type', 'phone', 'email', 'address', 'comment'];
+    const updates = {};
+    for (const k of FIELDS) {
+      if (req.body && Object.prototype.hasOwnProperty.call(req.body, k)) updates[k] = req.body[k] === '' ? null : req.body[k];
+    }
+    if (updates.name !== undefined && !String(updates.name || '').trim()) return res.status(400).json({ error: 'Поле name обязательно' });
+    if (!Object.keys(updates).length) return res.status(400).json({ error: 'Нет полей для обновления' });
+    updates.updated_at = new Date().toISOString();
+    const { data, error } = await supabaseAdmin.from('crm_counterparties').update(updates).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json({ counterparty: crmCpToApi(data) });
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: CRM_MIGRATION_HINT });
+  }
+});
+
+app.delete('/api/crm/counterparties/:id', requireAuth, async (req, res) => {
+  try {
+    // контакты и задачи отвязываются сами: FK ON DELETE SET NULL (миграция v21)
+    const { error } = await supabaseAdmin.from('crm_counterparties').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: CRM_MIGRATION_HINT });
+  }
+});
+
+// ---- CRM: контакты ----
+app.post('/api/crm/contacts', requireAuth, async (req, res) => {
+  try {
+    const { counterparty_id, name, position, phone, email, comment } = req.body || {};
+    if (!name || !String(name).trim()) return res.status(400).json({ error: 'Поле name обязательно' });
+    const { data, error } = await supabaseAdmin
+      .from('crm_contacts')
+      .insert([{ owner_id: req.user.id, counterparty_id: counterparty_id || null, name: String(name).trim(), position: position || null, phone: phone || null, email: email || null, comment: comment || null }])
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ contact: crmContactToApi(data) });
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: CRM_MIGRATION_HINT });
+  }
+});
+
+app.put('/api/crm/contacts/:id', requireAuth, async (req, res) => {
+  try {
+    const FIELDS = ['counterparty_id', 'name', 'position', 'phone', 'email', 'comment'];
+    const updates = {};
+    for (const k of FIELDS) {
+      if (req.body && Object.prototype.hasOwnProperty.call(req.body, k)) updates[k] = req.body[k] === '' ? null : req.body[k];
+    }
+    if (updates.name !== undefined && !String(updates.name || '').trim()) return res.status(400).json({ error: 'Поле name обязательно' });
+    if (!Object.keys(updates).length) return res.status(400).json({ error: 'Нет полей для обновления' });
+    updates.updated_at = new Date().toISOString();
+    const { data, error } = await supabaseAdmin.from('crm_contacts').update(updates).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json({ contact: crmContactToApi(data) });
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: CRM_MIGRATION_HINT });
+  }
+});
+
+app.delete('/api/crm/contacts/:id', requireAuth, async (req, res) => {
+  try {
+    // задачи отвязываются сами: FK crm_tasks.contact_id ON DELETE SET NULL (миграция v21)
+    const { error } = await supabaseAdmin.from('crm_contacts').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: CRM_MIGRATION_HINT });
+  }
+});
+
+// ---- CRM: задачи ----
+app.post('/api/crm/tasks', requireAuth, async (req, res) => {
+  try {
+    const { title, description, counterparty_id, contact_id, assignee, due_date, priority } = req.body || {};
+    if (!title || !String(title).trim()) return res.status(400).json({ error: 'Поле title обязательно' });
+    const userName = req.user.name || req.user.id;
+    const row = {
+      owner_id: req.user.id,
+      title: String(title).trim(),
+      description: description || null,
+      counterparty_id: counterparty_id || null,
+      contact_id: contact_id || null,
+      assignee: assignee ? String(assignee).trim() : null,
+      created_by: userName,
+      due_date: due_date || null,
+      priority: priority || 'normal',
+      status: 'open',
+      timeline: [{ ts: Date.now(), actor: userName, action: 'created', note: due_date ? `Срок: ${due_date}` : '' }]
+    };
+    const { data, error } = await supabaseAdmin.from('crm_tasks').insert([row]).select().single();
+    if (error) throw error;
+    res.json({ task: crmTaskToApi(data) });
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: CRM_MIGRATION_HINT });
+  }
+});
+
+app.put('/api/crm/tasks/:id', requireAuth, async (req, res) => {
+  try {
+    const { data: t, error: e0 } = await supabaseAdmin.from('crm_tasks').select('*').eq('id', req.params.id).single();
+    if (e0 || !t) return res.status(404).json({ error: 'Задача не найдена' });
+    const userName = req.user.name || req.user.id;
+    if (t.created_by !== userName && t.assignee !== userName && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Редактировать может постановщик или исполнитель задачи' });
+    }
+    const FIELDS = ['title', 'description', 'counterparty_id', 'contact_id', 'assignee', 'due_date', 'priority'];
+    const updates = {};
+    for (const k of FIELDS) {
+      if (req.body && Object.prototype.hasOwnProperty.call(req.body, k)) updates[k] = req.body[k] === '' ? null : req.body[k];
+    }
+    if (updates.title !== undefined && !String(updates.title || '').trim()) return res.status(400).json({ error: 'Поле title обязательно' });
+    if (!Object.keys(updates).length) return res.status(400).json({ error: 'Нет полей для обновления' });
+    updates.timeline = [...(Array.isArray(t.timeline) ? t.timeline : []), { ts: Date.now(), actor: userName, action: 'edited', note: '' }];
+    updates.updated_at = new Date().toISOString();
+    const { data, error } = await supabaseAdmin.from('crm_tasks').update(updates).eq('id', t.id).select().single();
+    if (error) throw error;
+    res.json({ task: crmTaskToApi(data) });
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: CRM_MIGRATION_HINT });
+  }
+});
+
+// Действие со статусом: done (исполнитель) / confirm, return (постановщик) / comment (все).
+// Каждое действие дописывает событие в timeline — это и есть таймлайн исполнения.
+app.post('/api/crm/tasks/:id/action', requireAuth, async (req, res) => {
+  try {
+    const { action, note } = req.body || {};
+    const userName = req.user.name || req.user.id;
+    const { data: t, error: e0 } = await supabaseAdmin.from('crm_tasks').select('*').eq('id', req.params.id).single();
+    if (e0 || !t) return res.status(404).json({ error: 'Задача не найдена' });
+
+    const ev = { ts: Date.now(), actor: userName, action, note: (note || '').trim() };
+    const nowIso = new Date().toISOString();
+    let patch = null;
+
+    if (action === 'done') {
+      if (t.status !== 'open') return res.status(409).json({ error: 'Задача не в статусе «В работе»' });
+      if (t.assignee && t.assignee !== userName && req.user.role !== 'admin') {
+        return res.status(403).json({ error: `Отметить выполненной может только исполнитель: ${t.assignee}` });
+      }
+      patch = { status: 'pending_confirm', done_at: nowIso };
+    } else if (action === 'confirm') {
+      if (t.status !== 'pending_confirm') return res.status(409).json({ error: 'Задача не ждёт подтверждения' });
+      if (t.created_by !== userName && req.user.role !== 'admin') {
+        return res.status(403).json({ error: `Подтвердить закрытие может только постановщик: ${t.created_by}` });
+      }
+      patch = { status: 'closed', closed_at: nowIso };
+    } else if (action === 'return') {
+      if (t.status !== 'pending_confirm') return res.status(409).json({ error: 'Задача не ждёт подтверждения' });
+      if (t.created_by !== userName && req.user.role !== 'admin') {
+        return res.status(403).json({ error: `Вернуть на доработку может только постановщик: ${t.created_by}` });
+      }
+      if (!ev.note) return res.status(400).json({ error: 'Напишите, что нужно исправить (комментарий обязателен)' });
+      patch = { status: 'open' };
+    } else if (action === 'comment') {
+      if (!ev.note) return res.status(400).json({ error: 'Пустой комментарий' });
+      patch = {};
+    } else {
+      return res.status(400).json({ error: 'Неизвестное действие: ' + action });
+    }
+
+    patch.timeline = [...(Array.isArray(t.timeline) ? t.timeline : []), ev];
+    patch.updated_at = nowIso;
+    const { data, error } = await supabaseAdmin.from('crm_tasks').update(patch).eq('id', t.id).select().single();
+    if (error) throw error;
+    res.json({ task: crmTaskToApi(data) });
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: CRM_MIGRATION_HINT });
+  }
+});
+
+app.delete('/api/crm/tasks/:id', requireAuth, async (req, res) => {
+  try {
+    const { data: t, error: e0 } = await supabaseAdmin.from('crm_tasks').select('*').eq('id', req.params.id).single();
+    if (e0 || !t) return res.status(404).json({ error: 'Задача не найдена' });
+    const userName = req.user.name || req.user.id;
+    if (t.created_by !== userName && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Удалить задачу может только постановщик' });
+    }
+    const { error } = await supabaseAdmin.from('crm_tasks').delete().eq('id', t.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: CRM_MIGRATION_HINT });
+  }
+});
+
 // ========== BULK DELETE ==========
 app.post('/api/bulk-delete', requireAuth, async (req, res) => {
   try {
