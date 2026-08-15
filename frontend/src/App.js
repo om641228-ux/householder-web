@@ -6306,18 +6306,20 @@ ${bodyHtml}
               const usualDay = days.length ? days[Math.floor(days.length / 2)] : 1;
               return { name: g.name, count: g.items.length, months, avg, usualDay, cat: recurCatOf(g.name) };
             }).filter(g => g.months.length >= 2).sort((a, b) => a.usualDay - b.usualDay);
-            // Ось месяцев: 5 назад + текущий + 2 вперёд
+            // Календарь (v42): текущий + следующий месяц, платежи по датам
             const nowD = new Date();
             const curYm = `${nowD.getFullYear()}-${String(nowD.getMonth() + 1).padStart(2, '0')}`;
-            const tlMonths = [];
-            {
-              const dd = new Date(nowD.getFullYear(), nowD.getMonth() - 5, 1);
-              for (let i = 0; i < 8; i++) {
-                tlMonths.push(`${dd.getFullYear()}-${String(dd.getMonth() + 1).padStart(2, '0')}`);
-                dd.setMonth(dd.getMonth() + 1);
-              }
-            }
-            const tlMonthLabel = (ym) => `${MONTH_NAMES[+ym.slice(5, 7) - 1].slice(0, 3)} ${ym.slice(2, 4)}`;
+            const calBases = [new Date(nowD.getFullYear(), nowD.getMonth(), 1), new Date(nowD.getFullYear(), nowD.getMonth() + 1, 1)];
+            const buildCalWeeks = (base) => {
+              const y = base.getFullYear(), mo = base.getMonth();
+              const lead = (new Date(y, mo, 1).getDay() + 6) % 7; // неделя с понедельника
+              const dim = new Date(y, mo + 1, 0).getDate();
+              const cells = [];
+              for (let i = 0; i < lead; i++) cells.push(null);
+              for (let d = 1; d <= dim; d++) cells.push(d);
+              while (cells.length % 7) cells.push(null);
+              return cells;
+            };
             const manualRows = plannedPayments.map(p => ({ manual: true, id: p.id, name: p.title, avg: p.amount, usualDay: p.dayOfMonth || 1, cat: RECUR_CATS.find(c => c.key === p.category) || RECUR_CATS[RECUR_CATS.length - 1] }));
             return (
               <>
@@ -6337,66 +6339,67 @@ ${bodyHtml}
                   <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: '10px 12px', marginBottom: 10 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
                       <span style={{ fontSize: 15, fontWeight: 800, color: '#1d1d1f' }}>📅 Обязательные повторяющиеся платежи</span>
-                      <span style={{ fontSize: 11, color: '#8e8e93' }}>🟢 оплачен · ◌ ожидается (~день месяца) · ✋ добавлен вручную</span>
+                      <span style={{ fontSize: 11, color: '#8e8e93' }}>🟢 оплачен в этом месяце · ◌ ожидается (~день месяца) · жёлтый — добавлен вручную</span>
                       <button onClick={() => setPlannedModal(true)} style={{ marginLeft: 'auto', border: 'none', background: '#0071e3', color: '#fff', borderRadius: 980, padding: '5px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>＋ Добавить платёж</button>
                     </div>
                     {(recurring.length === 0 && manualRows.length === 0) ? (
                       <div style={{ fontSize: 13, color: '#8e8e93' }}>Повторяющиеся платежи не найдены (нужны ≥2 платежа одному контрагенту в разные месяцы) — или добавьте платёж вручную кнопкой «＋».</div>
                     ) : (
-                      <div style={{ overflowX: 'auto' }}>
-                        <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: '100%' }}>
-                          <thead>
-                            <tr>
-                              <th style={{ textAlign: 'left', padding: '4px 8px', color: '#6e6e73', fontWeight: 700, position: 'sticky', left: 0, background: '#fff' }}>Платёж</th>
-                              <th style={{ textAlign: 'right', padding: '4px 8px', color: '#6e6e73', fontWeight: 700 }}>Сумма ≈</th>
-                              <th style={{ textAlign: 'center', padding: '4px 8px', color: '#6e6e73', fontWeight: 700 }}>День</th>
-                              {tlMonths.map(ym => (
-                                <th key={ym} style={{ textAlign: 'center', padding: '4px 6px', color: ym === curYm ? '#0071e3' : '#6e6e73', fontWeight: ym === curYm ? 800 : 700, whiteSpace: 'nowrap' }}>{tlMonthLabel(ym)}</th>
-                              ))}
-                              <th></th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {recurring.map(g => (
-                              <tr key={`a_${g.name}`} style={{ borderTop: '1px solid #f0f0f0' }}>
-                                <td style={{ padding: '4px 8px', position: 'sticky', left: 0, background: '#fff', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={g.name}>
-                                  {g.cat.label} <b>{g.name}</b> <span style={{ color: '#8e8e93', fontSize: 11 }}>×{g.count}</span>
-                                </td>
-                                <td style={{ textAlign: 'right', padding: '4px 8px', fontWeight: 700 }}>{formatAmount(g.avg, 'EUR')}</td>
-                                <td style={{ textAlign: 'center', padding: '4px 8px', color: '#6e6e73' }}>~{g.usualDay}</td>
-                                {tlMonths.map(ym => {
-                                  const paid = g.months.includes(ym);
-                                  const future = ym >= curYm;
+                      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+                        {calBases.map((base, bi) => {
+                          const cy = base.getFullYear(), cmo = base.getMonth();
+                          const ymStr = `${cy}-${String(cmo + 1).padStart(2, '0')}`;
+                          const dim = new Date(cy, cmo + 1, 0).getDate();
+                          const cells = buildCalWeeks(base);
+                          const dayItems = [
+                            ...recurring.map(g => ({
+                              key: `a_${g.name}`, label: `${g.cat.label} ${g.name}`, amount: g.avg,
+                              day: Math.min(g.usualDay, dim), paid: g.months.includes(ymStr), manual: false
+                            })),
+                            ...manualRows.map(g => ({
+                              key: `m_${g.id}`, label: `${g.cat.label} ${g.name}`, amount: g.avg,
+                              day: Math.min(g.usualDay || 1, dim), paid: false, manual: true
+                            }))
+                          ];
+                          return (
+                            <div key={ymStr} style={{ flex: '1 1 360px', minWidth: 300 }}>
+                              <div style={{ fontSize: 14, fontWeight: 800, margin: '2px 0 6px', color: bi === 0 ? '#0071e3' : '#1d1d1f' }}>{MONTH_NAMES[cmo]} {cy}</div>
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 3 }}>
+                                {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(w => (
+                                  <div key={w} style={{ fontSize: 10, color: '#8e8e93', textAlign: 'center', fontWeight: 700 }}>{w}</div>
+                                ))}
+                                {cells.map((d, ci) => {
+                                  const itemsHere = d ? dayItems.filter(it => it.day === d) : [];
+                                  const isToday = ymStr === curYm && d === nowD.getDate();
                                   return (
-                                    <td key={ym} title={paid ? `Оплачен в ${tlMonthLabel(ym)}` : future ? `Ожидается ~${g.usualDay} числа` : 'Платежа не было'}
-                                      style={{ textAlign: 'center', padding: '4px 6px', background: ym === curYm ? '#f0f7ff' : 'transparent' }}>
-                                      {paid ? '🟢' : future ? <span style={{ color: '#c7c7cc' }}>◌</span> : <span style={{ color: '#e3e6ea' }}>·</span>}
-                                    </td>
+                                    <div key={ci} style={{ minHeight: 58, borderRadius: 8, border: `1px solid ${isToday ? '#0a84ff' : '#f0f0f0'}`, background: d ? (isToday ? '#f0f7ff' : '#fafafa') : 'transparent', padding: 2 }}>
+                                      {d && <div style={{ fontSize: 10, fontWeight: isToday ? 800 : 600, color: isToday ? '#0a84ff' : '#6e6e73', textAlign: 'right', paddingRight: 3 }}>{d}</div>}
+                                      {itemsHere.map(it => (
+                                        <div key={it.key} title={`${it.label}${it.amount != null ? ` — ${formatAmount(it.amount, 'EUR')}` : ''}${it.paid ? ' (оплачен)' : ' (ожидается)'}`}
+                                          style={{ fontSize: 9, lineHeight: 1.3, borderRadius: 4, padding: '1px 4px', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'default',
+                                            background: it.paid ? '#e8f8ef' : it.manual ? '#fff6dd' : '#eef4ff',
+                                            color: it.paid ? '#1e7e34' : it.manual ? '#8a6d3b' : '#3457d5',
+                                            border: `1px solid ${it.paid ? '#b7e4c7' : it.manual ? '#f0dfa8' : '#cfdefc'}` }}>
+                                          {it.paid ? '🟢' : '◌'} {it.label}{it.amount != null ? ` · ${formatAmount(it.amount, 'EUR')}` : ''}
+                                        </div>
+                                      ))}
+                                    </div>
                                   );
                                 })}
-                                <td></td>
-                              </tr>
-                            ))}
-                            {manualRows.map(g => (
-                              <tr key={`m_${g.id}`} style={{ borderTop: '1px solid #f0f0f0', background: '#fffdf5' }}>
-                                <td style={{ padding: '4px 8px', position: 'sticky', left: 0, background: '#fffdf5', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={g.name}>
-                                  {g.cat.label} <b>{g.name}</b> <span style={{ color: '#b8860b', fontSize: 11 }}>✋ вручную</span>
-                                </td>
-                                <td style={{ textAlign: 'right', padding: '4px 8px', fontWeight: 700 }}>{g.avg != null ? formatAmount(g.avg, 'EUR') : '—'}</td>
-                                <td style={{ textAlign: 'center', padding: '4px 8px', color: '#6e6e73' }}>~{g.usualDay}</td>
-                                {tlMonths.map(ym => (
-                                  <td key={ym} title={ym >= curYm ? `Ожидается ~${g.usualDay} числа` : 'Плановый платёж'}
-                                    style={{ textAlign: 'center', padding: '4px 6px', background: ym === curYm ? '#f0f7ff' : 'transparent' }}>
-                                    {ym >= curYm ? <span style={{ color: '#b8860b' }}>◌</span> : <span style={{ color: '#e3e6ea' }}>·</span>}
-                                  </td>
-                                ))}
-                                <td style={{ padding: '4px 4px' }}>
-                                  <button onClick={() => removePlannedPayment(g.id)} title="Удалить плановый платёж" style={{ border: 'none', background: 'none', color: '#e74c3c', cursor: 'pointer', fontSize: 13, padding: '0 4px' }}>✕</button>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {manualRows.length > 0 && (
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                        {manualRows.map(g => (
+                          <span key={`del_${g.id}`} style={{ fontSize: 11, background: '#fff6dd', border: '1px solid #f0dfa8', borderRadius: 980, padding: '2px 8px', color: '#8a6d3b' }}>
+                            ✋ {g.name} · ~{g.usualDay} числа{g.avg != null ? ` · ${formatAmount(g.avg, 'EUR')}` : ''}
+                            <button onClick={() => removePlannedPayment(g.id)} title="Удалить плановый платёж" style={{ border: 'none', background: 'none', color: '#e74c3c', cursor: 'pointer', marginLeft: 4, padding: 0, fontSize: 11 }}>✕</button>
+                          </span>
+                        ))}
                       </div>
                     )}
                   </div>
