@@ -748,6 +748,7 @@ function CrmTab({ user, token }) {
   // Фотоотчёт (v35): photoBusy = `${taskId}_${kind}` пока идёт загрузка; photoViewer — URL фото на весь экран
   const [photoBusy, setPhotoBusy] = useState(null);
   const [photoViewer, setPhotoViewer] = useState(null);
+  const [photoZoom, setPhotoZoom] = useState(false); // false — уместить в экран, true — натуральный размер
 
   // ---- Загрузка CRM (v33): с сервера; при недоступности — локальный режим (localStorage) ----
   const crmApi = useCallback(async (path, options) => {
@@ -980,7 +981,7 @@ function CrmTab({ user, token }) {
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {photos.map((u, i) => (
               <span key={i} style={{ position: 'relative', display: 'inline-block' }}>
-                <img src={u} alt="" onClick={() => setPhotoViewer(u)} style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, cursor: 'zoom-in', border: '1px solid #e0e0e0' }} />
+                <img src={u} alt="" onClick={() => { setPhotoViewer(u); setPhotoZoom(false); }} style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, cursor: 'zoom-in', border: '1px solid #e0e0e0' }} />
                 {canEdit && (
                   <button onClick={() => removeTaskPhoto(t.id, kind, u)} title="Удалить фото" style={{ position: 'absolute', top: -6, right: -6, width: 18, height: 18, borderRadius: '50%', border: 'none', background: '#e74c3c', color: '#fff', fontSize: 10, cursor: 'pointer', lineHeight: '18px', padding: 0 }}>✕</button>
                 )}
@@ -1217,6 +1218,7 @@ function CrmTab({ user, token }) {
             <button onClick={() => removeTask(t)} style={{ ...stBtnGhost, color: '#e74c3c' }}>🗑</button>
           )}
         </div>
+        {renderPhotoReport(t)}
         {expanded && renderTimeline(t.timeline)}
       </div>
     );
@@ -1741,8 +1743,19 @@ function CrmTab({ user, token }) {
       })()}
       {/* ======== ПРОСМОТР ФОТО ИЗ ФОТООТЧЁТА (v35) ======== */}
       {photoViewer && (
-        <div style={{ ...stOverlay, zIndex: 2600, background: 'rgba(0,0,0,0.85)' }} onClick={() => setPhotoViewer(null)}>
-          <img src={photoViewer} alt="" style={{ maxWidth: '96vw', maxHeight: '92vh', borderRadius: 12, boxShadow: '0 12px 40px rgba(0,0,0,0.5)' }} />
+        <div
+          style={{ ...stOverlay, zIndex: 2600, background: 'rgba(0,0,0,0.9)', alignItems: photoZoom ? 'flex-start' : 'center', justifyContent: photoZoom ? 'flex-start' : 'center', overflow: 'auto', cursor: 'zoom-out' }}
+          onClick={() => { setPhotoViewer(null); setPhotoZoom(false); }}
+        >
+          <img
+            src={photoViewer}
+            alt=""
+            onClick={(e) => { e.stopPropagation(); setPhotoZoom(z => !z); }}
+            title={photoZoom ? 'Клик — уместить в экран' : 'Клик — натуральный размер (с прокруткой)'}
+            style={photoZoom
+              ? { maxWidth: 'none', maxHeight: 'none', margin: 'auto', borderRadius: 8, cursor: 'zoom-out', boxShadow: '0 8px 40px rgba(0,0,0,0.7)' }
+              : { maxWidth: '96vw', maxHeight: '92vh', objectFit: 'contain', borderRadius: 12, cursor: 'zoom-in', boxShadow: '0 12px 40px rgba(0,0,0,0.5)' }}
+          />
         </div>
       )}
     </div>

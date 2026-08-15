@@ -3305,8 +3305,8 @@ app.delete('/api/crm/tasks/:id', requireAuth, async (req, res) => {
 // photos_before / photos_after — jsonb-массивы URL в Storage (bucket receipt-images, папка crm/).
 // Добавлять/удалять фото может постановщик или исполнитель; у закрытой задачи отчёт заморожен.
 // Каждая операция дописывает событие в timeline (action: photo | photo_del).
-// POST /api/crm/tasks/:id/photos?kind=before|after — multipart/form-data, поле photos (до 6 файлов)
-app.post('/api/crm/tasks/:id/photos', requireAuth, upload.array('photos', 6), async (req, res) => {
+// POST /api/crm/tasks/:id/photos?kind=before|after — multipart/form-data, поле photos (количество не ограничено, ≤20 МБ на файл)
+app.post('/api/crm/tasks/:id/photos', requireAuth, upload.array('photos'), async (req, res) => {
   try {
     const kind = req.query.kind === 'after' ? 'after' : 'before';
     const col = kind === 'after' ? 'photos_after' : 'photos_before';
