@@ -926,7 +926,7 @@ function CrmTab({ user, token }) {
   // Запись в photosBefore/photosAfter: объект {url, kind: photo|video|audio, name, ts, actor}
   // (старые записи — просто строка-URL, трактуем как фото).
   const mediaOf = (entry) => (entry && typeof entry === 'object') ? entry : { url: entry, kind: 'photo', name: '' };
-  const fileMediaKind = (f) => /^image\//.test(f.type || '') ? 'photo' : /^video\//.test(f.type || '') ? 'video' : 'audio';
+  const fileMediaKind = (f) => /^image\//.test(f.type || '') ? 'photo' : /^video\//.test(f.type || '') ? 'video' : /^audio\//.test(f.type || '') ? 'audio' : 'doc';
 
   // Сжатие видео до ~targetMB (v37): realtime-транскодинг в браузере —
   // кадры через <canvas> → captureStream(30), звук через AudioContext, запись MediaRecorder.
@@ -1045,14 +1045,16 @@ function CrmTab({ user, token }) {
     if (nP) parts.push(`фото +${nP}`);
     if (nV) parts.push(`видео +${nV}`);
     if (nA) parts.push(`аудио +${nA}`);
+    const nD = items.filter(u => u.kind === 'doc').length;
+    if (nD) parts.push(`документы +${nD}`);
     return `Медиа «${kind === 'after' ? 'после' : 'до'}»: ${parts.join(', ')}`;
   };
   const addTaskPhotos = async (taskId, kind, fileList) => {
-    let files = Array.from(fileList || []).filter(f => /^(image|video|audio)\//.test(f.type || ''));
+    let files = Array.from(fileList || []).filter(f => /^(image|video|audio|text)\//.test(f.type || '') || f.type === 'application/pdf' || /\.(pdf|txt|md|csv)$/i.test(f.name || ''));
     const tooBig = files.filter(f => f.size > 500 * 1024 * 1024 && fileMediaKind(f) !== 'video');
     if (tooBig.length) alert(`Слишком большие файлы (максимум 500 МБ) — пропущены:\n${tooBig.map(f => `${f.name} — ${(f.size / 1024 / 1024).toFixed(0)} МБ`).join('\n')}`);
     files = files.filter(f => !(f.size > 500 * 1024 * 1024 && fileMediaKind(f) !== 'video'));
-    if (!files.length) { alert('Выберите фото, видео или аудио'); return; }
+    if (!files.length) { alert('Выберите фото, видео, аудио, текст или PDF'); return; }
     setPhotoBusy(`${taskId}_${kind}`);
     try {
       const prepared = [];
@@ -1167,6 +1169,8 @@ function CrmTab({ user, token }) {
           </span>
         ) : m.kind === 'audio' ? (
           <span onClick={() => setPhotoViewer({ url: m.url, kind: 'audio', name: m.name || '' })} title={m.name || 'Аудио — прослушать'} style={{ width: 64, height: 64, borderRadius: 8, background: '#f5f5f7', border: '1px solid #e0e0e0', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: 24 }}>🎵</span>
+        ) : m.kind === 'doc' ? (
+          <a href={m.url} target="_blank" rel="noreferrer" title={m.name || 'Документ — открыть в новой вкладке'} style={{ width: 64, height: 64, borderRadius: 8, background: '#f5f5f7', border: '1px solid #e0e0e0', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: 24, textDecoration: 'none' }}>{/\.pdf(\?|$)/i.test(m.name || m.url || '') ? '📄' : '📝'}</a>
         ) : (
           <img src={m.url} alt="" onClick={() => { setPhotoViewer({ url: m.url, kind: 'photo' }); setPhotoZoom(false); }} style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, cursor: 'zoom-in', border: '1px solid #e0e0e0' }} />
         )}
@@ -1192,7 +1196,7 @@ function CrmTab({ user, token }) {
             {canEdit && (
               <label title={hint} style={{ width: 64, height: 64, borderRadius: 8, border: '1px dashed #c7c7cc', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: busy ? 'wait' : 'pointer', fontSize: 20, color: '#8e8e93', background: '#f5f5f7' }}>
                 {busy ? '⏳' : '📷'}
-                <input type="file" accept="image/*,video/*,audio/*" multiple disabled={busy} style={{ display: 'none' }} onChange={(e) => { addTaskPhotos(t.id, kind, e.target.files); e.target.value = ''; }} />
+                <input type="file" accept="image/*,video/*,audio/*,application/pdf,text/*,.pdf,.txt,.md,.csv" multiple disabled={busy} style={{ display: 'none' }} onChange={(e) => { addTaskPhotos(t.id, kind, e.target.files); e.target.value = ''; }} />
               </label>
             )}
           </div>
@@ -1213,11 +1217,11 @@ function CrmTab({ user, token }) {
 
   // ---- файлы контрагента (v36): фото/видео/аудио, attachments в crm_counterparties (миграция v23) ----
   const addCpFiles = async (cpId, fileList) => {
-    let files = Array.from(fileList || []).filter(f => /^(image|video|audio)\//.test(f.type || ''));
+    let files = Array.from(fileList || []).filter(f => /^(image|video|audio|text)\//.test(f.type || '') || f.type === 'application/pdf' || /\.(pdf|txt|md|csv)$/i.test(f.name || ''));
     const tooBig = files.filter(f => f.size > 500 * 1024 * 1024 && fileMediaKind(f) !== 'video');
     if (tooBig.length) alert(`Слишком большие файлы (максимум 500 МБ) — пропущены:\n${tooBig.map(f => `${f.name} — ${(f.size / 1024 / 1024).toFixed(0)} МБ`).join('\n')}`);
     files = files.filter(f => !(f.size > 500 * 1024 * 1024 && fileMediaKind(f) !== 'video'));
-    if (!files.length) { alert('Выберите фото, видео или аудио'); return; }
+    if (!files.length) { alert('Выберите фото, видео, аудио, текст или PDF'); return; }
     setPhotoBusy(`cp_${cpId}`);
     try {
       const prepared = [];
@@ -1318,13 +1322,131 @@ function CrmTab({ user, token }) {
     const busy = photoBusy === `cp_${cp.id}`;
     return (
       <div style={{ marginTop: 10 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#6e6e73', marginBottom: 6 }}>📎 Файлы — фото · видео · аудио ({items.length})</div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#6e6e73', marginBottom: 6 }}>📎 Файлы — фото · видео · аудио · текст · PDF ({items.length})</div>
         <div style={{ fontSize: 11, color: '#8e8e93', marginBottom: 6 }}>Видео больше ~50 МБ сжимаются автоматически (время ≈ длительности видео; если не влезло в 50 МБ — повторные проходы сильнее).</div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {items.map((entry, i) => renderMediaThumb(entry, i, () => removeCpFile(cp.id, mediaOf(entry).url)))}
-          <label title="Добавить фото, видео или аудио" style={{ width: 64, height: 64, borderRadius: 8, border: '1px dashed #c7c7cc', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: busy ? 'wait' : 'pointer', fontSize: 20, color: '#8e8e93', background: '#f5f5f7' }}>
+          <label title="Добавить фото, видео, аудио, текст или PDF" style={{ width: 64, height: 64, borderRadius: 8, border: '1px dashed #c7c7cc', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: busy ? 'wait' : 'pointer', fontSize: 20, color: '#8e8e93', background: '#f5f5f7' }}>
             {busy ? '⏳' : '📎'}
-            <input type="file" accept="image/*,video/*,audio/*" multiple disabled={busy} style={{ display: 'none' }} onChange={(e) => { addCpFiles(cp.id, e.target.files); e.target.value = ''; }} />
+            <input type="file" accept="image/*,video/*,audio/*,application/pdf,text/*,.pdf,.txt,.md,.csv" multiple disabled={busy} style={{ display: 'none' }} onChange={(e) => { addCpFiles(cp.id, e.target.files); e.target.value = ''; }} />
+          </label>
+        </div>
+      </div>
+    );
+  };
+
+  // ---- файлы контакта (v38): attachments в crm_contacts (миграция v24) ----
+  const addContactFiles = async (ctId, fileList) => {
+    let files = Array.from(fileList || []).filter(f => /^(image|video|audio|text)\//.test(f.type || '') || f.type === 'application/pdf' || /\.(pdf|txt|md|csv)$/i.test(f.name || ''));
+    const tooBig = files.filter(f => f.size > 500 * 1024 * 1024 && fileMediaKind(f) !== 'video');
+    if (tooBig.length) alert(`Слишком большие файлы (максимум 500 МБ) — пропущены:\n${tooBig.map(f => `${f.name} — ${(f.size / 1024 / 1024).toFixed(0)} МБ`).join('\n')}`);
+    files = files.filter(f => !(f.size > 500 * 1024 * 1024 && fileMediaKind(f) !== 'video'));
+    if (!files.length) { alert('Выберите фото, видео, аудио, текст или PDF'); return; }
+    setPhotoBusy(`ct_${ctId}`);
+    try {
+      const prepared = [];
+      for (const f of files) {
+        const mk = fileMediaKind(f);
+        if (mk === 'photo') { prepared.push(await compressImageFile(f)); continue; }
+        if (mk === 'video' && f.size > 48 * 1024 * 1024) {
+          // До 3 проходов (v37.3): Safari может игнорировать битрейт MediaRecorder → результат > 50 МБ;
+          // тогда жмём повторно с меньшим разрешением/битрейтом, пока не влезет в лимит хранилища
+          const attempts = [
+            { mb: 45, maxW: 1280, maxH: 720 },
+            { mb: 38, maxW: 960, maxH: 540 },
+            { mb: 28, maxW: 640, maxH: 360 }
+          ];
+          let best = null;
+          for (let ai = 0; ai < attempts.length; ai++) {
+            const att = attempts[ai];
+            try {
+              const cv = await compressVideoFile(f, att.mb, (pct) => setMediaProgress(`🎬 Сжатие видео${ai ? ` (проход ${ai + 1}/3)` : ''} до ~50 МБ: ${pct}%`), att.maxW, att.maxH);
+              if (!best || cv.size < best.size) best = cv;
+              if (cv.size <= 47 * 1024 * 1024) break;
+            } catch (e) {
+              console.warn('Сжатие видео не удалось:', e && e.message);
+              break;
+            }
+          }
+          setMediaProgress(null);
+          const chosen = (best && best.size < f.size) ? best : f;
+          if (chosen.size > 50 * 1024 * 1024) {
+            if (useServer) {
+              setMediaProgress(`🎬 Сжатие на сервере (ffmpeg) «${f.name}» — это займёт некоторое время…`);
+              try {
+                const fdV = new FormData();
+                fdV.append('files', f);
+                const resV = await fetch(`${API_URL}/api/crm/contacts/${ctId}/files?compress=1&token=${token}`, { method: 'POST', body: fdV });
+                const rawV = await resV.text().catch(() => '');
+                let dataV = {};
+                try { dataV = JSON.parse(rawV); } catch (e) { dataV = {}; }
+                if (resV.ok && dataV.contact) {
+                  setContacts(prev => (prev || []).map(c => String(c.id) === String(ctId) ? dataV.contact : c));
+                  setMediaProgress(null);
+                  continue;
+                }
+                throw new Error(dataV.error || (rawV && rawV.length < 300 ? rawV : `HTTP ${resV.status}`));
+              } catch (ev) {
+                setMediaProgress(null);
+                alert(`Видео «${f.name}» (${(f.size / 1024 / 1024).toFixed(0)} МБ) не удалось сжать даже на сервере: ${ev && ev.message ? ev.message : ev}. Файл пропущен: сократите ролик или понизьте качество исходника.`);
+                continue;
+              }
+            }
+            alert(`Видео «${f.name}» даже после сжатия весит ${(chosen.size / 1024 / 1024).toFixed(0)} МБ — больше лимита хранилища (~50 МБ). Файл пропущен: сократите ролик или понизьте качество исходника.`);
+            continue;
+          }
+          prepared.push(chosen);
+          continue;
+        }
+        prepared.push(f);
+      }
+      if (useServer) {
+        const fd = new FormData();
+        prepared.forEach(f => fd.append('files', f));
+        const res = await fetch(`${API_URL}/api/crm/contacts/${ctId}/files?token=${token}`, { method: 'POST', body: fd });
+        const rawText = await res.text().catch(() => '');
+        let data = {};
+        try { data = JSON.parse(rawText); } catch (e) { data = {}; }
+        if (!res.ok) throw new Error(data.error || (rawText && rawText.length < 300 ? rawText : `HTTP ${res.status}`));
+        setContacts(prev => (prev || []).map(c => String(c.id) === String(ctId) ? data.contact : c));
+      } else {
+        const items = await Promise.all(prepared.map(f => new Promise((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve({ url: r.result, kind: fileMediaKind(f), name: f.name || '', ts: Date.now(), actor: currentUser });
+          r.onerror = () => reject(new Error('read error'));
+          r.readAsDataURL(f);
+        })));
+        setContacts(prev => (prev || []).map(c => String(c.id) === String(ctId) ? { ...c, attachments: [...(c.attachments || []), ...items] } : c));
+      }
+    } catch (e) {
+      alert('Не загрузился файл: ' + e.message);
+    } finally {
+      setPhotoBusy(null);
+    }
+  };
+  const removeContactFile = async (ctId, url) => {
+    if (!window.confirm('Удалить этот файл?')) return;
+    if (useServer) {
+      try {
+        const r = await crmApi(`/api/crm/contacts/${ctId}/files`, { method: 'DELETE', body: JSON.stringify({ url }) });
+        setContacts(prev => (prev || []).map(c => String(c.id) === String(ctId) ? r.contact : c));
+      } catch (e) { alert('Не удалилось на сервере: ' + e.message); }
+      return;
+    }
+    setContacts(prev => (prev || []).map(c => String(c.id) === String(ctId) ? { ...c, attachments: (c.attachments || []).filter(u => mediaOf(u).url !== url) } : c));
+  };
+  // Блок «📎 Файлы» в карточке контакта (v38): фото/видео/аудио/текст/PDF, attachments в crm_contacts (миграция v24)
+  const renderContactAttachments = (ct) => {
+    const items = ct.attachments || [];
+    const busy = photoBusy === `ct_${ct.id}`;
+    return (
+      <div style={{ marginTop: 10 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#6e6e73', marginBottom: 6 }}>📎 Файлы — фото · видео · аудио · текст · PDF ({items.length})</div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {items.map((entry, i) => renderMediaThumb(entry, i, () => removeContactFile(ct.id, mediaOf(entry).url)))}
+          <label title="Добавить фото, видео, аудио, текст или PDF" style={{ width: 64, height: 64, borderRadius: 8, border: '1px dashed #c7c7cc', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: busy ? 'wait' : 'pointer', fontSize: 20, color: '#8e8e93', background: '#f5f5f7' }}>
+            {busy ? '⏳' : '📎'}
+            <input type="file" accept="image/*,video/*,audio/*,application/pdf,text/*,.pdf,.txt,.md,.csv" multiple disabled={busy} style={{ display: 'none' }} onChange={(e) => { addContactFiles(ct.id, e.target.files); e.target.value = ''; }} />
           </label>
         </div>
       </div>
@@ -1725,6 +1847,7 @@ function CrmTab({ user, token }) {
                     {ct.email ? <span>✉️ {ct.email}</span> : null}
                     {ct.comment ? <span style={{ fontStyle: 'italic' }}>💬 {ct.comment}</span> : null}
                   </div>
+                  {renderContactAttachments(ct)}
                   <div style={{ display: 'flex', gap: 6, marginTop: 10, justifyContent: 'flex-end' }}>
                     <button onClick={() => openContactModal(ct)} style={stBtnGhost}>✎</button>
                     <button onClick={() => removeContact(ct)} style={{ ...stBtnGhost, color: '#e74c3c' }}>🗑</button>
@@ -1867,6 +1990,7 @@ function CrmTab({ user, token }) {
                 <button onClick={() => openTaskModal(null, '', ct.counterpartyId || '')} style={stBtnGhost}>＋ Задача</button>
                 <button onClick={() => { setViewContactId(null); removeContact(ct); }} style={{ ...stBtnGhost, color: '#e74c3c' }}>🗑 Удалить</button>
               </div>
+              {renderContactAttachments(ct)}
               <div style={{ fontSize: 13, fontWeight: 700, color: '#6e6e73' }}>📋 Задачи контакта ({ctTasks.length})</div>
               {ctTasks.length === 0 ? <div style={{ fontSize: 13, color: '#8e8e93', marginTop: 4 }}>Задач нет.</div> : ctTasks.map(t => {
                 const m = CRM_STATUS_META[t.status] || CRM_STATUS_META.open;

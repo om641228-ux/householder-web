@@ -3136,6 +3136,7 @@ const crmCpToApi = (r) => r && ({
 const crmContactToApi = (r) => r && ({
   id: r.id, counterpartyId: r.counterparty_id || '', name: r.name, position: r.position || '',
   phone: r.phone || '', email: r.email || '', comment: r.comment || '',
+  attachments: Array.isArray(r.attachments) ? r.attachments : [],
   createdAt: r.created_at ? Date.parse(r.created_at) : null
 });
 const crmTaskToApi = (r) => r && ({
@@ -3234,16 +3235,17 @@ app.post('/api/crm/counterparties/:id/files', requireAuth, crmMediaMulter('files
     for (const f of files) {
       try {
         const mt = f.mimetype || '';
-        const mkind = /^image\//.test(mt) ? 'photo' : /^video\//.test(mt) ? 'video' : /^audio\//.test(mt) ? 'audio' : null;
+        const mkind = /^image\//.test(mt) ? 'photo' : /^video\//.test(mt) ? 'video' : /^audio\//.test(mt) ? 'audio' : (mt === 'application/pdf' || /^text\//.test(mt) || /\.(pdf|txt|md|csv)$/i.test(f.originalname || '')) ? 'doc' : null;
         if (!mkind) continue;
         let buf = f.buffer, ct = mt;
         if (mkind === 'photo') { buf = await processImage(f.buffer); ct = 'image/jpeg'; }
         if (mkind === 'video' && f.size > 48 * 1024 * 1024) { buf = await compressVideoBuffer(f.buffer); ct = 'video/mp4'; }
+        if (mkind === 'doc' && !ct) ct = /\.pdf$/i.test(f.originalname || '') ? 'application/pdf' : 'text/plain';
         const url = await uploadToStorage(buf, f.originalname || 'file', 'crm_cp', ct);
         items.push({ url, kind: mkind, name: f.originalname || '', ts: Date.now(), actor: userName });
       } catch (e) { console.error('CRM cp file skip:', e.message); lastErr = e.message; }
     }
-    if (!items.length) return res.status(400).json({ error: 'Не удалось загрузить ни одного файла (нужны фото, видео или аудио)' + (lastErr ? `. Причина: ${lastErr}` : '') });
+    if (!items.length) return res.status(400).json({ error: 'Не удалось загрузить ни одного файла (нужны фото, видео, аудио, текст или PDF)' + (lastErr ? `. Причина: ${lastErr}` : '') });
     const cur = Array.isArray(cp.attachments) ? cp.attachments : [];
     const { data, error } = await supabaseAdmin.from('crm_counterparties')
       .update({ attachments: [...cur, ...items], updated_at: new Date().toISOString() })
@@ -3270,6 +3272,61 @@ app.delete('/api/crm/counterparties/:id/files', requireAuth, async (req, res) =>
       .eq('id', cp.id).select().single();
     if (error) throw error;
     res.json({ counterparty: crmCpToApi(data) });
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: CRM_MIGRATION_HINT });
+  }
+});
+
+// POST /api/crm/contacts/:id/files — файлы контакта (v38): фото/видео/аудио/текст/PDF, поле files
+app.post('/api/crm/contacts/:id/files', requireAuth, crmMediaMulter('files'), async (req, res) => {
+  try {
+    const { data: ct, error: e0 } = await supabaseAdmin.from('crm_contacts').select('*').eq('id', req.params.id).single();
+    if (e0 || !ct) return res.status(404).json({ error: 'Контакт не найден' });
+    const userName = req.user.name || req.user.id;
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ error: 'Нет файлов: передайте поле files (multipart/form-data)' });
+    const items = [];
+    let lastErr = null;
+    for (const f of files) {
+      try {
+        const mt = f.mimetype || '';
+        const mkind = /^image\//.test(mt) ? 'photo' : /^video\//.test(mt) ? 'video' : /^audio\//.test(mt) ? 'audio' : (mt === 'application/pdf' || /^text\//.test(mt) || /\.(pdf|txt|md|csv)$/i.test(f.originalname || '')) ? 'doc' : null;
+        if (!mkind) continue;
+        let buf = f.buffer, ct2 = mt;
+        if (mkind === 'photo') { buf = await processImage(f.buffer); ct2 = 'image/jpeg'; }
+        if (mkind === 'video' && f.size > 48 * 1024 * 1024) { buf = await compressVideoBuffer(f.buffer); ct2 = 'video/mp4'; }
+        if (mkind === 'doc' && !ct2) ct2 = /\.pdf$/i.test(f.originalname || '') ? 'application/pdf' : 'text/plain';
+        const url = await uploadToStorage(buf, f.originalname || 'file', 'crm_contacts', ct2);
+        items.push({ url, kind: mkind, name: f.originalname || '', ts: Date.now(), actor: userName });
+      } catch (e) { console.error('CRM contact file skip:', e.message); lastErr = e.message; }
+    }
+    if (!items.length) return res.status(400).json({ error: 'Не удалось загрузить ни одного файла (нужны фото, видео, аудио, текст или PDF)' + (lastErr ? `. Причина: ${lastErr}` : '') });
+    const cur = Array.isArray(ct.attachments) ? ct.attachments : [];
+    const { data, error } = await supabaseAdmin.from('crm_contacts')
+      .update({ attachments: [...cur, ...items], updated_at: new Date().toISOString() })
+      .eq('id', ct.id).select().single();
+    if (error) throw error;
+    res.json({ contact: crmContactToApi(data) });
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: CRM_MIGRATION_HINT });
+  }
+});
+
+// DELETE /api/crm/contacts/:id/files — body {url}
+app.delete('/api/crm/contacts/:id/files', requireAuth, async (req, res) => {
+  try {
+    const url = req.body && req.body.url;
+    if (!url) return res.status(400).json({ error: 'Передайте url файла' });
+    const { data: ct, error: e0 } = await supabaseAdmin.from('crm_contacts').select('*').eq('id', req.params.id).single();
+    if (e0 || !ct) return res.status(404).json({ error: 'Контакт не найден' });
+    const cur = Array.isArray(ct.attachments) ? ct.attachments : [];
+    const next = cur.filter(u => (typeof u === 'string' ? u : u && u.url) !== url);
+    if (next.length === cur.length) return res.status(404).json({ error: 'Файл не найден у контакта' });
+    const { data, error } = await supabaseAdmin.from('crm_contacts')
+      .update({ attachments: next, updated_at: new Date().toISOString() })
+      .eq('id', ct.id).select().single();
+    if (error) throw error;
+    res.json({ contact: crmContactToApi(data) });
   } catch (e) {
     res.status(500).json({ error: e.message, hint: CRM_MIGRATION_HINT });
   }
@@ -3460,16 +3517,17 @@ app.post('/api/crm/tasks/:id/photos', requireAuth, crmMediaMulter('photos'), asy
     for (const f of files) {
       try {
         const mt = f.mimetype || '';
-        const mkind = /^image\//.test(mt) ? 'photo' : /^video\//.test(mt) ? 'video' : /^audio\//.test(mt) ? 'audio' : null;
+        const mkind = /^image\//.test(mt) ? 'photo' : /^video\//.test(mt) ? 'video' : /^audio\//.test(mt) ? 'audio' : (mt === 'application/pdf' || /^text\//.test(mt) || /\.(pdf|txt|md|csv)$/i.test(f.originalname || '')) ? 'doc' : null;
         if (!mkind) continue;
         let buf = f.buffer, ct = mt;
         if (mkind === 'photo') { buf = await processImage(f.buffer); ct = 'image/jpeg'; }
         if (mkind === 'video' && f.size > 48 * 1024 * 1024) { buf = await compressVideoBuffer(f.buffer); ct = 'video/mp4'; }
+        if (mkind === 'doc' && !ct) ct = /\.pdf$/i.test(f.originalname || '') ? 'application/pdf' : 'text/plain';
         const url = await uploadToStorage(buf, `${kind}_${f.originalname || 'file'}`, 'crm', ct);
         items.push({ url, kind: mkind, name: f.originalname || '', ts: Date.now(), actor: userName });
       } catch (e) { console.error('CRM media skip:', e.message); lastErr = e.message; }
     }
-    if (!items.length) return res.status(400).json({ error: 'Не удалось загрузить ни одного файла (нужны фото, видео или аудио)' + (lastErr ? `. Причина: ${lastErr}` : '') });
+    if (!items.length) return res.status(400).json({ error: 'Не удалось загрузить ни одного файла (нужны фото, видео, аудио, текст или PDF)' + (lastErr ? `. Причина: ${lastErr}` : '') });
     const nP = items.filter(u => u.kind === 'photo').length;
     const nV = items.filter(u => u.kind === 'video').length;
     const nA = items.filter(u => u.kind === 'audio').length;
@@ -3477,6 +3535,8 @@ app.post('/api/crm/tasks/:id/photos', requireAuth, crmMediaMulter('photos'), asy
     if (nP) parts.push(`фото +${nP}`);
     if (nV) parts.push(`видео +${nV}`);
     if (nA) parts.push(`аудио +${nA}`);
+    const nD = items.filter(u => u.kind === 'doc').length;
+    if (nD) parts.push(`документы +${nD}`);
     const cur = Array.isArray(t[col]) ? t[col] : [];
     const patch = {
       [col]: [...cur, ...items],
