@@ -624,7 +624,7 @@ function HighlightText({ text, query, style = {} }) {
 
 const ReceiptScanner = registerPlugin('ReceiptScannerPlugin');
 
-// ========== CRM (вкладка «🤝 CRM», v33): календарь с задачами, контрагенты, справочник ==========
+// ========== CRM (вкладка «🤝 CRM», v34): календарь с задачами, контрагенты, справочник ==========
 // контактов, таймлайн исполнения заданий, закрытие задания исполнителем с подтверждением постановщика.
 // Цикл задачи: «В работе» → исполнитель отмечает «✅ Выполнена» → «На подтверждении» →
 // постановщик «👍 Подтвердить закрытие» («Закрыта») или «↩ На доработку» (снова «В работе»).
@@ -736,6 +736,11 @@ function CrmTab({ user, token }) {
   const [crmError, setCrmError] = useState(null);
   const [crmRetry, setCrmRetry] = useState(0); // увеличение = перезагрузить CRM с сервера
 
+  // Карточки-просмотры (v34): открываются по клику на задачу/контрагента/контакт из любого места
+  const [viewTaskId, setViewTaskId] = useState(null);
+  const [viewCpId, setViewCpId] = useState(null);
+  const [viewContactId, setViewContactId] = useState(null);
+
   // ---- Загрузка CRM (v33): с сервера; при недоступности — локальный режим (localStorage) ----
   const crmApi = useCallback(async (path, options) => {
     const res = await fetch(`${API_URL}${path}${path.includes('?') ? '&' : '?'}token=${token}`,
@@ -807,8 +812,9 @@ function CrmTab({ user, token }) {
 
   const tasksL = tasks || [], cpsL = cps || [], contactsL = contacts || [];
   const todayIso = crmTodayIso();
-  const cpById = (id) => cpsL.find(c => c.id === id) || null;
-  const contactById = (id) => contactsL.find(c => c.id === id) || null;
+  // id с сервера — числа, из <select> — строки: сравниваем как строки, чтобы не терять связи
+  const cpById = (id) => (id === '' || id === null || id === undefined) ? null : (cpsL.find(c => String(c.id) === String(id)) || null);
+  const contactById = (id) => (id === '' || id === null || id === undefined) ? null : (contactsL.find(c => String(c.id) === String(id)) || null);
   const isOverdue = (t) => t.status !== 'closed' && !!t.dueDate && t.dueDate < todayIso;
 
   // ---- стили (apple-theme: пилюльные кнопки, мягкие карточки, #0071e3) ----
@@ -822,17 +828,18 @@ function CrmTab({ user, token }) {
   const stModal = { background: '#fff', borderRadius: 14, padding: '18px 20px', width: '100%', maxWidth: 520, maxHeight: '88vh', overflow: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,0.25)' };
   const stField = { marginBottom: 10 };
   const stLabel = { display: 'block', fontSize: 12, fontWeight: 600, color: '#6e6e73', marginBottom: 4 };
+  const stLink = { color: '#0071e3', cursor: 'pointer', fontWeight: 600 };
 
   // ---- операции с задачами (каждая пишет событие в таймлайн) ----
   const logEvent = (t, action, note) => [...(t.timeline || []), { ts: Date.now(), actor: currentUser, action, note: note || '' }];
 
-  const openTaskModal = (task, presetDate) => {
+  const openTaskModal = (task, presetDate, presetCpId) => {
     if (task) {
       setTaskModal({ id: task.id });
       setTaskForm({ title: task.title, description: task.description || '', counterpartyId: task.counterpartyId || '', contactId: task.contactId || '', assignee: task.assignee || '', dueDate: task.dueDate || '', priority: task.priority || 'normal' });
     } else {
       setTaskModal({});
-      setTaskForm({ title: '', description: '', counterpartyId: '', contactId: '', assignee: '', dueDate: presetDate || todayIso, priority: 'normal' });
+      setTaskForm({ title: '', description: '', counterpartyId: presetCpId || '', contactId: '', assignee: '', dueDate: presetDate || todayIso, priority: 'normal' });
     }
   };
   const saveTask = async () => {
@@ -1006,14 +1013,14 @@ function CrmTab({ user, token }) {
   }).sort((a, b) => String(a.dueDate || '9999').localeCompare(String(b.dueDate || '9999')));
 
   const feed = tasksL
-    .flatMap(t => (t.timeline || []).map(ev => ({ ...ev, taskTitle: t.title })))
+    .flatMap(t => (t.timeline || []).map(ev => ({ ...ev, taskTitle: t.title, taskId: t.id })))
     .sort((a, b) => b.ts - a.ts)
     .slice(0, 30);
 
   const filteredCps = cpsL.filter(c => !cpSearch ||
     [c.name, c.phone, c.email, c.comment].filter(Boolean).join(' ').toLowerCase().includes(cpSearch.toLowerCase()));
   const filteredContacts = contactsL.filter(c => {
-    if (contactCpFilter && c.counterpartyId !== contactCpFilter) return false;
+    if (contactCpFilter && String(c.counterpartyId) !== String(contactCpFilter)) return false;
     if (contactSearch) {
       const hay = [c.name, c.position, c.phone, c.email, c.comment, (cpById(c.counterpartyId) || {}).name].filter(Boolean).join(' ').toLowerCase();
       if (!hay.includes(contactSearch.toLowerCase())) return false;
@@ -1045,7 +1052,7 @@ function CrmTab({ user, token }) {
             <span style={{ position: 'absolute', left: -21, top: 7, width: 9, height: 9, borderRadius: '50%', background: meta.color, border: '2px solid #fff', boxShadow: `0 0 0 1px ${meta.color}` }} />
             <div style={{ fontSize: 13 }}>
               <strong>{ev.actor}</strong> {meta.label}
-              {ev.taskTitle ? <span style={{ color: '#0071e3' }}> — {ev.taskTitle}</span> : null}
+              {ev.taskTitle ? <span style={{ color: '#0071e3', cursor: 'pointer', fontWeight: 600 }} title="Открыть карточку задачи" onClick={() => setViewTaskId(ev.taskId)}> — {ev.taskTitle}</span> : null}
               <span style={{ color: '#8e8e93' }}> · {crmFmtTs(ev.ts)}</span>
             </div>
             {ev.note ? <div style={{ fontSize: 13, color: '#555', fontStyle: 'italic', marginTop: 2 }}>«{ev.note}»</div> : null}
@@ -1068,7 +1075,7 @@ function CrmTab({ user, token }) {
       <div key={t.id} style={{ ...stCard, marginBottom: 10, borderLeft: `4px solid ${meta.color}`, background: over ? '#fff9f8' : '#fff' }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
           <div style={{ flex: '1 1 240px' }}>
-            <div style={{ fontWeight: 700, fontSize: 15, textDecoration: t.status === 'closed' ? 'line-through' : 'none', color: t.status === 'closed' ? '#6e6e73' : '#1d1d1f' }}>{t.title}</div>
+            <div onClick={() => setViewTaskId(t.id)} title="Открыть карточку задачи" style={{ fontWeight: 700, fontSize: 15, cursor: 'pointer', textDecoration: t.status === 'closed' ? 'line-through' : 'none', color: t.status === 'closed' ? '#6e6e73' : '#1d1d1f' }}>{t.title}</div>
             {t.description ? <div style={{ fontSize: 13, color: '#555', marginTop: 3, whiteSpace: 'pre-wrap' }}>{t.description}</div> : null}
           </div>
           <span style={stBadge(meta.color, meta.bg)}>{meta.label}</span>
@@ -1079,8 +1086,8 @@ function CrmTab({ user, token }) {
           <span>📅 Срок: <strong>{crmFmtDate(t.dueDate)}</strong></span>
           <span>👤 Исполнитель: <strong>{t.assignee || 'любой'}</strong></span>
           <span>✍️ Постановщик: {t.createdBy}</span>
-          {cp ? <span>🏢 {cp.name}</span> : null}
-          {ct ? <span>📇 {ct.name}{ct.position ? ` (${ct.position})` : ''}</span> : null}
+          {cp ? <span>🏢 <span style={stLink} title="Открыть карточку контрагента" onClick={() => setViewCpId(cp.id)}>{cp.name}</span></span> : null}
+          {ct ? <span>📇 <span style={stLink} title="Открыть карточку контакта" onClick={() => setViewContactId(ct.id)}>{ct.name}</span>{ct.position ? ` (${ct.position})` : ''}</span> : null}
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10, alignItems: 'center' }}>
           {t.status === 'open' && iAmAssignee && (
@@ -1179,7 +1186,7 @@ function CrmTab({ user, token }) {
                     {dayTasks.slice(0, 3).map(t => {
                       const m = CRM_STATUS_META[t.status] || CRM_STATUS_META.open;
                       return (
-                        <div key={t.id} title={t.title} style={{ fontSize: 10, marginTop: 2, padding: '1px 4px', borderRadius: 4, background: m.bg, color: m.color, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', borderLeft: isOverdue(t) ? '2px solid #e74c3c' : 'none' }}>{t.title}</div>
+                        <div key={t.id} title={`Открыть задачу: ${t.title}`} onClick={(e) => { e.stopPropagation(); setSelectedDate(iso); setViewTaskId(t.id); }} style={{ fontSize: 10, marginTop: 2, padding: '1px 4px', borderRadius: 4, background: m.bg, color: m.color, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', borderLeft: isOverdue(t) ? '2px solid #e74c3c' : 'none', cursor: 'pointer' }}>{t.title}</div>
                       );
                     })}
                     {dayTasks.length > 3 ? <div style={{ fontSize: 10, color: '#8e8e93', marginTop: 1 }}>+{dayTasks.length - 3} ещё</div> : null}
@@ -1238,7 +1245,7 @@ function CrmTab({ user, token }) {
               return (
                 <div key={cp.id} style={stCard}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <strong style={{ fontSize: 15, flex: 1 }}>{cp.name}</strong>
+                    <strong style={{ fontSize: 15, flex: 1, cursor: 'pointer' }} title="Открыть карточку контрагента" onClick={() => setViewCpId(cp.id)}>{cp.name}</strong>
                     <span style={stBadge('#1d1d1f', '#f5f5f7')}>{CRM_CP_TYPE_LABELS[cp.type] || CRM_CP_TYPE_LABELS.other}</span>
                   </div>
                   <div style={{ fontSize: 13, color: '#555', marginTop: 6, display: 'grid', gap: 2 }}>
@@ -1249,11 +1256,11 @@ function CrmTab({ user, token }) {
                   </div>
                   {cpContacts.length > 0 && (
                     <div style={{ marginTop: 8, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                      {cpContacts.map(c => <span key={c.id} style={stBadge('#0071e3', '#e8f0fe')}>📇 {c.name}</span>)}
+                      {cpContacts.map(c => <span key={c.id} title="Открыть карточку контакта" onClick={() => setViewContactId(c.id)} style={{ ...stBadge('#0071e3', '#e8f0fe'), cursor: 'pointer' }}>📇 {c.name}</span>)}
                     </div>
                   )}
                   <div style={{ display: 'flex', gap: 6, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                    {cpOpenTasks > 0 ? <span style={{ fontSize: 12, color: '#e67e22', fontWeight: 700 }}>📋 открытых задач: {cpOpenTasks}</span> : null}
+                    {cpOpenTasks > 0 ? <span title="Показать задачи контрагента" onClick={() => { setTaskSearch(cp.name); setTaskFilter('all'); setSection('tasks'); }} style={{ fontSize: 12, color: '#e67e22', fontWeight: 700, cursor: 'pointer' }}>📋 открытых задач: {cpOpenTasks}</span> : null}
                     <button onClick={() => openContactModal(null, cp.id)} style={{ ...stBtnGhost, marginLeft: 'auto' }}>＋ Контакт</button>
                     <button onClick={() => openCpModal(cp)} style={stBtnGhost}>✎</button>
                     <button onClick={() => removeCp(cp)} style={{ ...stBtnGhost, color: '#e74c3c' }}>🗑</button>
@@ -1283,11 +1290,11 @@ function CrmTab({ user, token }) {
               return (
                 <div key={ct.id} style={stCard}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <strong style={{ fontSize: 15, flex: 1 }}>{ct.name}</strong>
+                    <strong style={{ fontSize: 15, flex: 1, cursor: 'pointer' }} title="Открыть карточку контакта" onClick={() => setViewContactId(ct.id)}>{ct.name}</strong>
                     {ct.position ? <span style={stBadge('#6e6e73', '#f5f5f7')}>{ct.position}</span> : null}
                   </div>
                   <div style={{ fontSize: 13, color: '#555', marginTop: 6, display: 'grid', gap: 2 }}>
-                    {cp ? <span>🏢 {cp.name}</span> : <span style={{ color: '#8e8e93' }}>🏢 без контрагента</span>}
+                    {cp ? <span>🏢 <span style={stLink} title="Открыть карточку контрагента" onClick={() => setViewCpId(cp.id)}>{cp.name}</span></span> : <span style={{ color: '#8e8e93' }}>🏢 без контрагента</span>}
                     {ct.phone ? <span>📞 {ct.phone}</span> : null}
                     {ct.email ? <span>✉️ {ct.email}</span> : null}
                     {ct.comment ? <span style={{ fontStyle: 'italic' }}>💬 {ct.comment}</span> : null}
@@ -1305,6 +1312,148 @@ function CrmTab({ user, token }) {
       )}
 
       </>)}
+
+      {/* ======== КАРТОЧКА ЗАДАЧИ (просмотр по клику из календаря/списка/ленты, v34) ======== */}
+      {viewTaskId !== null && (() => {
+        const t = tasksL.find(x => String(x.id) === String(viewTaskId));
+        if (!t) return null;
+        const meta = CRM_STATUS_META[t.status] || CRM_STATUS_META.open;
+        const pr = CRM_PRIORITY_META[t.priority] || CRM_PRIORITY_META.normal;
+        const cp = cpById(t.counterpartyId);
+        const ct = contactById(t.contactId);
+        const over = isOverdue(t);
+        const iAmAssignee = !t.assignee || t.assignee === currentUser;
+        const iAmCreator = t.createdBy === currentUser;
+        return (
+          <div style={stOverlay} onClick={() => setViewTaskId(null)}>
+            <div style={{ ...stModal, borderLeft: `5px solid ${meta.color}` }} onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <h3 style={{ margin: 0, flex: 1, textDecoration: t.status === 'closed' ? 'line-through' : 'none' }}>{t.title}</h3>
+                <button onClick={() => setViewTaskId(null)} style={{ ...stBtnGhost, border: 'none', fontSize: 16 }}>✕</button>
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '8px 0' }}>
+                <span style={stBadge(meta.color, meta.bg)}>{meta.label}</span>
+                <span style={stBadge(pr.color, '#f5f5f7')}>{pr.label}</span>
+                {over ? <span style={stBadge('#e74c3c', '#fdecea')}>⏰ Просрочена</span> : null}
+              </div>
+              {t.description ? <div style={{ fontSize: 14, color: '#555', whiteSpace: 'pre-wrap', marginBottom: 8 }}>{t.description}</div> : null}
+              <div style={{ display: 'grid', gap: 4, fontSize: 13, color: '#555', marginBottom: 10 }}>
+                <span>📅 Срок: <strong>{crmFmtDate(t.dueDate)}</strong></span>
+                <span>👤 Исполнитель: <strong>{t.assignee || 'любой'}</strong></span>
+                <span>✍️ Постановщик: {t.createdBy}</span>
+                {cp ? <span>🏢 Контрагент: <span style={stLink} title="Открыть карточку контрагента" onClick={() => setViewCpId(cp.id)}>{cp.name}</span></span> : null}
+                {ct ? <span>📇 Контакт: <span style={stLink} title="Открыть карточку контакта" onClick={() => setViewContactId(ct.id)}>{ct.name}</span>{ct.position ? ` (${ct.position})` : ''}{ct.phone ? ` · ${ct.phone}` : ''}</span> : null}
+                {t.createdAt ? <span>🗓 Создана: {crmFmtTs(t.createdAt)}</span> : null}
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                {t.status === 'open' && iAmAssignee && (
+                  <button onClick={() => openAction('done', t.id)} style={{ ...stBtn, background: '#27ae60', padding: '6px 12px', fontSize: 12 }}>✅ Выполнена</button>
+                )}
+                {t.status === 'pending_confirm' && iAmCreator && (
+                  <>
+                    <button onClick={() => openAction('confirm', t.id)} style={{ ...stBtn, background: '#27ae60', padding: '6px 12px', fontSize: 12 }}>👍 Подтвердить закрытие</button>
+                    <button onClick={() => openAction('return', t.id)} style={{ ...stBtnGhost, color: '#e74c3c', borderColor: '#e74c3c' }}>↩ На доработку</button>
+                  </>
+                )}
+                {t.status !== 'closed' && <button onClick={() => openAction('comment', t.id)} style={stBtnGhost}>💬 Комментарий</button>}
+                {(iAmCreator || iAmAssignee) && t.status !== 'closed' && <button onClick={() => openTaskModal(t)} style={stBtnGhost}>✎ Изменить</button>}
+                {iAmCreator && <button onClick={() => { setViewTaskId(null); removeTask(t); }} style={{ ...stBtnGhost, color: '#e74c3c' }}>🗑 Удалить</button>}
+              </div>
+              <div style={{ marginTop: 10, fontSize: 13, fontWeight: 700, color: '#6e6e73' }}>🕓 Таймлайн исполнения</div>
+              {renderTimeline(t.timeline)}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ======== КАРТОЧКА КОНТРАГЕНТА (просмотр по клику, v34) ======== */}
+      {viewCpId !== null && (() => {
+        const cp = cpById(viewCpId);
+        if (!cp) return null;
+        const cpContacts = contactsL.filter(c => String(c.counterpartyId) === String(cp.id));
+        const cpTasks = tasksL.filter(t => String(t.counterpartyId) === String(cp.id));
+        return (
+          <div style={stOverlay} onClick={() => setViewCpId(null)}>
+            <div style={stModal} onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <h3 style={{ margin: 0, flex: 1 }}>🏢 {cp.name}</h3>
+                <span style={stBadge('#1d1d1f', '#f5f5f7')}>{CRM_CP_TYPE_LABELS[cp.type] || CRM_CP_TYPE_LABELS.other}</span>
+                <button onClick={() => setViewCpId(null)} style={{ ...stBtnGhost, border: 'none', fontSize: 16 }}>✕</button>
+              </div>
+              <div style={{ fontSize: 13, color: '#555', marginTop: 8, display: 'grid', gap: 3 }}>
+                {cp.phone ? <span>📞 {cp.phone}</span> : null}
+                {cp.email ? <span>✉️ {cp.email}</span> : null}
+                {cp.address ? <span>📍 {cp.address}</span> : null}
+                {cp.comment ? <span style={{ fontStyle: 'italic' }}>💬 {cp.comment}</span> : null}
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '10px 0' }}>
+                <button onClick={() => openCpModal(cp)} style={stBtnGhost}>✎ Изменить</button>
+                <button onClick={() => openContactModal(null, cp.id)} style={stBtnGhost}>＋ Контакт</button>
+                <button onClick={() => openTaskModal(null, '', cp.id)} style={stBtnGhost}>＋ Задача</button>
+                <button onClick={() => { setViewCpId(null); removeCp(cp); }} style={{ ...stBtnGhost, color: '#e74c3c' }}>🗑 Удалить</button>
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#6e6e73', marginTop: 6 }}>📇 Контакты ({cpContacts.length})</div>
+              {cpContacts.length === 0 ? <div style={{ fontSize: 13, color: '#8e8e93', margin: '4px 0 8px' }}>Контактов нет — добавьте кнопкой «＋ Контакт».</div> : (
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', margin: '6px 0 8px' }}>
+                  {cpContacts.map(c => <span key={c.id} title="Открыть карточку контакта" onClick={() => setViewContactId(c.id)} style={{ ...stBadge('#0071e3', '#e8f0fe'), cursor: 'pointer', fontSize: 12, padding: '4px 10px' }}>📇 {c.name}{c.position ? ` · ${c.position}` : ''}</span>)}
+                </div>
+              )}
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#6e6e73' }}>📋 Задачи ({cpTasks.length})</div>
+              {cpTasks.length === 0 ? <div style={{ fontSize: 13, color: '#8e8e93', marginTop: 4 }}>Задач нет — добавьте кнопкой «＋ Задача».</div> : cpTasks.map(t => {
+                const m = CRM_STATUS_META[t.status] || CRM_STATUS_META.open;
+                return (
+                  <div key={t.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '5px 0', borderBottom: '1px solid #f0f0f0', fontSize: 13 }}>
+                    <span style={stBadge(m.color, m.bg)}>{m.label}</span>
+                    <span style={{ ...stLink, flex: 1 }} title="Открыть карточку задачи" onClick={() => setViewTaskId(t.id)}>{t.title}</span>
+                    <span style={{ color: '#8e8e93', fontSize: 12 }}>{crmFmtDate(t.dueDate)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ======== КАРТОЧКА КОНТАКТА (просмотр по клику, v34) ======== */}
+      {viewContactId !== null && (() => {
+        const ct = contactById(viewContactId);
+        if (!ct) return null;
+        const cp = cpById(ct.counterpartyId);
+        const ctTasks = tasksL.filter(t => String(t.contactId) === String(ct.id));
+        return (
+          <div style={stOverlay} onClick={() => setViewContactId(null)}>
+            <div style={stModal} onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <h3 style={{ margin: 0, flex: 1 }}>📇 {ct.name}</h3>
+                {ct.position ? <span style={stBadge('#6e6e73', '#f5f5f7')}>{ct.position}</span> : null}
+                <button onClick={() => setViewContactId(null)} style={{ ...stBtnGhost, border: 'none', fontSize: 16 }}>✕</button>
+              </div>
+              <div style={{ fontSize: 13, color: '#555', marginTop: 8, display: 'grid', gap: 3 }}>
+                {cp ? <span>🏢 <span style={stLink} title="Открыть карточку контрагента" onClick={() => setViewCpId(cp.id)}>{cp.name}</span></span> : <span style={{ color: '#8e8e93' }}>🏢 без контрагента</span>}
+                {ct.phone ? <span>📞 {ct.phone}</span> : null}
+                {ct.email ? <span>✉️ {ct.email}</span> : null}
+                {ct.comment ? <span style={{ fontStyle: 'italic' }}>💬 {ct.comment}</span> : null}
+              </div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '10px 0' }}>
+                <button onClick={() => openContactModal(ct)} style={stBtnGhost}>✎ Изменить</button>
+                <button onClick={() => openTaskModal(null, '', ct.counterpartyId || '')} style={stBtnGhost}>＋ Задача</button>
+                <button onClick={() => { setViewContactId(null); removeContact(ct); }} style={{ ...stBtnGhost, color: '#e74c3c' }}>🗑 Удалить</button>
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#6e6e73' }}>📋 Задачи контакта ({ctTasks.length})</div>
+              {ctTasks.length === 0 ? <div style={{ fontSize: 13, color: '#8e8e93', marginTop: 4 }}>Задач нет.</div> : ctTasks.map(t => {
+                const m = CRM_STATUS_META[t.status] || CRM_STATUS_META.open;
+                return (
+                  <div key={t.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '5px 0', borderBottom: '1px solid #f0f0f0', fontSize: 13 }}>
+                    <span style={stBadge(m.color, m.bg)}>{m.label}</span>
+                    <span style={{ ...stLink, flex: 1 }} title="Открыть карточку задачи" onClick={() => setViewTaskId(t.id)}>{t.title}</span>
+                    <span style={{ color: '#8e8e93', fontSize: 12 }}>{crmFmtDate(t.dueDate)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ======== МОДАЛКА: ЗАДАЧА ======== */}
       {taskModal && (
@@ -1340,13 +1489,15 @@ function CrmTab({ user, token }) {
                   <option value="">— не выбран —</option>
                   {cpsL.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
+                {taskForm.counterpartyId ? <button type="button" onClick={() => setViewCpId(taskForm.counterpartyId)} style={{ ...stBtnGhost, marginTop: 6, padding: '4px 10px' }}>👁 Карточка контрагента</button> : null}
               </div>
               <div style={{ ...stField, flex: '1 1 180px' }}>
                 <label style={stLabel}>Контакт</label>
                 <select value={taskForm.contactId || ''} onChange={e => setTaskForm(f => ({ ...f, contactId: e.target.value }))} style={stInput}>
                   <option value="">— не выбран —</option>
-                  {contactsL.filter(c => !taskForm.counterpartyId || c.counterpartyId === taskForm.counterpartyId).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  {contactsL.filter(c => !taskForm.counterpartyId || String(c.counterpartyId) === String(taskForm.counterpartyId)).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
+                {taskForm.contactId ? <button type="button" onClick={() => setViewContactId(taskForm.contactId)} style={{ ...stBtnGhost, marginTop: 6, padding: '4px 10px' }}>👁 Карточка контакта</button> : null}
               </div>
             </div>
             <div style={stField}>
@@ -1452,7 +1603,7 @@ function CrmTab({ user, token }) {
 
       {/* ======== МОДАЛКА: ДЕЙСТВИЕ СО СТАТУСОМ (закрытие исполнителем / подтверждение / возврат / комментарий) ======== */}
       {actionModal && (() => {
-        const t = tasksL.find(x => x.id === actionModal.taskId);
+        const t = tasksL.find(x => String(x.id) === String(actionModal.taskId));
         if (!t) return null;
         const titles = { done: '✅ Отметить задачу выполненной', confirm: '👍 Подтвердить закрытие задачи', return: '↩ Вернуть задачу на доработку', comment: '💬 Комментарий к задаче' };
         const hints = {
