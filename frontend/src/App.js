@@ -632,8 +632,10 @@ const ReceiptScanner = registerPlugin('ReceiptScannerPlugin');
 // Хранение (v33) — сервер: /api/crm* (Supabase, миграция supabase-migration-v21-crm.sql),
 // CRM общая для всей команды. Если сервер недоступен — автоматический fallback на
 // localStorage (crm_*_v1), как в v32; локальные данные переносятся на сервер один раз.
-// Фотоотчёт (v35): фото «до» и «после» выполнения — photos_before/photos_after в crm_tasks
-// (миграция supabase-migration-v22-crm-photos.sql), API POST/DELETE /api/crm/tasks/:id/photos.
+// Фотоотчёт (v35–v36): медиа «до» и «после» выполнения (фото/видео/аудио) — photos_before/photos_after
+// в crm_tasks (миграция supabase-migration-v22-crm-photos.sql), API POST/DELETE /api/crm/tasks/:id/photos.
+// Файлы контрагента (v36): attachments в crm_counterparties (миграция supabase-migration-v23-crm-cp-files.sql),
+// API POST/DELETE /api/crm/counterparties/:id/files. Запись медиа: {url, kind: photo|video|audio, name, ts, actor}.
 const CRM_LS_TASKS = 'crm_tasks_v1';
 const CRM_LS_CPS = 'crm_counterparties_v1';
 const CRM_LS_CONTACTS = 'crm_contacts_v1';
@@ -745,7 +747,7 @@ function CrmTab({ user, token }) {
   const [viewCpId, setViewCpId] = useState(null);
   const [viewContactId, setViewContactId] = useState(null);
 
-  // Фотоотчёт (v35): photoBusy = `${taskId}_${kind}` пока идёт загрузка; photoViewer — URL фото на весь экран
+  // Медиа (v36): photoBusy = `${taskId}_${kind}` | `cp_${id}` пока идёт загрузка; photoViewer — {url, kind: photo|video|audio}
   const [photoBusy, setPhotoBusy] = useState(null);
   const [photoViewer, setPhotoViewer] = useState(null);
   const [photoZoom, setPhotoZoom] = useState(false); // false — уместить в экран, true — натуральный размер
@@ -916,44 +918,58 @@ function CrmTab({ user, token }) {
     setActionModal(null);
   };
 
-  // ---- фотоотчёт задачи (v35): «до» и «после» выполнения ----
-  // Сервер: multipart POST /api/crm/tasks/:id/photos?kind=..., файл жмём compressImageFile до ~2 МБ.
-  // Локальный fallback: dataURL прямо в задаче (localStorage).
+  // ---- медиаотчёт задачи (v36): фото/видео/аудио «до» и «после» выполнения ----
+  // Сервер: multipart POST /api/crm/tasks/:id/photos?kind=..., фото жмём compressImageFile до ~2 МБ,
+  // видео/аудио отправляем как есть (до 100 МБ). Локальный fallback: dataURL прямо в задаче.
+  // Запись в photosBefore/photosAfter: объект {url, kind: photo|video|audio, name, ts, actor}
+  // (старые записи — просто строка-URL, трактуем как фото).
+  const mediaOf = (entry) => (entry && typeof entry === 'object') ? entry : { url: entry, kind: 'photo', name: '' };
+  const fileMediaKind = (f) => /^image\//.test(f.type || '') ? 'photo' : /^video\//.test(f.type || '') ? 'video' : 'audio';
+  const mediaNote = (kind, items) => {
+    const nP = items.filter(u => u.kind === 'photo').length;
+    const nV = items.filter(u => u.kind === 'video').length;
+    const nA = items.filter(u => u.kind === 'audio').length;
+    const parts = [];
+    if (nP) parts.push(`фото +${nP}`);
+    if (nV) parts.push(`видео +${nV}`);
+    if (nA) parts.push(`аудио +${nA}`);
+    return `Медиа «${kind === 'after' ? 'после' : 'до'}»: ${parts.join(', ')}`;
+  };
   const addTaskPhotos = async (taskId, kind, fileList) => {
-    const files = Array.from(fileList || []).filter(f => /^image\//.test(f.type || ''));
-    if (!files.length) { alert('Выберите файлы изображений (jpg/png)'); return; }
+    const files = Array.from(fileList || []).filter(f => /^(image|video|audio)\//.test(f.type || ''));
+    if (!files.length) { alert('Выберите фото, видео или аудио'); return; }
     setPhotoBusy(`${taskId}_${kind}`);
     try {
-      const compressed = [];
-      for (const f of files) compressed.push(await compressImageFile(f));
+      const prepared = [];
+      for (const f of files) prepared.push(fileMediaKind(f) === 'photo' ? await compressImageFile(f) : f);
       if (useServer) {
         const fd = new FormData();
-        compressed.forEach(f => fd.append('photos', f));
+        prepared.forEach(f => fd.append('photos', f));
         const res = await fetch(`${API_URL}/api/crm/tasks/${taskId}/photos?kind=${kind}&token=${token}`, { method: 'POST', body: fd });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
         setTasks(prev => (prev || []).map(t => String(t.id) === String(taskId) ? data.task : t));
       } else {
-        const dataUrls = await Promise.all(compressed.map(f => new Promise((resolve, reject) => {
+        const items = await Promise.all(prepared.map(f => new Promise((resolve, reject) => {
           const r = new FileReader();
-          r.onload = () => resolve(r.result);
+          r.onload = () => resolve({ url: r.result, kind: fileMediaKind(f), name: f.name || '', ts: Date.now(), actor: currentUser });
           r.onerror = () => reject(new Error('read error'));
           r.readAsDataURL(f);
         })));
         setTasks(prev => (prev || []).map(t => {
           if (String(t.id) !== String(taskId)) return t;
           const field = kind === 'after' ? 'photosAfter' : 'photosBefore';
-          return { ...t, [field]: [...(t[field] || []), ...dataUrls], timeline: logEvent(t, 'photo', `Фото «${kind === 'after' ? 'после' : 'до'}» +${dataUrls.length}`) };
+          return { ...t, [field]: [...(t[field] || []), ...items], timeline: logEvent(t, 'photo', mediaNote(kind, items)) };
         }));
       }
     } catch (e) {
-      alert('Не загрузилось фото: ' + e.message);
+      alert('Не загрузился файл: ' + e.message);
     } finally {
       setPhotoBusy(null);
     }
   };
   const removeTaskPhoto = async (taskId, kind, url) => {
-    if (!window.confirm('Удалить это фото из отчёта?')) return;
+    if (!window.confirm('Удалить этот файл из отчёта?')) return;
     if (useServer) {
       try {
         const r = await crmApi(`/api/crm/tasks/${taskId}/photos`, { method: 'DELETE', body: JSON.stringify({ kind, url }) });
@@ -964,11 +980,33 @@ function CrmTab({ user, token }) {
     setTasks(prev => (prev || []).map(t => {
       if (String(t.id) !== String(taskId)) return t;
       const field = kind === 'after' ? 'photosAfter' : 'photosBefore';
-      return { ...t, [field]: (t[field] || []).filter(u => u !== url), timeline: logEvent(t, 'photo_del', `Фото «${kind === 'after' ? 'после' : 'до'}»`) };
+      return { ...t, [field]: (t[field] || []).filter(u => mediaOf(u).url !== url), timeline: logEvent(t, 'photo_del', `Медиа «${kind === 'after' ? 'после' : 'до'}»`) };
     }));
   };
 
-  // Блок фотоотчёта: две секции «до»/«после», миниатюры + добавление/удаление.
+  // Миниатюра медиа (v36): фото — img (клик → просмотр с зумом), видео — кадр с ▶, аудио — плитка 🎵
+  const renderMediaThumb = (entry, key, onDelete) => {
+    const m = mediaOf(entry);
+    return (
+      <span key={key} style={{ position: 'relative', display: 'inline-block' }}>
+        {m.kind === 'video' ? (
+          <span onClick={() => setPhotoViewer({ url: m.url, kind: 'video', name: m.name || '' })} title={m.name || 'Видео — открыть'} style={{ cursor: 'pointer', display: 'inline-block' }}>
+            <video src={m.url} muted preload="metadata" style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, border: '1px solid #e0e0e0', display: 'block', pointerEvents: 'none' }} />
+            <span style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 22, textShadow: '0 1px 4px rgba(0,0,0,0.8)', pointerEvents: 'none' }}>▶</span>
+          </span>
+        ) : m.kind === 'audio' ? (
+          <span onClick={() => setPhotoViewer({ url: m.url, kind: 'audio', name: m.name || '' })} title={m.name || 'Аудио — прослушать'} style={{ width: 64, height: 64, borderRadius: 8, background: '#f5f5f7', border: '1px solid #e0e0e0', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: 24 }}>🎵</span>
+        ) : (
+          <img src={m.url} alt="" onClick={() => { setPhotoViewer({ url: m.url, kind: 'photo' }); setPhotoZoom(false); }} style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, cursor: 'zoom-in', border: '1px solid #e0e0e0' }} />
+        )}
+        {onDelete && (
+          <button onClick={onDelete} title="Удалить файл" style={{ position: 'absolute', top: -6, right: -6, width: 18, height: 18, borderRadius: '50%', border: 'none', background: '#e74c3c', color: '#fff', fontSize: 10, cursor: 'pointer', lineHeight: '18px', padding: 0, zIndex: 1 }}>✕</button>
+        )}
+      </span>
+    );
+  };
+
+  // Блок медиаотчёта задачи: две секции «до»/«после», миниатюры + добавление/удаление.
   // Редактировать могут постановщик и исполнитель, пока задача не закрыта (как на сервере).
   const renderPhotoReport = (t) => {
     const canEdit = t.status !== 'closed' && (t.createdBy === currentUser || !t.assignee || t.assignee === currentUser);
@@ -979,18 +1017,11 @@ function CrmTab({ user, token }) {
         <div style={{ flex: '1 1 220px' }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: '#6e6e73', marginBottom: 4 }}>{title} ({photos.length})</div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {photos.map((u, i) => (
-              <span key={i} style={{ position: 'relative', display: 'inline-block' }}>
-                <img src={u} alt="" onClick={() => { setPhotoViewer(u); setPhotoZoom(false); }} style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, cursor: 'zoom-in', border: '1px solid #e0e0e0' }} />
-                {canEdit && (
-                  <button onClick={() => removeTaskPhoto(t.id, kind, u)} title="Удалить фото" style={{ position: 'absolute', top: -6, right: -6, width: 18, height: 18, borderRadius: '50%', border: 'none', background: '#e74c3c', color: '#fff', fontSize: 10, cursor: 'pointer', lineHeight: '18px', padding: 0 }}>✕</button>
-                )}
-              </span>
-            ))}
+            {photos.map((entry, i) => renderMediaThumb(entry, i, canEdit ? () => removeTaskPhoto(t.id, kind, mediaOf(entry).url) : null))}
             {canEdit && (
               <label title={hint} style={{ width: 64, height: 64, borderRadius: 8, border: '1px dashed #c7c7cc', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: busy ? 'wait' : 'pointer', fontSize: 20, color: '#8e8e93', background: '#f5f5f7' }}>
                 {busy ? '⏳' : '📷'}
-                <input type="file" accept="image/*" multiple disabled={busy} style={{ display: 'none' }} onChange={(e) => { addTaskPhotos(t.id, kind, e.target.files); e.target.value = ''; }} />
+                <input type="file" accept="image/*,video/*,audio/*" multiple disabled={busy} style={{ display: 'none' }} onChange={(e) => { addTaskPhotos(t.id, kind, e.target.files); e.target.value = ''; }} />
               </label>
             )}
           </div>
@@ -999,10 +1030,70 @@ function CrmTab({ user, token }) {
     };
     return (
       <div style={{ marginTop: 10 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#6e6e73', marginBottom: 6 }}>📷 Фотоотчёт</div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#6e6e73', marginBottom: 6 }}>📷 Фотоотчёт (фото · видео · аудио)</div>
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
-          {block('before', '🕐 До выполнения', 'Добавить фото «до»')}
-          {block('after', '✅ После выполнения', 'Добавить фото «после»')}
+          {block('before', '🕐 До выполнения', 'Добавить фото/видео/аудио «до»')}
+          {block('after', '✅ После выполнения', 'Добавить фото/видео/аудио «после»')}
+        </div>
+      </div>
+    );
+  };
+
+  // ---- файлы контрагента (v36): фото/видео/аудио, attachments в crm_counterparties (миграция v23) ----
+  const addCpFiles = async (cpId, fileList) => {
+    const files = Array.from(fileList || []).filter(f => /^(image|video|audio)\//.test(f.type || ''));
+    if (!files.length) { alert('Выберите фото, видео или аудио'); return; }
+    setPhotoBusy(`cp_${cpId}`);
+    try {
+      const prepared = [];
+      for (const f of files) prepared.push(fileMediaKind(f) === 'photo' ? await compressImageFile(f) : f);
+      if (useServer) {
+        const fd = new FormData();
+        prepared.forEach(f => fd.append('files', f));
+        const res = await fetch(`${API_URL}/api/crm/counterparties/${cpId}/files?token=${token}`, { method: 'POST', body: fd });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        setCps(prev => (prev || []).map(c => String(c.id) === String(cpId) ? data.counterparty : c));
+      } else {
+        const items = await Promise.all(prepared.map(f => new Promise((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve({ url: r.result, kind: fileMediaKind(f), name: f.name || '', ts: Date.now(), actor: currentUser });
+          r.onerror = () => reject(new Error('read error'));
+          r.readAsDataURL(f);
+        })));
+        setCps(prev => (prev || []).map(c => String(c.id) === String(cpId) ? { ...c, attachments: [...(c.attachments || []), ...items] } : c));
+      }
+    } catch (e) {
+      alert('Не загрузился файл: ' + e.message);
+    } finally {
+      setPhotoBusy(null);
+    }
+  };
+  const removeCpFile = async (cpId, url) => {
+    if (!window.confirm('Удалить этот файл?')) return;
+    if (useServer) {
+      try {
+        const r = await crmApi(`/api/crm/counterparties/${cpId}/files`, { method: 'DELETE', body: JSON.stringify({ url }) });
+        setCps(prev => (prev || []).map(c => String(c.id) === String(cpId) ? r.counterparty : c));
+      } catch (e) { alert('Не удалилось на сервере: ' + e.message); }
+      return;
+    }
+    setCps(prev => (prev || []).map(c => String(c.id) === String(cpId) ? { ...c, attachments: (c.attachments || []).filter(u => mediaOf(u).url !== url) } : c));
+  };
+
+  // Блок «📎 Файлы» в карточке контрагента: сетка миниатюр + добавление (любой участник команды)
+  const renderCpAttachments = (cp) => {
+    const items = cp.attachments || [];
+    const busy = photoBusy === `cp_${cp.id}`;
+    return (
+      <div style={{ marginTop: 10 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#6e6e73', marginBottom: 6 }}>📎 Файлы — фото · видео · аудио ({items.length})</div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {items.map((entry, i) => renderMediaThumb(entry, i, () => removeCpFile(cp.id, mediaOf(entry).url)))}
+          <label title="Добавить фото, видео или аудио" style={{ width: 64, height: 64, borderRadius: 8, border: '1px dashed #c7c7cc', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: busy ? 'wait' : 'pointer', fontSize: 20, color: '#8e8e93', background: '#f5f5f7' }}>
+            {busy ? '⏳' : '📎'}
+            <input type="file" accept="image/*,video/*,audio/*" multiple disabled={busy} style={{ display: 'none' }} onChange={(e) => { addCpFiles(cp.id, e.target.files); e.target.value = ''; }} />
+          </label>
         </div>
       </div>
     );
@@ -1496,6 +1587,7 @@ function CrmTab({ user, token }) {
                 <button onClick={() => openTaskModal(null, '', cp.id)} style={stBtnGhost}>＋ Задача</button>
                 <button onClick={() => { setViewCpId(null); removeCp(cp); }} style={{ ...stBtnGhost, color: '#e74c3c' }}>🗑 Удалить</button>
               </div>
+              {renderCpAttachments(cp)}
               <div style={{ fontSize: 13, fontWeight: 700, color: '#6e6e73', marginTop: 6 }}>📇 Контакты ({cpContacts.length})</div>
               {cpContacts.length === 0 ? <div style={{ fontSize: 13, color: '#8e8e93', margin: '4px 0 8px' }}>Контактов нет — добавьте кнопкой «＋ Контакт».</div> : (
                 <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', margin: '6px 0 8px' }}>
@@ -1729,7 +1821,7 @@ function CrmTab({ user, token }) {
                 style={{ ...stInput, minHeight: 70, resize: 'vertical' }} />
               {actionModal.type === 'done' && (
                 <div>
-                  <div style={{ fontSize: 12, color: '#8e8e93', margin: '10px 0 0' }}>Приложите фото результата — прикрепляются к задаче сразу после выбора:</div>
+                  <div style={{ fontSize: 12, color: '#8e8e93', margin: '10px 0 0' }}>Приложите фото/видео/аудио результата — прикрепляются к задаче сразу после выбора:</div>
                   {renderPhotoReport(t)}
                 </div>
               )}
@@ -1744,18 +1836,27 @@ function CrmTab({ user, token }) {
       {/* ======== ПРОСМОТР ФОТО ИЗ ФОТООТЧЁТА (v35) ======== */}
       {photoViewer && (
         <div
-          style={{ ...stOverlay, zIndex: 2600, background: 'rgba(0,0,0,0.9)', alignItems: photoZoom ? 'flex-start' : 'center', justifyContent: photoZoom ? 'flex-start' : 'center', overflow: 'auto', cursor: 'zoom-out' }}
+          style={{ ...stOverlay, zIndex: 2600, background: 'rgba(0,0,0,0.9)', alignItems: photoZoom && photoViewer.kind === 'photo' ? 'flex-start' : 'center', justifyContent: photoZoom && photoViewer.kind === 'photo' ? 'flex-start' : 'center', overflow: 'auto', cursor: 'zoom-out' }}
           onClick={() => { setPhotoViewer(null); setPhotoZoom(false); }}
         >
-          <img
-            src={photoViewer}
-            alt=""
-            onClick={(e) => { e.stopPropagation(); setPhotoZoom(z => !z); }}
-            title={photoZoom ? 'Клик — уместить в экран' : 'Клик — натуральный размер (с прокруткой)'}
-            style={photoZoom
-              ? { maxWidth: 'none', maxHeight: 'none', margin: 'auto', borderRadius: 8, cursor: 'zoom-out', boxShadow: '0 8px 40px rgba(0,0,0,0.7)' }
-              : { maxWidth: '96vw', maxHeight: '92vh', objectFit: 'contain', borderRadius: 12, cursor: 'zoom-in', boxShadow: '0 12px 40px rgba(0,0,0,0.5)' }}
-          />
+          {photoViewer.kind === 'video' ? (
+            <video src={photoViewer.url} controls autoPlay onClick={e => e.stopPropagation()} style={{ maxWidth: '96vw', maxHeight: '92vh', borderRadius: 12, boxShadow: '0 12px 40px rgba(0,0,0,0.5)' }} />
+          ) : photoViewer.kind === 'audio' ? (
+            <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: '18px 22px', display: 'flex', flexDirection: 'column', gap: 8, maxWidth: '92vw', boxShadow: '0 12px 40px rgba(0,0,0,0.5)' }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#1d1d1f' }}>🎵 {photoViewer.name || 'Аудио'}</div>
+              <audio src={photoViewer.url} controls autoPlay style={{ width: 'min(420px, 84vw)' }} />
+            </div>
+          ) : (
+            <img
+              src={photoViewer.url}
+              alt=""
+              onClick={(e) => { e.stopPropagation(); setPhotoZoom(z => !z); }}
+              title={photoZoom ? 'Клик — уместить в экран' : 'Клик — натуральный размер (с прокруткой)'}
+              style={photoZoom
+                ? { maxWidth: 'none', maxHeight: 'none', margin: 'auto', borderRadius: 8, cursor: 'zoom-out', boxShadow: '0 8px 40px rgba(0,0,0,0.7)' }
+                : { maxWidth: '96vw', maxHeight: '92vh', objectFit: 'contain', borderRadius: 12, cursor: 'zoom-in', boxShadow: '0 12px 40px rgba(0,0,0,0.5)' }}
+            />
+          )}
         </div>
       )}
     </div>
