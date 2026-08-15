@@ -3088,6 +3088,21 @@ function App() {
     }
   }, [lastSavedReceipt?.id]);
 
+  // Боковая навигация «год/месяц» (v39): подсветка группы, видимой при прокрутке списка чеков
+  const [activeRailGk, setActiveRailGk] = useState(null);
+  useEffect(() => {
+    if (activeTab !== 'list') return undefined;
+    const onScroll = () => {
+      const headers = document.querySelectorAll('[id^="rg-"]');
+      let cur = null;
+      headers.forEach(h => { if (h.getBoundingClientRect().top <= 130) cur = h.id.slice(3); });
+      setActiveRailGk(prev => (prev === cur ? prev : cur));
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+    return () => window.removeEventListener('scroll', onScroll);
+  }, [activeTab, currentPage, itemsPerPage]);
+
   const rescanScan = async () => {
     const r = lastSavedReceipt;
     setScanResultOpen(false);
@@ -4700,6 +4715,27 @@ ${bodyHtml}
     return isNaN(d.getTime()) ? 'Без даты' : `${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`;
   };
 
+  // Боковая навигация «год/месяц» (v39): группы текущей страницы в порядке списка
+  const dateRailGroups = [];
+  paginatedReceipts.forEach(r => {
+    const gk = groupKeyOf(r);
+    if (dateRailGroups.length && dateRailGroups[dateRailGroups.length - 1].gk === gk) return;
+    const d = new Date(sortDateOf(r));
+    const ok = !isNaN(d.getTime());
+    const yr = ok ? d.getFullYear() : null;
+    dateRailGroups.push({
+      gk,
+      title: groupTitleOf(r),
+      year: yr,
+      month: ok ? d.getMonth() : null,
+      isYearStart: yr !== null && !dateRailGroups.some(g => g.year === yr)
+    });
+  });
+  const scrollToGroup = (gk) => {
+    const el = document.getElementById(`rg-${gk}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   const formatUserName = (u) => {
     if (!u) return 'Guest';
     if (u.name && u.name !== 'admin' && !u.name.startsWith('user')) return u.name;
@@ -5848,6 +5884,21 @@ ${bodyHtml}
             <p className="empty-state">Нет чеков. Загрузите первый!</p>
           ) : (
             <>
+              {dateRailGroups.length >= 2 && (
+                <div style={{ position: 'fixed', right: 6, top: '50%', transform: 'translateY(-50%)', zIndex: 60, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3, background: 'rgba(255,255,255,0.94)', border: '1px solid #e3e6ea', borderRadius: 12, padding: '8px 7px', boxShadow: '0 2px 10px rgba(0,0,0,0.10)', maxHeight: '74vh', overflowY: 'auto' }}>
+                  {dateRailGroups.map(g => {
+                    const active = String(activeRailGk) === String(g.gk);
+                    const label = g.year === null ? '—' : g.isYearStart ? String(g.year) : MONTH_NAMES[g.month].slice(0, 3);
+                    return (
+                      <button key={g.gk} onClick={() => scrollToGroup(g.gk)} title={g.title}
+                        style={{ display: 'flex', alignItems: 'center', gap: 6, border: 'none', background: 'none', cursor: 'pointer', padding: '1px 0', color: active ? '#0a84ff' : (g.isYearStart ? '#1d1d1f' : '#8e8e93'), fontWeight: g.isYearStart ? 800 : 600, fontSize: g.isYearStart ? 12 : 11 }}>
+                        <span>{label}</span>
+                        <span style={{ display: 'inline-block', width: active ? 18 : 12, height: 2, borderRadius: 1, background: active ? '#0a84ff' : '#c7c7cc', transition: 'all 0.15s' }} />
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               <div className="receipts-grid">
                 {paginatedReceipts.map((receipt, idx) => {
                   const itemsTotal = calculateItemsTotal(receipt.items);
@@ -5864,7 +5915,7 @@ ${bodyHtml}
                   return (
                     <React.Fragment key={receipt.id}>
                     {showGroupHeader && (
-                      <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 10, margin: idx === 0 ? '0 0 4px' : '14px 0 4px' }}>
+                      <div id={`rg-${gk}`} style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 10, margin: idx === 0 ? '0 0 4px' : '14px 0 4px', scrollMarginTop: 110 }}>
                         <span style={{ fontSize: 16, fontWeight: 700, color: '#2c3e50', whiteSpace: 'nowrap' }}>
                           {groupTitleOf(receipt)}
                         </span>
