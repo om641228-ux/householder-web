@@ -980,18 +980,8 @@ function CrmTab({ user, token }) {
       let stopped = false;
       let rafId = null;
       let lastProgressAt = Date.now();
-      // Завершение — по ПЕРВОМУ из событий: 'ended', currentTime почти у duration
-      // (некоторые .mov глохнут за долю секунды до конца и 'ended' не приходит — v37.1)
-      const finish = () => {
-        if (stopped) return;
-        stopped = true;
-        try { video.pause(); } catch (e) {}
-        if (rafId) cancelAnimationFrame(rafId);
-        try { if (rec.state !== 'inactive') rec.stop(); } catch (e) {}
-      };
-      rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-      rec.onerror = () => fail('ошибка кодирования видео');
-      rec.onstop = () => {
+      // Финализация — общая для onstop и форс-фолбэка (v37.2: в Safari onstop после stop() часто НЕ приходит)
+      const finalize = () => {
         if (settled) return;
         settled = true;
         try { stream.getTracks().forEach(tr => tr.stop()); } catch (e) {}
@@ -1002,6 +992,20 @@ function CrmTab({ user, token }) {
         if (!blob.size) return reject(new Error('пустой результат кодирования'));
         resolve(new File([blob], file.name.replace(/\.[^.]+$/, ext), { type, lastModified: Date.now() }));
       };
+      // Завершение — по ПЕРВОМУ из событий: 'ended', currentTime почти у duration
+      // (некоторые .mov глохнут за долю секунды до конца и 'ended' не приходит — v37.1)
+      const finish = () => {
+        if (stopped) return;
+        stopped = true;
+        try { video.pause(); } catch (e) {}
+        if (rafId) cancelAnimationFrame(rafId);
+        try { rec.requestData(); } catch (e) {}
+        try { if (rec.state !== 'inactive') rec.stop(); } catch (e) {}
+        setTimeout(finalize, 5000); // Safari: если onstop не пришёл за 5 сек — собираем из накопленных кусков
+      };
+      rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+      rec.onerror = () => fail('ошибка кодирования видео');
+      rec.onstop = finalize;
       video.ontimeupdate = () => {
         lastProgressAt = Date.now();
         if (onProgress && duration) onProgress(Math.min(99, Math.round(video.currentTime / duration * 100)));
