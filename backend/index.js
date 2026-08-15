@@ -3058,6 +3058,65 @@ app.post('/api/objects', requireAuth, async (req, res) => {
 //   confirm/return — только постановщик (created_by); admin может всё.
 // Фронт работает в camelCase — маппинг в snake_case здесь, на входе/выходе.
 const CRM_MIGRATION_HINT = 'Если ошибка про отсутствие таблицы/колонки — выполни supabase-migration-v21-crm.sql, supabase-migration-v22-crm-photos.sql и supabase-migration-v23-crm-cp-files.sql в SQL Editor проекта householder (Supabase)';
+
+// ========== CRM: СЕРВЕРНОЕ СЖАТИЕ ВИДЕО (v37.5) ==========
+// Safari игнорирует битрейт MediaRecorder — большие видео (>49 МБ) жмём ffmpeg на сервере.
+// ТРЕБУЕТ пакет "ffmpeg-static" в dependencies package.json бэкенда (householder-api).
+let ffmpegStaticPath = null;
+try { ffmpegStaticPath = require('ffmpeg-static'); } catch (e) { /* пакет не установлен — будет понятная ошибка */ }
+
+function ffmpegRun(args) {
+  const { execFile } = require('child_process');
+  return new Promise((resolve, reject) => {
+    execFile(ffmpegStaticPath, args, { timeout: 10 * 60 * 1000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+      // ffmpeg -i без выходного файла завершается с кодом 1 — это норма, stderr с метаданными нам и нужен
+      if (err && !stderr) return reject(new Error((err.message || 'ffmpeg error').slice(-500)));
+      resolve({ stdout: stdout || '', stderr: stderr || '', code: err ? err.code : 0 });
+    });
+  });
+}
+
+async function compressVideoBuffer(buffer) {
+  if (!ffmpegStaticPath) throw new Error('На сервере нет ffmpeg: добавь "ffmpeg-static": "^5.2.0" в dependencies package.json бэкенда (householder-api) и сделай redeploy');
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
+  const tag = Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+  const inPath = path.join(os.tmpdir(), `crmin_${tag}.video`);
+  const outPath = path.join(os.tmpdir(), `crmout_${tag}.mp4`);
+  try {
+    fs.writeFileSync(inPath, buffer);
+    // Длительность — из stderr «ffmpeg -i»
+    let duration = 0;
+    const probe = await ffmpegRun(['-i', inPath]);
+    const m = /Duration: (\d+):(\d+):([\d.]+)/.exec(probe.stderr || '');
+    if (m) duration = (+m[1]) * 3600 + (+m[2]) * 60 + parseFloat(m[3]);
+    const audioBps = 96000;
+    let vbps = duration > 0 ? Math.floor((45 * 8 * 1024 * 1024) / duration * 0.9 - audioBps) : 800000;
+    if (vbps < 200000) vbps = 200000;
+    if (vbps > 4000000) vbps = 4000000;
+    const encode = (w, vb) => ffmpegRun(['-y', '-i', inPath,
+      '-vf', `scale=min(${w}\,iw):-2`,
+      '-c:v', 'libx264', '-preset', 'veryfast',
+      '-b:v', String(vb), '-maxrate', String(Math.floor(vb * 1.5)), '-bufsize', String(vb * 2),
+      '-c:a', 'aac', '-b:a', String(audioBps), '-movflags', '+faststart', outPath]);
+    await encode(960, vbps);
+    let out = fs.readFileSync(outPath);
+    if (out.length > 49 * 1024 * 1024) {
+      // второй, более жёсткий проход (очень длинные ролики)
+      await encode(640, Math.max(150000, Math.floor(vbps / 2)));
+      out = fs.readFileSync(outPath);
+    }
+    if (out.length > 50 * 1024 * 1024) {
+      throw new Error(`даже серверное сжатие дало ${(out.length / 1024 / 1024).toFixed(0)} МБ — ролик слишком длинный для лимита хранилища (~50 МБ)`);
+    }
+    console.log(`CRM video: серверное сжатие ${(buffer.length / 1024 / 1024).toFixed(0)} МБ → ${(out.length / 1024 / 1024).toFixed(1)} МБ`);
+    return out;
+  } finally {
+    try { fs.unlinkSync(inPath); } catch (e) {}
+    try { fs.unlinkSync(outPath); } catch (e) {}
+  }
+}
 const crmCpToApi = (r) => r && ({
   id: r.id, name: r.name, type: r.type || 'client',
   phone: r.phone || '', email: r.email || '', address: r.address || '', comment: r.comment || '',
@@ -3169,6 +3228,7 @@ app.post('/api/crm/counterparties/:id/files', requireAuth, crmMediaMulter('files
         if (!mkind) continue;
         let buf = f.buffer, ct = mt;
         if (mkind === 'photo') { buf = await processImage(f.buffer); ct = 'image/jpeg'; }
+        if (mkind === 'video' && f.size > 48 * 1024 * 1024) { buf = await compressVideoBuffer(f.buffer); ct = 'video/mp4'; }
         const url = await uploadToStorage(buf, f.originalname || 'file', 'crm_cp', ct);
         items.push({ url, kind: mkind, name: f.originalname || '', ts: Date.now(), actor: userName });
       } catch (e) { console.error('CRM cp file skip:', e.message); lastErr = e.message; }
@@ -3394,6 +3454,7 @@ app.post('/api/crm/tasks/:id/photos', requireAuth, crmMediaMulter('photos'), asy
         if (!mkind) continue;
         let buf = f.buffer, ct = mt;
         if (mkind === 'photo') { buf = await processImage(f.buffer); ct = 'image/jpeg'; }
+        if (mkind === 'video' && f.size > 48 * 1024 * 1024) { buf = await compressVideoBuffer(f.buffer); ct = 'video/mp4'; }
         const url = await uploadToStorage(buf, `${kind}_${f.originalname || 'file'}`, 'crm', ct);
         items.push({ url, kind: mkind, name: f.originalname || '', ts: Date.now(), actor: userName });
       } catch (e) { console.error('CRM media skip:', e.message); lastErr = e.message; }

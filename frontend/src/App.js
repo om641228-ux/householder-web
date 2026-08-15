@@ -1082,6 +1082,27 @@ function CrmTab({ user, token }) {
           setMediaProgress(null);
           const chosen = (best && best.size < f.size) ? best : f;
           if (chosen.size > 50 * 1024 * 1024) {
+            if (useServer) {
+              setMediaProgress(`🎬 Сжатие на сервере (ffmpeg) «${f.name}» — это займёт некоторое время…`);
+              try {
+                const fdV = new FormData();
+                fdV.append('photos', f);
+                const resV = await fetch(`${API_URL}/api/crm/tasks/${taskId}/photos?kind=${kind}&compress=1&token=${token}`, { method: 'POST', body: fdV });
+                const rawV = await resV.text().catch(() => '');
+                let dataV = {};
+                try { dataV = JSON.parse(rawV); } catch (e) { dataV = {}; }
+                if (resV.ok && dataV.task) {
+                  setTasks(prev => (prev || []).map(t => String(t.id) === String(taskId) ? dataV.task : t));
+                  setMediaProgress(null);
+                  continue;
+                }
+                throw new Error(dataV.error || (rawV && rawV.length < 300 ? rawV : `HTTP ${resV.status}`));
+              } catch (ev) {
+                setMediaProgress(null);
+                alert(`Видео «${f.name}» (${(f.size / 1024 / 1024).toFixed(0)} МБ) не удалось сжать даже на сервере: ${ev && ev.message ? ev.message : ev}. Файл пропущен: сократите ролик или понизьте качество исходника.`);
+                continue;
+              }
+            }
             alert(`Видео «${f.name}» даже после сжатия весит ${(chosen.size / 1024 / 1024).toFixed(0)} МБ — больше лимита хранилища (~50 МБ). Файл пропущен: сократите ролик или понизьте качество исходника.`);
             continue;
           }
@@ -1226,6 +1247,27 @@ function CrmTab({ user, token }) {
           setMediaProgress(null);
           const chosen = (best && best.size < f.size) ? best : f;
           if (chosen.size > 50 * 1024 * 1024) {
+            if (useServer) {
+              setMediaProgress(`🎬 Сжатие на сервере (ffmpeg) «${f.name}» — это займёт некоторое время…`);
+              try {
+                const fdV = new FormData();
+                fdV.append('files', f);
+                const resV = await fetch(`${API_URL}/api/crm/counterparties/${cpId}/files?compress=1&token=${token}`, { method: 'POST', body: fdV });
+                const rawV = await resV.text().catch(() => '');
+                let dataV = {};
+                try { dataV = JSON.parse(rawV); } catch (e) { dataV = {}; }
+                if (resV.ok && dataV.counterparty) {
+                  setCps(prev => (prev || []).map(c => String(c.id) === String(cpId) ? dataV.counterparty : c));
+                  setMediaProgress(null);
+                  continue;
+                }
+                throw new Error(dataV.error || (rawV && rawV.length < 300 ? rawV : `HTTP ${resV.status}`));
+              } catch (ev) {
+                setMediaProgress(null);
+                alert(`Видео «${f.name}» (${(f.size / 1024 / 1024).toFixed(0)} МБ) не удалось сжать даже на сервере: ${ev && ev.message ? ev.message : ev}. Файл пропущен: сократите ролик или понизьте качество исходника.`);
+                continue;
+              }
+            }
             alert(`Видео «${f.name}» даже после сжатия весит ${(chosen.size / 1024 / 1024).toFixed(0)} МБ — больше лимита хранилища (~50 МБ). Файл пропущен: сократите ролик или понизьте качество исходника.`);
             continue;
           }
