@@ -2478,6 +2478,7 @@ function App() {
   const [plannedModal, setPlannedModal] = useState(false);
   const [plannedForm, setPlannedForm] = useState({ title: '', amount: '', day: '1', category: 'utilities' });
   const [plannedSaving, setPlannedSaving] = useState(false);
+  const [payCalOffset, setPayCalOffset] = useState(0); // сдвиг 2-месячного окна календаря платежей (v42.1)
   const [linkSearch, setLinkSearch] = useState('');
   const [linkSaving, setLinkSaving] = useState(false);
   // Вкладка «Налоги» (v30): черновик форм (отдельный выбор квартала убран в v30.5 — платежи следуют за диапазоном «с/по»)
@@ -6309,7 +6310,7 @@ ${bodyHtml}
             // Календарь (v42): текущий + следующий месяц, платежи по датам
             const nowD = new Date();
             const curYm = `${nowD.getFullYear()}-${String(nowD.getMonth() + 1).padStart(2, '0')}`;
-            const calBases = [new Date(nowD.getFullYear(), nowD.getMonth(), 1), new Date(nowD.getFullYear(), nowD.getMonth() + 1, 1)];
+            const calBases = [new Date(nowD.getFullYear(), nowD.getMonth() + payCalOffset, 1), new Date(nowD.getFullYear(), nowD.getMonth() + payCalOffset + 1, 1)];
             const buildCalWeeks = (base) => {
               const y = base.getFullYear(), mo = base.getMonth();
               const lead = (new Date(y, mo, 1).getDay() + 6) % 7; // неделя с понедельника
@@ -6345,6 +6346,12 @@ ${bodyHtml}
                     {(recurring.length === 0 && manualRows.length === 0) ? (
                       <div style={{ fontSize: 13, color: '#8e8e93' }}>Повторяющиеся платежи не найдены (нужны ≥2 платежа одному контрагенту в разные месяцы) — или добавьте платёж вручную кнопкой «＋».</div>
                     ) : (
+                      <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                        <button onClick={() => setPayCalOffset(o => o - 2)} title="На 2 месяца назад" style={{ border: '1px solid #d2d2d7', background: '#fff', borderRadius: 980, padding: '3px 12px', cursor: 'pointer', fontSize: 13 }}>←</button>
+                        <button onClick={() => setPayCalOffset(o => o + 2)} title="На 2 месяца вперёд" style={{ border: '1px solid #d2d2d7', background: '#fff', borderRadius: 980, padding: '3px 12px', cursor: 'pointer', fontSize: 13 }}>→</button>
+                        <button onClick={() => setPayCalOffset(0)} style={{ border: '1px solid #d2d2d7', background: '#fff', borderRadius: 980, padding: '3px 12px', cursor: 'pointer', fontSize: 13 }}>Сегодня</button>
+                      </div>
                       <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
                         {calBases.map((base, bi) => {
                           const cy = base.getFullYear(), cmo = base.getMonth();
@@ -6364,7 +6371,7 @@ ${bodyHtml}
                           return (
                             <div key={ymStr} style={{ flex: '1 1 360px', minWidth: 300 }}>
                               <div style={{ fontSize: 14, fontWeight: 800, margin: '2px 0 6px', color: bi === 0 ? '#0071e3' : '#1d1d1f' }}>{MONTH_NAMES[cmo]} {cy}</div>
-                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 3 }}>
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0, 1fr))', gap: 3 }}>
                                 {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(w => (
                                   <div key={w} style={{ fontSize: 10, color: '#8e8e93', textAlign: 'center', fontWeight: 700 }}>{w}</div>
                                 ))}
@@ -6372,7 +6379,7 @@ ${bodyHtml}
                                   const itemsHere = d ? dayItems.filter(it => it.day === d) : [];
                                   const isToday = ymStr === curYm && d === nowD.getDate();
                                   return (
-                                    <div key={ci} style={{ minHeight: 58, borderRadius: 8, border: `1px solid ${isToday ? '#0a84ff' : '#f0f0f0'}`, background: d ? (isToday ? '#f0f7ff' : '#fafafa') : 'transparent', padding: 2 }}>
+                                    <div key={ci} style={{ minHeight: 58, minWidth: 0, overflow: 'hidden', borderRadius: 8, border: `1px solid ${isToday ? '#0a84ff' : '#f0f0f0'}`, background: d ? (isToday ? '#f0f7ff' : '#fafafa') : 'transparent', padding: 2 }}>
                                       {d && <div style={{ fontSize: 10, fontWeight: isToday ? 800 : 600, color: isToday ? '#0a84ff' : '#6e6e73', textAlign: 'right', paddingRight: 3 }}>{d}</div>}
                                       {itemsHere.map(it => (
                                         <div key={it.key} title={`${it.label}${it.amount != null ? ` — ${formatAmount(it.amount, 'EUR')}` : ''}${it.paid ? ' (оплачен)' : ' (ожидается)'}`}
@@ -6390,6 +6397,7 @@ ${bodyHtml}
                             </div>
                           );
                         })}
+                      </div>
                       </div>
                     )}
                     {manualRows.length > 0 && (
