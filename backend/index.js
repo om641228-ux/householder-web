@@ -3095,17 +3095,27 @@ async function compressVideoBuffer(buffer) {
     let vbps = duration > 0 ? Math.floor((45 * 8 * 1024 * 1024) / duration * 0.9 - audioBps) : 800000;
     if (vbps < 200000) vbps = 200000;
     if (vbps > 4000000) vbps = 4000000;
+    // -nostats -loglevel error: без них ffmpeg спамит прогрессом в stderr и execFile
+    // падает по maxBuffer на длинных роликах — раньше это давало молчаливый ENOENT при чтении результата
     const encode = (w, vb) => ffmpegRun(['-y', '-i', inPath,
-      '-vf', `scale=min(${w}\,iw):-2`,
+      '-nostats', '-loglevel', 'error',
+      '-vf', `scale=min(${w}\\,iw):-2`,
       '-c:v', 'libx264', '-preset', 'veryfast',
       '-b:v', String(vb), '-maxrate', String(Math.floor(vb * 1.5)), '-bufsize', String(vb * 2),
       '-c:a', 'aac', '-b:a', String(audioBps), '-movflags', '+faststart', outPath]);
-    await encode(960, vbps);
-    let out = fs.readFileSync(outPath);
+    const runEncode = async (w, vb) => {
+      try { if (fs.existsSync(outPath)) fs.unlinkSync(outPath); } catch (e) {}
+      const r = await encode(w, vb);
+      if (!fs.existsSync(outPath)) {
+        const why = ((r.stderr || '').trim().split('\n').pop() || '').slice(-300);
+        throw new Error(`ffmpeg не смог обработать видео${why ? `: ${why}` : ' (неизвестная ошибка кодека)'}`);
+      }
+      return fs.readFileSync(outPath);
+    };
+    let out = await runEncode(960, vbps);
     if (out.length > 49 * 1024 * 1024) {
       // второй, более жёсткий проход (очень длинные ролики)
-      await encode(640, Math.max(150000, Math.floor(vbps / 2)));
-      out = fs.readFileSync(outPath);
+      out = await runEncode(640, Math.max(150000, Math.floor(vbps / 2)));
     }
     if (out.length > 50 * 1024 * 1024) {
       throw new Error(`даже серверное сжатие дало ${(out.length / 1024 / 1024).toFixed(0)} МБ — ролик слишком длинный для лимита хранилища (~50 МБ)`);
