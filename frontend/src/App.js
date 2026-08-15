@@ -632,6 +632,8 @@ const ReceiptScanner = registerPlugin('ReceiptScannerPlugin');
 // Хранение (v33) — сервер: /api/crm* (Supabase, миграция supabase-migration-v21-crm.sql),
 // CRM общая для всей команды. Если сервер недоступен — автоматический fallback на
 // localStorage (crm_*_v1), как в v32; локальные данные переносятся на сервер один раз.
+// Фотоотчёт (v35): фото «до» и «после» выполнения — photos_before/photos_after в crm_tasks
+// (миграция supabase-migration-v22-crm-photos.sql), API POST/DELETE /api/crm/tasks/:id/photos.
 const CRM_LS_TASKS = 'crm_tasks_v1';
 const CRM_LS_CPS = 'crm_counterparties_v1';
 const CRM_LS_CONTACTS = 'crm_contacts_v1';
@@ -652,7 +654,9 @@ const CRM_ACTION_META = {
   comment:   { label: 'добавил(а) комментарий',    color: '#8e8e93' },
   done:      { label: 'отметил(а) выполненной',    color: '#e67e22' },
   confirmed: { label: 'подтвердил(а) закрытие ✅', color: '#27ae60' },
-  returned:  { label: 'вернул(а) на доработку ↩',  color: '#e74c3c' }
+  returned:  { label: 'вернул(а) на доработку ↩',  color: '#e74c3c' },
+  photo:     { label: 'добавил(а) фото в фотоотчёт 📷', color: '#5856d6' },
+  photo_del: { label: 'удалил(а) фото из фотоотчёта',   color: '#8e8e93' }
 };
 const CRM_WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
@@ -740,6 +744,10 @@ function CrmTab({ user, token }) {
   const [viewTaskId, setViewTaskId] = useState(null);
   const [viewCpId, setViewCpId] = useState(null);
   const [viewContactId, setViewContactId] = useState(null);
+
+  // Фотоотчёт (v35): photoBusy = `${taskId}_${kind}` пока идёт загрузка; photoViewer — URL фото на весь экран
+  const [photoBusy, setPhotoBusy] = useState(null);
+  const [photoViewer, setPhotoViewer] = useState(null);
 
   // ---- Загрузка CRM (v33): с сервера; при недоступности — локальный режим (localStorage) ----
   const crmApi = useCallback(async (path, options) => {
@@ -905,6 +913,98 @@ function CrmTab({ user, token }) {
       return { ...t, timeline: logEvent(t, 'comment', note) };
     }));
     setActionModal(null);
+  };
+
+  // ---- фотоотчёт задачи (v35): «до» и «после» выполнения ----
+  // Сервер: multipart POST /api/crm/tasks/:id/photos?kind=..., файл жмём compressImageFile до ~2 МБ.
+  // Локальный fallback: dataURL прямо в задаче (localStorage).
+  const addTaskPhotos = async (taskId, kind, fileList) => {
+    const files = Array.from(fileList || []).filter(f => /^image\//.test(f.type || ''));
+    if (!files.length) { alert('Выберите файлы изображений (jpg/png)'); return; }
+    setPhotoBusy(`${taskId}_${kind}`);
+    try {
+      const compressed = [];
+      for (const f of files) compressed.push(await compressImageFile(f));
+      if (useServer) {
+        const fd = new FormData();
+        compressed.forEach(f => fd.append('photos', f));
+        const res = await fetch(`${API_URL}/api/crm/tasks/${taskId}/photos?kind=${kind}&token=${token}`, { method: 'POST', body: fd });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        setTasks(prev => (prev || []).map(t => String(t.id) === String(taskId) ? data.task : t));
+      } else {
+        const dataUrls = await Promise.all(compressed.map(f => new Promise((resolve, reject) => {
+          const r = new FileReader();
+          r.onload = () => resolve(r.result);
+          r.onerror = () => reject(new Error('read error'));
+          r.readAsDataURL(f);
+        })));
+        setTasks(prev => (prev || []).map(t => {
+          if (String(t.id) !== String(taskId)) return t;
+          const field = kind === 'after' ? 'photosAfter' : 'photosBefore';
+          return { ...t, [field]: [...(t[field] || []), ...dataUrls], timeline: logEvent(t, 'photo', `Фото «${kind === 'after' ? 'после' : 'до'}» +${dataUrls.length}`) };
+        }));
+      }
+    } catch (e) {
+      alert('Не загрузилось фото: ' + e.message);
+    } finally {
+      setPhotoBusy(null);
+    }
+  };
+  const removeTaskPhoto = async (taskId, kind, url) => {
+    if (!window.confirm('Удалить это фото из отчёта?')) return;
+    if (useServer) {
+      try {
+        const r = await crmApi(`/api/crm/tasks/${taskId}/photos`, { method: 'DELETE', body: JSON.stringify({ kind, url }) });
+        setTasks(prev => (prev || []).map(t => String(t.id) === String(taskId) ? r.task : t));
+      } catch (e) { alert('Не удалилось на сервере: ' + e.message); }
+      return;
+    }
+    setTasks(prev => (prev || []).map(t => {
+      if (String(t.id) !== String(taskId)) return t;
+      const field = kind === 'after' ? 'photosAfter' : 'photosBefore';
+      return { ...t, [field]: (t[field] || []).filter(u => u !== url), timeline: logEvent(t, 'photo_del', `Фото «${kind === 'after' ? 'после' : 'до'}»`) };
+    }));
+  };
+
+  // Блок фотоотчёта: две секции «до»/«после», миниатюры + добавление/удаление.
+  // Редактировать могут постановщик и исполнитель, пока задача не закрыта (как на сервере).
+  const renderPhotoReport = (t) => {
+    const canEdit = t.status !== 'closed' && (t.createdBy === currentUser || !t.assignee || t.assignee === currentUser);
+    const block = (kind, title, hint) => {
+      const photos = kind === 'after' ? (t.photosAfter || []) : (t.photosBefore || []);
+      const busy = photoBusy === `${t.id}_${kind}`;
+      return (
+        <div style={{ flex: '1 1 220px' }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#6e6e73', marginBottom: 4 }}>{title} ({photos.length})</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {photos.map((u, i) => (
+              <span key={i} style={{ position: 'relative', display: 'inline-block' }}>
+                <img src={u} alt="" onClick={() => setPhotoViewer(u)} style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, cursor: 'zoom-in', border: '1px solid #e0e0e0' }} />
+                {canEdit && (
+                  <button onClick={() => removeTaskPhoto(t.id, kind, u)} title="Удалить фото" style={{ position: 'absolute', top: -6, right: -6, width: 18, height: 18, borderRadius: '50%', border: 'none', background: '#e74c3c', color: '#fff', fontSize: 10, cursor: 'pointer', lineHeight: '18px', padding: 0 }}>✕</button>
+                )}
+              </span>
+            ))}
+            {canEdit && (
+              <label title={hint} style={{ width: 64, height: 64, borderRadius: 8, border: '1px dashed #c7c7cc', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: busy ? 'wait' : 'pointer', fontSize: 20, color: '#8e8e93', background: '#f5f5f7' }}>
+                {busy ? '⏳' : '📷'}
+                <input type="file" accept="image/*" multiple disabled={busy} style={{ display: 'none' }} onChange={(e) => { addTaskPhotos(t.id, kind, e.target.files); e.target.value = ''; }} />
+              </label>
+            )}
+          </div>
+        </div>
+      );
+    };
+    return (
+      <div style={{ marginTop: 10 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#6e6e73', marginBottom: 6 }}>📷 Фотоотчёт</div>
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+          {block('before', '🕐 До выполнения', 'Добавить фото «до»')}
+          {block('after', '✅ После выполнения', 'Добавить фото «после»')}
+        </div>
+      </div>
+    );
   };
 
   // ---- контрагенты ----
@@ -1081,6 +1181,7 @@ function CrmTab({ user, token }) {
           <span style={stBadge(meta.color, meta.bg)}>{meta.label}</span>
           <span style={stBadge(pr.color, '#f5f5f7')}>{pr.label}</span>
           {over ? <span style={stBadge('#e74c3c', '#fdecea')}>⏰ Просрочена</span> : null}
+          {(t.photosBefore || []).length + (t.photosAfter || []).length > 0 ? <span style={stBadge('#5856d6', '#efeffa')} title="Фотоотчёт: до / после">📷 {(t.photosBefore || []).length}/{(t.photosAfter || []).length}</span> : null}
         </div>
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 13, color: '#555', marginTop: 8 }}>
           <span>📅 Срок: <strong>{crmFmtDate(t.dueDate)}</strong></span>
@@ -1359,6 +1460,7 @@ function CrmTab({ user, token }) {
                 {(iAmCreator || iAmAssignee) && t.status !== 'closed' && <button onClick={() => openTaskModal(t)} style={stBtnGhost}>✎ Изменить</button>}
                 {iAmCreator && <button onClick={() => { setViewTaskId(null); removeTask(t); }} style={{ ...stBtnGhost, color: '#e74c3c' }}>🗑 Удалить</button>}
               </div>
+              {renderPhotoReport(t)}
               <div style={{ marginTop: 10, fontSize: 13, fontWeight: 700, color: '#6e6e73' }}>🕓 Таймлайн исполнения</div>
               {renderTimeline(t.timeline)}
             </div>
@@ -1623,6 +1725,12 @@ function CrmTab({ user, token }) {
               <textarea autoFocus value={actionNote} onChange={e => setActionNote(e.target.value)}
                 placeholder={actionModal.type === 'comment' ? 'Комментарий…' : 'Комментарий (что сделано / что исправить)…'}
                 style={{ ...stInput, minHeight: 70, resize: 'vertical' }} />
+              {actionModal.type === 'done' && (
+                <div>
+                  <div style={{ fontSize: 12, color: '#8e8e93', margin: '10px 0 0' }}>Приложите фото результата — прикрепляются к задаче сразу после выбора:</div>
+                  {renderPhotoReport(t)}
+                </div>
+              )}
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 10 }}>
                 <button onClick={() => setActionModal(null)} style={stBtnGhost}>Отмена</button>
                 <button onClick={submitAction} style={{ ...stBtn, background: btnColors[actionModal.type] }}>{btnLabels[actionModal.type]}</button>
@@ -1631,6 +1739,12 @@ function CrmTab({ user, token }) {
           </div>
         );
       })()}
+      {/* ======== ПРОСМОТР ФОТО ИЗ ФОТООТЧЁТА (v35) ======== */}
+      {photoViewer && (
+        <div style={{ ...stOverlay, zIndex: 2600, background: 'rgba(0,0,0,0.85)' }} onClick={() => setPhotoViewer(null)}>
+          <img src={photoViewer} alt="" style={{ maxWidth: '96vw', maxHeight: '92vh', borderRadius: 12, boxShadow: '0 12px 40px rgba(0,0,0,0.5)' }} />
+        </div>
+      )}
     </div>
   );
 }

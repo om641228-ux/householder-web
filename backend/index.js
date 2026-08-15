@@ -3048,7 +3048,7 @@ app.post('/api/objects', requireAuth, async (req, res) => {
 //   done           — только исполнитель (assignee); пустой assignee = любой;
 //   confirm/return — только постановщик (created_by); admin может всё.
 // Фронт работает в camelCase — маппинг в snake_case здесь, на входе/выходе.
-const CRM_MIGRATION_HINT = 'Если ошибка про отсутствие таблицы — выполни supabase-migration-v21-crm.sql в SQL Editor проекта householder (Supabase)';
+const CRM_MIGRATION_HINT = 'Если ошибка про отсутствие таблицы/колонки — выполни supabase-migration-v21-crm.sql и supabase-migration-v22-crm-photos.sql в SQL Editor проекта householder (Supabase)';
 const crmCpToApi = (r) => r && ({
   id: r.id, name: r.name, type: r.type || 'client',
   phone: r.phone || '', email: r.email || '', address: r.address || '', comment: r.comment || '',
@@ -3066,6 +3066,8 @@ const crmTaskToApi = (r) => r && ({
   dueDate: r.due_date || '', priority: r.priority || 'normal', status: r.status || 'open',
   doneAt: r.done_at ? Date.parse(r.done_at) : null, closedAt: r.closed_at ? Date.parse(r.closed_at) : null,
   timeline: Array.isArray(r.timeline) ? r.timeline : [],
+  photosBefore: Array.isArray(r.photos_before) ? r.photos_before : [],
+  photosAfter: Array.isArray(r.photos_after) ? r.photos_after : [],
   createdAt: r.created_at ? Date.parse(r.created_at) : null
 });
 
@@ -3294,6 +3296,78 @@ app.delete('/api/crm/tasks/:id', requireAuth, async (req, res) => {
     const { error } = await supabaseAdmin.from('crm_tasks').delete().eq('id', t.id);
     if (error) throw error;
     res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: CRM_MIGRATION_HINT });
+  }
+});
+
+// ========== CRM: ФОТООТЧЁТ ЗАДАЧИ (миграция supabase-migration-v22-crm-photos.sql) ==========
+// photos_before / photos_after — jsonb-массивы URL в Storage (bucket receipt-images, папка crm/).
+// Добавлять/удалять фото может постановщик или исполнитель; у закрытой задачи отчёт заморожен.
+// Каждая операция дописывает событие в timeline (action: photo | photo_del).
+// POST /api/crm/tasks/:id/photos?kind=before|after — multipart/form-data, поле photos (до 6 файлов)
+app.post('/api/crm/tasks/:id/photos', requireAuth, upload.array('photos', 6), async (req, res) => {
+  try {
+    const kind = req.query.kind === 'after' ? 'after' : 'before';
+    const col = kind === 'after' ? 'photos_after' : 'photos_before';
+    const { data: t, error: e0 } = await supabaseAdmin.from('crm_tasks').select('*').eq('id', req.params.id).single();
+    if (e0 || !t) return res.status(404).json({ error: 'Задача не найдена' });
+    const userName = req.user.name || req.user.id;
+    if (t.created_by !== userName && t.assignee !== userName && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Добавлять фото может постановщик или исполнитель задачи' });
+    }
+    if (t.status === 'closed') return res.status(409).json({ error: 'Задача закрыта — фотоотчёт изменить нельзя' });
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ error: 'Нет файлов: передайте поле photos (multipart/form-data)' });
+    const urls = [];
+    for (const f of files) {
+      try {
+        if (!/^image\//.test(f.mimetype || '')) continue;
+        const buf = await processImage(f.buffer);
+        const url = await uploadToStorage(buf, `${kind}_${f.originalname || 'photo.jpg'}`, 'crm', 'image/jpeg');
+        urls.push(url);
+      } catch (e) { console.error('CRM photo skip:', e.message); }
+    }
+    if (!urls.length) return res.status(400).json({ error: 'Не удалось загрузить ни одного фото (нужны изображения jpg/png)' });
+    const cur = Array.isArray(t[col]) ? t[col] : [];
+    const patch = {
+      [col]: [...cur, ...urls],
+      timeline: [...(Array.isArray(t.timeline) ? t.timeline : []), { ts: Date.now(), actor: userName, action: 'photo', note: `Фото «${kind === 'after' ? 'после' : 'до'}» +${urls.length}` }],
+      updated_at: new Date().toISOString()
+    };
+    const { data, error } = await supabaseAdmin.from('crm_tasks').update(patch).eq('id', t.id).select().single();
+    if (error) throw error;
+    res.json({ task: crmTaskToApi(data) });
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: CRM_MIGRATION_HINT });
+  }
+});
+
+// DELETE /api/crm/tasks/:id/photos — body {kind: before|after, url}
+app.delete('/api/crm/tasks/:id/photos', requireAuth, async (req, res) => {
+  try {
+    const kind = (req.body && req.body.kind) === 'after' ? 'after' : 'before';
+    const col = kind === 'after' ? 'photos_after' : 'photos_before';
+    const url = req.body && req.body.url;
+    if (!url) return res.status(400).json({ error: 'Передайте url фото' });
+    const { data: t, error: e0 } = await supabaseAdmin.from('crm_tasks').select('*').eq('id', req.params.id).single();
+    if (e0 || !t) return res.status(404).json({ error: 'Задача не найдена' });
+    const userName = req.user.name || req.user.id;
+    if (t.created_by !== userName && t.assignee !== userName && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Удалять фото может постановщик или исполнитель задачи' });
+    }
+    if (t.status === 'closed') return res.status(409).json({ error: 'Задача закрыта — фотоотчёт изменить нельзя' });
+    const cur = Array.isArray(t[col]) ? t[col] : [];
+    const next = cur.filter(u => u !== url);
+    if (next.length === cur.length) return res.status(404).json({ error: 'Фото не найдено в отчёте задачи' });
+    const patch = {
+      [col]: next,
+      timeline: [...(Array.isArray(t.timeline) ? t.timeline : []), { ts: Date.now(), actor: userName, action: 'photo_del', note: `Фото «${kind === 'after' ? 'после' : 'до'}»` }],
+      updated_at: new Date().toISOString()
+    };
+    const { data, error } = await supabaseAdmin.from('crm_tasks').update(patch).eq('id', t.id).select().single();
+    if (error) throw error;
+    res.json({ task: crmTaskToApi(data) });
   } catch (e) {
     res.status(500).json({ error: e.message, hint: CRM_MIGRATION_HINT });
   }
