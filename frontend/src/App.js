@@ -930,7 +930,7 @@ function CrmTab({ user, token }) {
   // Сжатие видео до ~targetMB (v37): realtime-транскодинг в браузере —
   // кадры через <canvas> → captureStream(30), звук через AudioContext, запись MediaRecorder.
   // Результат: mp4 (Safari/новый Chrome) или webm — что поддержит браузер. Время ≈ длительности видео.
-  const compressVideoFile = (file, targetMB, onProgress) => new Promise((resolve, reject) => {
+  const compressVideoFile = (file, targetMB, onProgress, maxW, maxH) => new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const video = document.createElement('video');
     video.muted = true; // на поток через AudioContext не влияет
@@ -955,7 +955,7 @@ function CrmTab({ user, token }) {
       let videoBps = Math.floor((targetMB * 8 * 1024 * 1024) / duration * 0.92 - audioBps);
       if (videoBps < 300000) videoBps = 300000; // ниже — нечитаемая каша
       let w = video.videoWidth || 640, h = video.videoHeight || 360;
-      const scale = Math.min(1, 1280 / w, 720 / h); // больше 720p не нужно для отчётов
+      const scale = Math.min(1, (maxW || 1280) / w, (maxH || 720) / h); // больше 720p не нужно для отчётов
       w = Math.max(2, Math.round(w * scale / 2) * 2);
       h = Math.max(2, Math.round(h * scale / 2) * 2);
       const canvas = document.createElement('canvas');
@@ -1059,13 +1059,32 @@ function CrmTab({ user, token }) {
         const mk = fileMediaKind(f);
         if (mk === 'photo') { prepared.push(await compressImageFile(f)); continue; }
         if (mk === 'video' && f.size > 48 * 1024 * 1024) {
-          try {
-            const cv = await compressVideoFile(f, 48, (pct) => setMediaProgress(`🎬 Сжатие видео до ~50 МБ: ${pct}%`));
-            prepared.push(cv.size < f.size ? cv : f);
-          } catch (e) {
-            console.warn('Сжатие видео не удалось, отправляю оригинал:', e && e.message);
-            prepared.push(f);
-          } finally { setMediaProgress(null); }
+          // До 3 проходов (v37.3): Safari может игнорировать битрейт MediaRecorder → результат > 50 МБ;
+          // тогда жмём повторно с меньшим разрешением/битрейтом, пока не влезет в лимит хранилища
+          const attempts = [
+            { mb: 45, maxW: 1280, maxH: 720 },
+            { mb: 38, maxW: 960, maxH: 540 },
+            { mb: 28, maxW: 640, maxH: 360 }
+          ];
+          let best = null;
+          for (let ai = 0; ai < attempts.length; ai++) {
+            const att = attempts[ai];
+            try {
+              const cv = await compressVideoFile(f, att.mb, (pct) => setMediaProgress(`🎬 Сжатие видео${ai ? ` (проход ${ai + 1}/3)` : ''} до ~50 МБ: ${pct}%`), att.maxW, att.maxH);
+              if (!best || cv.size < best.size) best = cv;
+              if (cv.size <= 47 * 1024 * 1024) break;
+            } catch (e) {
+              console.warn('Сжатие видео не удалось:', e && e.message);
+              break;
+            }
+          }
+          setMediaProgress(null);
+          const chosen = (best && best.size < f.size) ? best : f;
+          if (chosen.size > 50 * 1024 * 1024) {
+            alert(`Видео «${f.name}» даже после сжатия весит ${(chosen.size / 1024 / 1024).toFixed(0)} МБ — больше лимита хранилища (~50 МБ). Файл пропущен: сократите ролик или понизьте качество исходника.`);
+            continue;
+          }
+          prepared.push(chosen);
           continue;
         }
         prepared.push(f);
@@ -1161,7 +1180,7 @@ function CrmTab({ user, token }) {
     return (
       <div style={{ marginTop: 10 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: '#6e6e73', marginBottom: 6 }}>📷 Фотоотчёт (фото · видео · аудио)</div>
-        <div style={{ fontSize: 11, color: '#8e8e93', marginBottom: 6 }}>Видео больше ~50 МБ сжимаются автоматически (время ≈ длительности видео).</div>
+        <div style={{ fontSize: 11, color: '#8e8e93', marginBottom: 6 }}>Видео больше ~50 МБ сжимаются автоматически (время ≈ длительности видео; если не влезло в 50 МБ — повторные проходы сильнее).</div>
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
           {block('before', '🕐 До выполнения', 'Добавить фото/видео/аудио «до»')}
           {block('after', '✅ После выполнения', 'Добавить фото/видео/аудио «после»')}
@@ -1184,13 +1203,32 @@ function CrmTab({ user, token }) {
         const mk = fileMediaKind(f);
         if (mk === 'photo') { prepared.push(await compressImageFile(f)); continue; }
         if (mk === 'video' && f.size > 48 * 1024 * 1024) {
-          try {
-            const cv = await compressVideoFile(f, 48, (pct) => setMediaProgress(`🎬 Сжатие видео до ~50 МБ: ${pct}%`));
-            prepared.push(cv.size < f.size ? cv : f);
-          } catch (e) {
-            console.warn('Сжатие видео не удалось, отправляю оригинал:', e && e.message);
-            prepared.push(f);
-          } finally { setMediaProgress(null); }
+          // До 3 проходов (v37.3): Safari может игнорировать битрейт MediaRecorder → результат > 50 МБ;
+          // тогда жмём повторно с меньшим разрешением/битрейтом, пока не влезет в лимит хранилища
+          const attempts = [
+            { mb: 45, maxW: 1280, maxH: 720 },
+            { mb: 38, maxW: 960, maxH: 540 },
+            { mb: 28, maxW: 640, maxH: 360 }
+          ];
+          let best = null;
+          for (let ai = 0; ai < attempts.length; ai++) {
+            const att = attempts[ai];
+            try {
+              const cv = await compressVideoFile(f, att.mb, (pct) => setMediaProgress(`🎬 Сжатие видео${ai ? ` (проход ${ai + 1}/3)` : ''} до ~50 МБ: ${pct}%`), att.maxW, att.maxH);
+              if (!best || cv.size < best.size) best = cv;
+              if (cv.size <= 47 * 1024 * 1024) break;
+            } catch (e) {
+              console.warn('Сжатие видео не удалось:', e && e.message);
+              break;
+            }
+          }
+          setMediaProgress(null);
+          const chosen = (best && best.size < f.size) ? best : f;
+          if (chosen.size > 50 * 1024 * 1024) {
+            alert(`Видео «${f.name}» даже после сжатия весит ${(chosen.size / 1024 / 1024).toFixed(0)} МБ — больше лимита хранилища (~50 МБ). Файл пропущен: сократите ролик или понизьте качество исходника.`);
+            continue;
+          }
+          prepared.push(chosen);
           continue;
         }
         prepared.push(f);
@@ -1238,7 +1276,7 @@ function CrmTab({ user, token }) {
     return (
       <div style={{ marginTop: 10 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: '#6e6e73', marginBottom: 6 }}>📎 Файлы — фото · видео · аудио ({items.length})</div>
-        <div style={{ fontSize: 11, color: '#8e8e93', marginBottom: 6 }}>Видео больше ~50 МБ сжимаются автоматически (время ≈ длительности видео).</div>
+        <div style={{ fontSize: 11, color: '#8e8e93', marginBottom: 6 }}>Видео больше ~50 МБ сжимаются автоматически (время ≈ длительности видео; если не влезло в 50 МБ — повторные проходы сильнее).</div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {items.map((entry, i) => renderMediaThumb(entry, i, () => removeCpFile(cp.id, mediaOf(entry).url)))}
           <label title="Добавить фото, видео или аудио" style={{ width: 64, height: 64, borderRadius: 8, border: '1px dashed #c7c7cc', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: busy ? 'wait' : 'pointer', fontSize: 20, color: '#8e8e93', background: '#f5f5f7' }}>
