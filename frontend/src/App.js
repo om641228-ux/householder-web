@@ -5885,13 +5885,13 @@ ${bodyHtml}
           ) : (
             <>
               {dateRailGroups.length >= 2 && (
-                <div style={{ position: 'fixed', right: 6, top: '50%', transform: 'translateY(-50%)', zIndex: 60, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3, background: 'rgba(255,255,255,0.94)', border: '1px solid #e3e6ea', borderRadius: 12, padding: '8px 7px', boxShadow: '0 2px 10px rgba(0,0,0,0.10)', maxHeight: '74vh', overflowY: 'auto' }}>
+                <div style={{ position: 'fixed', right: 6, top: '50%', transform: 'translateY(-50%)', zIndex: 60, display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 2, background: 'rgba(255,255,255,0.94)', border: '1px solid #e3e6ea', borderRadius: 12, padding: '8px 8px', boxShadow: '0 2px 10px rgba(0,0,0,0.10)', maxHeight: '74vh', overflowY: 'auto', scrollbarWidth: 'none', width: 76, boxSizing: 'border-box' }}>
                   {dateRailGroups.map(g => {
                     const active = String(activeRailGk) === String(g.gk);
                     const label = g.year === null ? '—' : g.isYearStart ? String(g.year) : MONTH_NAMES[g.month].slice(0, 3);
                     return (
                       <button key={g.gk} onClick={() => scrollToGroup(g.gk)} title={g.title}
-                        style={{ display: 'flex', alignItems: 'center', gap: 6, border: 'none', background: 'none', cursor: 'pointer', padding: '1px 0', color: active ? '#0a84ff' : (g.isYearStart ? '#1d1d1f' : '#8e8e93'), fontWeight: g.isYearStart ? 800 : 600, fontSize: g.isYearStart ? 12 : 11 }}>
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, width: '100%', boxSizing: 'border-box', WebkitAppearance: 'none', appearance: 'none', border: 'none', borderRadius: 0, background: 'none', boxShadow: 'none', margin: 0, padding: '2px 0', minWidth: 0, minHeight: 0, fontFamily: 'inherit', lineHeight: 1.2, whiteSpace: 'nowrap', cursor: 'pointer', color: active ? '#0a84ff' : (g.isYearStart ? '#1d1d1f' : '#8e8e93'), fontWeight: g.isYearStart ? 800 : 600, fontSize: g.isYearStart ? 12 : 11 }}>
                         <span>{label}</span>
                         <span style={{ display: 'inline-block', width: active ? 18 : 12, height: 2, borderRadius: 1, background: active ? '#0a84ff' : '#c7c7cc', transition: 'all 0.15s' }} />
                       </button>
