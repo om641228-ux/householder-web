@@ -700,6 +700,164 @@ function crmSeed() {
   return { tasks, cps, contacts };
 }
 
+// ========== ДОКУМЕНТЫ (вкладка «📁 Документы», v40) ==========
+// Разделы: Дома / Авто / Личное. Файлы ЛЮБЫХ типов. Сервер: /api/docs (таблица doc_sections,
+// миграция supabase-migration-v25-docs.sql), Storage папка docs/<категория>/.
+// Фото жмутся на клиенте (compressImageFile), видео > 48 МБ жмёт сервер (ffmpeg), остальное — как есть.
+const DOC_SECTIONS = [
+  { key: 'home', title: '🏠 Дома' },
+  { key: 'auto', title: '🚗 Авто' },
+  { key: 'personal', title: '👤 Личное' }
+];
+const docKindOf = (f) => /^image\//.test(f.type || '') ? 'photo' : /^video\//.test(f.type || '') ? 'video' : /^audio\//.test(f.type || '') ? 'audio'
+  : (f.type === 'application/pdf' || /^text\//.test(f.type || '') || /\.(pdf|txt|md|csv)$/i.test(f.name || '')) ? 'doc' : 'file';
+const docMediaOf = (entry) => (entry && typeof entry === 'object') ? entry : { url: entry, kind: 'photo', name: '' };
+
+function DocsTab({ user, token }) {
+  const [sections, setSections] = useState({ home: [], auto: [], personal: [] });
+  const [docSection, setDocSection] = useState('home');
+  const [docsError, setDocsError] = useState(null);
+  const [docsBusy, setDocsBusy] = useState(false);
+  const [docsViewer, setDocsViewer] = useState(null); // {url, kind, name}
+  const [docsZoom, setDocsZoom] = useState(false);
+  const [docsVErr, setDocsVErr] = useState(false);
+
+  const loadDocs = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/docs?token=${token}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setSections(data.sections || { home: [], auto: [], personal: [] });
+      setDocsError(null);
+    } catch (e) { setDocsError(e.message); }
+  }, [token]);
+  useEffect(() => { loadDocs(); }, [loadDocs]);
+
+  const addDocs = async (cat, fileList) => {
+    let files = Array.from(fileList || []);
+    const tooBig = files.filter(f => f.size > 500 * 1024 * 1024);
+    if (tooBig.length) alert(`Слишком большие файлы (максимум 500 МБ) — пропущены:\n${tooBig.map(f => `${f.name} — ${(f.size / 1024 / 1024).toFixed(0)} МБ`).join('\n')}`);
+    files = files.filter(f => f.size <= 500 * 1024 * 1024);
+    if (!files.length) return;
+    setDocsBusy(true);
+    try {
+      const prepared = [];
+      for (const f of files) {
+        if (docKindOf(f) === 'photo') { prepared.push(await compressImageFile(f)); continue; }
+        prepared.push(f);
+      }
+      const fd = new FormData();
+      prepared.forEach(f => fd.append('files', f));
+      const res = await fetch(`${API_URL}/api/docs/${cat}/files?token=${token}`, { method: 'POST', body: fd });
+      const rawText = await res.text().catch(() => '');
+      let data = {};
+      try { data = JSON.parse(rawText); } catch (e) { data = {}; }
+      if (!res.ok) throw new Error(data.error || (rawText && rawText.length < 300 ? rawText : `HTTP ${res.status}`));
+      setSections(prev => ({ ...prev, [cat]: data.attachments || [] }));
+      setDocsError(null);
+    } catch (e) {
+      alert('Не загрузился файл: ' + e.message);
+    } finally {
+      setDocsBusy(false);
+    }
+  };
+
+  const removeDoc = async (cat, url) => {
+    if (!window.confirm('Удалить этот файл?')) return;
+    try {
+      const res = await fetch(`${API_URL}/api/docs/${cat}/files?token=${token}`, {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setSections(prev => ({ ...prev, [cat]: data.attachments || [] }));
+    } catch (e) { alert('Не удалилось на сервере: ' + e.message); }
+  };
+
+  const docThumb = (entry, key) => {
+    const m = docMediaOf(entry);
+    const openViewer = () => { setDocsViewer({ url: m.url, kind: m.kind, name: m.name || '' }); setDocsZoom(false); setDocsVErr(false); };
+    const box = { width: 72, height: 72, borderRadius: 8, border: '1px solid #e0e0e0', background: '#f5f5f7', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: 26, overflow: 'hidden' };
+    return (
+      <span key={key} style={{ position: 'relative', display: 'inline-block' }} title={m.name || 'Файл'}>
+        {m.kind === 'video' ? (
+          <span onClick={openViewer} style={{ ...box, display: 'inline-block', position: 'relative', background: '#1d1d1f' }}>
+            <video src={`${m.url}#t=0.1`} muted playsInline preload="auto" style={{ width: 72, height: 72, objectFit: 'cover', display: 'block', pointerEvents: 'none' }} />
+            <span style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 24, textShadow: '0 1px 4px rgba(0,0,0,0.8)', pointerEvents: 'none' }}>▶</span>
+          </span>
+        ) : m.kind === 'audio' ? (
+          <span onClick={openViewer} style={box}>🎵</span>
+        ) : m.kind === 'doc' || m.kind === 'file' ? (
+          <a href={m.url} target="_blank" rel="noreferrer" style={{ ...box, textDecoration: 'none', flexDirection: 'column', fontSize: 24 }}>
+            {m.kind === 'doc' ? (/\.pdf(\?|$)/i.test(m.name || m.url || '') ? '📄' : '📝') : '📎'}
+          </a>
+        ) : (
+          <img src={m.url} alt="" onClick={openViewer} style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 8, cursor: 'zoom-in', border: '1px solid #e0e0e0' }} />
+        )}
+        <button onClick={() => removeDoc(docSection, m.url)} title="Удалить файл" style={{ position: 'absolute', top: -6, right: -6, width: 18, height: 18, borderRadius: '50%', border: 'none', background: '#e74c3c', color: '#fff', fontSize: 10, cursor: 'pointer', lineHeight: '18px', padding: 0, zIndex: 1 }}>✕</button>
+        {m.name ? <div style={{ position: 'absolute', bottom: -16, left: 0, right: 0, fontSize: 9, color: '#8e8e93', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 72 }}>{m.name}</div> : null}
+      </span>
+    );
+  };
+
+  const items = sections[docSection] || [];
+  return (
+    <div style={{ padding: '12px 15px', maxWidth: 1100, margin: '0 auto' }}>
+      <h2 style={{ margin: '4px 0 4px', fontSize: 20 }}>📁 Документы</h2>
+      <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 12 }}>
+        Файлы любых типов — фото, видео, аудио, текст, PDF и другие. Общее хранилище команды (сервер). Видео больше ~50 МБ сжимаются на сервере автоматически.
+      </div>
+      {docsError && (
+        <div style={{ background: '#fff4e5', border: '1px solid #ffd699', borderRadius: 10, padding: '8px 12px', fontSize: 13, color: '#8a6d3b', marginBottom: 10 }}>
+          ⚠️ Сервер документов недоступен: {docsError}. Проверьте, что выполнена миграция supabase-migration-v25-docs.sql и сделан redeploy householder-api.
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+        {DOC_SECTIONS.map(sec => (
+          <button key={sec.key} onClick={() => setDocSection(sec.key)}
+            style={{ padding: '8px 18px', borderRadius: 980, border: docSection === sec.key ? 'none' : '1px solid #c7c7cc', background: docSection === sec.key ? '#0071e3' : '#fff', color: docSection === sec.key ? '#fff' : '#1d1d1f', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
+            {sec.title} ({(sections[sec.key] || []).length})
+          </button>
+        ))}
+      </div>
+      <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #e3e6ea', padding: 14 }}>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-start', paddingBottom: 18 }}>
+          {items.map((entry, i) => docThumb(entry, i))}
+          <label title="Добавить файлы любого типа" style={{ width: 72, height: 72, borderRadius: 8, border: '1px dashed #c7c7cc', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: docsBusy ? 'wait' : 'pointer', fontSize: 24, color: '#8e8e93', background: '#f5f5f7' }}>
+            {docsBusy ? '⏳' : '📎'}
+            <input type="file" accept="*/*" multiple disabled={docsBusy} style={{ display: 'none' }} onChange={(e) => { addDocs(docSection, e.target.files); e.target.value = ''; }} />
+          </label>
+          {items.length === 0 && !docsBusy && <div style={{ fontSize: 13, color: '#8e8e93', alignSelf: 'center' }}>Файлов пока нет — нажмите 📎, чтобы загрузить.</div>}
+        </div>
+      </div>
+
+      {docsViewer && (
+        <div onClick={() => setDocsViewer(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {docsViewer.kind === 'video' ? (
+            docsVErr ? (
+              <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 12, padding: 20, maxWidth: 420, textAlign: 'center' }}>
+                <div style={{ fontSize: 40, marginBottom: 8 }}>🎬</div>
+                <div style={{ fontSize: 14, marginBottom: 12 }}>Браузер не смог воспроизвести это видео.</div>
+                <a href={docsViewer.url} target="_blank" rel="noreferrer" style={{ color: '#0071e3', fontSize: 14 }}>Открыть/скачать оригинал ↗</a>
+              </div>
+            ) : (
+              <video src={docsViewer.url} controls autoPlay playsInline onError={() => setDocsVErr(true)} onClick={e => e.stopPropagation()} style={{ maxWidth: '92vw', maxHeight: '88vh', borderRadius: 10 }} />
+            )
+          ) : docsViewer.kind === 'audio' ? (
+            <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 12, padding: 20, maxWidth: 420 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>🎵 {docsViewer.name || 'Аудио'}</div>
+              <audio src={docsViewer.url} controls autoPlay style={{ width: '100%' }} />
+            </div>
+          ) : (
+            <img src={docsViewer.url} alt="" onClick={(e) => { e.stopPropagation(); setDocsZoom(!docsZoom); }}
+              style={docsZoom ? { maxWidth: 'none', maxHeight: 'none', cursor: 'zoom-out' } : { maxWidth: '94vw', maxHeight: '90vh', cursor: 'zoom-in', borderRadius: 6 }} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CrmTab({ user, token }) {
   const currentUser = (user && user.name && user.name !== 'admin' && !String(user.name).startsWith('user'))
     ? user.name
@@ -4836,6 +4994,10 @@ ${bodyHtml}
             <button className={activeTab === 'crm' ? 'active' : ''} onClick={() => setActiveTab('crm')}>
               🤝 CRM
             </button>
+            {/* Вкладка «Документы» (v40): разделы Дома/Авто/Личное, файлы любых типов */}
+            <button className={activeTab === 'docs' ? 'active' : ''} onClick={() => setActiveTab('docs')}>
+              📁 Документы
+            </button>
           </nav>
         </div>
         <div className="header-right">
@@ -6514,6 +6676,9 @@ ${bodyHtml}
 
       {/* Вкладка «CRM» (v32) */}
       {activeTab === 'crm' && <CrmTab user={user} token={token} />}
+
+      {/* Вкладка «Документы» (v40) */}
+      {activeTab === 'docs' && <DocsTab user={user} token={token} />}
 
       {scanResultOpen && (
         <div className="scan-overlay">

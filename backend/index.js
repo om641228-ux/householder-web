@@ -3332,6 +3332,80 @@ app.delete('/api/crm/contacts/:id/files', requireAuth, async (req, res) => {
   }
 });
 
+// ========== ДОКУМЕНТЫ (v40): разделы home/auto/personal, файлы любых типов ==========
+const DOC_CATEGORIES = ['home', 'auto', 'personal'];
+const DOCS_MIGRATION_HINT = 'Если ошибка про отсутствие таблицы — выполни supabase-migration-v25-docs.sql в SQL Editor проекта householder (Supabase)';
+
+// GET /api/docs — все разделы с файлами (командное пространство, как CRM)
+app.get('/api/docs', requireAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('doc_sections').select('*');
+    if (error) throw error;
+    const sections = { home: [], auto: [], personal: [] };
+    (data || []).forEach(r => { if (sections[r.category]) sections[r.category] = Array.isArray(r.attachments) ? r.attachments : []; });
+    res.json({ sections });
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: DOCS_MIGRATION_HINT });
+  }
+});
+
+// POST /api/docs/:category/files — multipart/form-data, поле files (любые типы, ≤500 МБ на файл)
+app.post('/api/docs/:category/files', requireAuth, crmMediaMulter('files'), async (req, res) => {
+  try {
+    const cat = String(req.params.category || '');
+    if (!DOC_CATEGORIES.includes(cat)) return res.status(400).json({ error: 'Неизвестный раздел (нужен home, auto или personal)' });
+    const userName = req.user.name || req.user.id;
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ error: 'Нет файлов: передайте поле files (multipart/form-data)' });
+    const items = [];
+    let lastErr = null;
+    for (const f of files) {
+      try {
+        const mt = f.mimetype || '';
+        const mkind = /^image\//.test(mt) ? 'photo' : /^video\//.test(mt) ? 'video' : /^audio\//.test(mt) ? 'audio'
+          : (mt === 'application/pdf' || /^text\//.test(mt) || /\.(pdf|txt|md|csv)$/i.test(f.originalname || '')) ? 'doc' : 'file';
+        let buf = f.buffer, ct = mt || 'application/octet-stream';
+        if (mkind === 'photo') { buf = await processImage(f.buffer); ct = 'image/jpeg'; }
+        if (mkind === 'video' && f.size > 48 * 1024 * 1024) { buf = await compressVideoBuffer(f.buffer); ct = 'video/mp4'; }
+        const url = await uploadToStorage(buf, f.originalname || 'file', `docs/${cat}`, ct);
+        items.push({ url, kind: mkind, name: f.originalname || '', ts: Date.now(), actor: userName });
+      } catch (e) { console.error('Docs file skip:', e.message); lastErr = e.message; }
+    }
+    if (!items.length) return res.status(400).json({ error: 'Не удалось загрузить ни одного файла' + (lastErr ? `. Причина: ${lastErr}` : '') });
+    const { data: row } = await supabaseAdmin.from('doc_sections').select('*').eq('category', cat).maybeSingle();
+    const cur = row && Array.isArray(row.attachments) ? row.attachments : [];
+    const { data, error } = await supabaseAdmin.from('doc_sections')
+      .upsert({ category: cat, attachments: [...cur, ...items], updated_at: new Date().toISOString() }, { onConflict: 'category' })
+      .select().single();
+    if (error) throw error;
+    res.json({ category: cat, attachments: Array.isArray(data.attachments) ? data.attachments : [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: DOCS_MIGRATION_HINT });
+  }
+});
+
+// DELETE /api/docs/:category/files — body {url}
+app.delete('/api/docs/:category/files', requireAuth, async (req, res) => {
+  try {
+    const cat = String(req.params.category || '');
+    if (!DOC_CATEGORIES.includes(cat)) return res.status(400).json({ error: 'Неизвестный раздел (нужен home, auto или personal)' });
+    const url = req.body && req.body.url;
+    if (!url) return res.status(400).json({ error: 'Передайте url файла' });
+    const { data: row, error: e0 } = await supabaseAdmin.from('doc_sections').select('*').eq('category', cat).maybeSingle();
+    if (e0) throw e0;
+    const cur = row && Array.isArray(row.attachments) ? row.attachments : [];
+    const next = cur.filter(u => (typeof u === 'string' ? u : u && u.url) !== url);
+    if (next.length === cur.length) return res.status(404).json({ error: 'Файл не найден в разделе' });
+    const { data, error } = await supabaseAdmin.from('doc_sections')
+      .upsert({ category: cat, attachments: next, updated_at: new Date().toISOString() }, { onConflict: 'category' })
+      .select().single();
+    if (error) throw error;
+    res.json({ category: cat, attachments: Array.isArray(data.attachments) ? data.attachments : [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: DOCS_MIGRATION_HINT });
+  }
+});
+
 app.post('/api/crm/contacts', requireAuth, async (req, res) => {
   try {
     const { counterparty_id, name, position, phone, email, comment } = req.body || {};
