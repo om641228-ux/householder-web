@@ -3406,6 +3406,50 @@ app.delete('/api/docs/:category/files', requireAuth, async (req, res) => {
   }
 });
 
+// ========== ПЛАНОВЫЕ ПЛАТЕЖИ (v41): ручные записи календаря обязательных платежей ==========
+const ppToApi = (r) => r && ({
+  id: r.id, title: r.title, category: r.category || 'other',
+  amount: r.amount != null ? Number(r.amount) : null,
+  dayOfMonth: r.day_of_month != null ? Number(r.day_of_month) : null,
+  note: r.note || '', active: r.active !== false,
+  createdAt: r.created_at ? Date.parse(r.created_at) : null
+});
+
+app.get('/api/planned-payments', requireAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('planned_payments').select('*').eq('active', true).order('day_of_month', { ascending: true });
+    if (error) throw error;
+    res.json({ items: (data || []).map(ppToApi) });
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: 'Выполни supabase-migration-v26-planned-payments.sql в SQL Editor проекта householder' });
+  }
+});
+
+app.post('/api/planned-payments', requireAuth, async (req, res) => {
+  try {
+    const { title, category, amount, day_of_month, note } = req.body || {};
+    if (!title || !String(title).trim()) return res.status(400).json({ error: 'Поле title обязательно' });
+    const day = Math.max(1, Math.min(31, parseInt(day_of_month, 10) || 1));
+    const { data, error } = await supabaseAdmin.from('planned_payments')
+      .insert([{ owner_id: req.user.id, title: String(title).trim(), category: category || 'other', amount: amount != null && amount !== '' ? Number(amount) : null, day_of_month: day, note: note || null }])
+      .select().single();
+    if (error) throw error;
+    res.json({ item: ppToApi(data) });
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: 'Выполни supabase-migration-v26-planned-payments.sql в SQL Editor проекта householder' });
+  }
+});
+
+app.delete('/api/planned-payments/:id', requireAuth, async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.from('planned_payments').update({ active: false }).eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/api/crm/contacts', requireAuth, async (req, res) => {
   try {
     const { counterparty_id, name, position, phone, email, comment } = req.body || {};

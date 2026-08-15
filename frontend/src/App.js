@@ -2473,6 +2473,11 @@ function App() {
   const [bankDateTo, setBankDateTo] = useState('');     // фильтр по дате операции: по
   const [bankCpFilter, setBankCpFilter] = useState([]); // фильтр по контрагентам (множественный выбор, Excel-стиль)
   const [linkPicker, setLinkPicker] = useState(null);   // движение, для которого открыт выбор фактуры
+  // Таймлайн повторяющихся платежей (v41): ручные плановые платежи (сервер, таблица planned_payments)
+  const [plannedPayments, setPlannedPayments] = useState([]);
+  const [plannedModal, setPlannedModal] = useState(false);
+  const [plannedForm, setPlannedForm] = useState({ title: '', amount: '', day: '1', category: 'utilities' });
+  const [plannedSaving, setPlannedSaving] = useState(false);
   const [linkSearch, setLinkSearch] = useState('');
   const [linkSaving, setLinkSaving] = useState(false);
   // Вкладка «Налоги» (v30): черновик форм (отдельный выбор квартала убран в v30.5 — платежи следуют за диапазоном «с/по»)
@@ -3766,6 +3771,45 @@ function App() {
     finally { setBankLoading(false); }
   };
 
+  // Плановые платежи (v41): ручные записи календаря обязательных платежей
+  const loadPlannedPayments = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/planned-payments?token=${token}`);
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) setPlannedPayments(data.items || []);
+      else console.error('planned-payments:', data.error);
+    } catch (e) { console.error(e); }
+  };
+  const savePlannedPayment = async () => {
+    if (!plannedForm.title.trim()) { alert('Введите название платежа'); return; }
+    setPlannedSaving(true);
+    try {
+      const res = await fetch(`${API_URL}/api/planned-payments?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: plannedForm.title.trim(),
+          category: plannedForm.category,
+          amount: plannedForm.amount !== '' ? Number(plannedForm.amount) : null,
+          day_of_month: parseInt(plannedForm.day, 10) || 1
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setPlannedPayments(prev => [...prev, data.item].sort((a, b) => (a.dayOfMonth || 1) - (b.dayOfMonth || 1)));
+      setPlannedModal(false);
+      setPlannedForm({ title: '', amount: '', day: '1', category: 'utilities' });
+    } catch (e) { alert('Не сохранилось: ' + e.message); }
+    finally { setPlannedSaving(false); }
+  };
+  const removePlannedPayment = async (id) => {
+    if (!window.confirm('Удалить этот плановый платёж?')) return;
+    try {
+      const res = await fetch(`${API_URL}/api/planned-payments/${id}?token=${token}`, { method: 'DELETE' });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `HTTP ${res.status}`); }
+      setPlannedPayments(prev => prev.filter(p => String(p.id) !== String(id)));
+    } catch (e) { alert('Не удалилось: ' + e.message); }
+  };
+
   // Импорт выписки банка (.xlsx Ruralvía) → автопривязка фактур к платежам
   const handleStatementSelect = async (e) => {
     const file = e.target.files?.[0];
@@ -4983,7 +5027,7 @@ ${bodyHtml}
               Чеки/фактуры ({receiptCount}) · Прочие документы ({invoiceCount})
             </button>
             {/* Вкладка «Анализ»: банковские выписки и автопривязка платежей к фактурам */}
-            <button className={activeTab === 'analysis' ? 'active' : ''} onClick={() => {setActiveTab('analysis'); loadReceipts(); loadBankMovements();}}>
+            <button className={activeTab === 'analysis' ? 'active' : ''} onClick={() => {setActiveTab('analysis'); loadReceipts(); loadBankMovements(); loadPlannedPayments();}}>
               📊 Анализ
             </button>
             {/* Вкладка «Налоги» (v29.2): полная копия банковского «Анализа» — основа под налоговый учёт */}
@@ -6230,6 +6274,51 @@ ${bodyHtml}
             });
             const sumAll = sumOf(bankMovements);
             const sumVis = sumOf(visible);
+            // ---- Таймлайн обязательных повторяющихся платежей (v41) ----
+            const RECUR_CATS = [
+              { key: 'utilities', label: '💡 Коммуналка', kw: ['endesa', 'iberdrola', 'naturgy', 'canal', 'agua', 'luz', 'gas ', 'electric', 'aqualia', 'hidralia', 'emasesa', 'repsol'] },
+              { key: 'insurance', label: '🛡 Страховка', kw: ['seguro', 'mapfre', 'axa', 'allianz', 'generali', 'linea directa', 'mutua', 'asefa', 'sanitas', 'adeslas'] },
+              { key: 'phone', label: '📱 Телефон', kw: ['movistar', 'orange', 'vodafone', 'yoigo', 'telefonica', 'pepephone', 'masmovil', 'digi', 'jazztel', 'o2'] },
+              { key: 'internet', label: '🌐 Интернет', kw: ['internet', 'fibra', 'adsl', 'wifi'] },
+              { key: 'cleaning', label: '🧹 Уборка', kw: ['limpieza', 'cleaning', 'limpio', 'уборк'] },
+              { key: 'pool', label: '🏊 Бассейн', kw: ['piscina', 'pool', 'бассейн'] },
+              { key: 'other', label: '🔁 Платёж', kw: [] }
+            ];
+            const recurCatOf = (name) => {
+              const n = String(name || '').toLowerCase();
+              const found = RECUR_CATS.find(c => c.kw.some(k => n.includes(k)));
+              return found || RECUR_CATS[RECUR_CATS.length - 1];
+            };
+            const normCpKey = (v) => String(v || '').toLowerCase().replace(/[^a-zа-яё0-9]+/gi, ' ').trim().slice(0, 40);
+            const recurGroups = {};
+            out.forEach(m => {
+              const key = normCpKey(m.counterparty) || normCpKey(m.concept);
+              if (!key) return;
+              if (!recurGroups[key]) recurGroups[key] = { name: String(m.counterparty || m.concept || '').trim(), items: [] };
+              recurGroups[key].items.push(m);
+            });
+            const recurring = Object.values(recurGroups).map(g => {
+              const dates = g.items.map(m => m.operation_date).filter(Boolean).sort();
+              const months = [...new Set(dates.map(d => d.slice(0, 7)))];
+              const amounts = g.items.map(m => Math.abs(Number(m.amount) || 0));
+              const avg = amounts.reduce((a, b) => a + b, 0) / (amounts.length || 1);
+              const days = dates.map(d => +d.slice(8, 10)).sort((a, b) => a - b);
+              const usualDay = days.length ? days[Math.floor(days.length / 2)] : 1;
+              return { name: g.name, count: g.items.length, months, avg, usualDay, cat: recurCatOf(g.name) };
+            }).filter(g => g.months.length >= 2).sort((a, b) => a.usualDay - b.usualDay);
+            // Ось месяцев: 5 назад + текущий + 2 вперёд
+            const nowD = new Date();
+            const curYm = `${nowD.getFullYear()}-${String(nowD.getMonth() + 1).padStart(2, '0')}`;
+            const tlMonths = [];
+            {
+              const dd = new Date(nowD.getFullYear(), nowD.getMonth() - 5, 1);
+              for (let i = 0; i < 8; i++) {
+                tlMonths.push(`${dd.getFullYear()}-${String(dd.getMonth() + 1).padStart(2, '0')}`);
+                dd.setMonth(dd.getMonth() + 1);
+              }
+            }
+            const tlMonthLabel = (ym) => `${MONTH_NAMES[+ym.slice(5, 7) - 1].slice(0, 3)} ${ym.slice(2, 4)}`;
+            const manualRows = plannedPayments.map(p => ({ manual: true, id: p.id, name: p.title, avg: p.amount, usualDay: p.dayOfMonth || 1, cat: RECUR_CATS.find(c => c.key === p.category) || RECUR_CATS[RECUR_CATS.length - 1] }));
             return (
               <>
                 {bankMovements.length === 0 && !bankLoading && (
@@ -6244,6 +6333,74 @@ ${bodyHtml}
                     {stat('Платежи без фактуры', unmatchedOut.length, '#e67e22', '#fdf2e3')}
                     {stat('Счета без платежа в банке', unpaidBills.length, '#e74c3c', '#fdecea')}
                 </div>
+                {(recurring.length > 0 || manualRows.length > 0 || bankMovements.length > 0) && (
+                  <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: '10px 12px', marginBottom: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                      <span style={{ fontSize: 15, fontWeight: 800, color: '#1d1d1f' }}>📅 Обязательные повторяющиеся платежи</span>
+                      <span style={{ fontSize: 11, color: '#8e8e93' }}>🟢 оплачен · ◌ ожидается (~день месяца) · ✋ добавлен вручную</span>
+                      <button onClick={() => setPlannedModal(true)} style={{ marginLeft: 'auto', border: 'none', background: '#0071e3', color: '#fff', borderRadius: 980, padding: '5px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>＋ Добавить платёж</button>
+                    </div>
+                    {(recurring.length === 0 && manualRows.length === 0) ? (
+                      <div style={{ fontSize: 13, color: '#8e8e93' }}>Повторяющиеся платежи не найдены (нужны ≥2 платежа одному контрагенту в разные месяцы) — или добавьте платёж вручную кнопкой «＋».</div>
+                    ) : (
+                      <div style={{ overflowX: 'auto' }}>
+                        <table style={{ borderCollapse: 'collapse', fontSize: 12, minWidth: '100%' }}>
+                          <thead>
+                            <tr>
+                              <th style={{ textAlign: 'left', padding: '4px 8px', color: '#6e6e73', fontWeight: 700, position: 'sticky', left: 0, background: '#fff' }}>Платёж</th>
+                              <th style={{ textAlign: 'right', padding: '4px 8px', color: '#6e6e73', fontWeight: 700 }}>Сумма ≈</th>
+                              <th style={{ textAlign: 'center', padding: '4px 8px', color: '#6e6e73', fontWeight: 700 }}>День</th>
+                              {tlMonths.map(ym => (
+                                <th key={ym} style={{ textAlign: 'center', padding: '4px 6px', color: ym === curYm ? '#0071e3' : '#6e6e73', fontWeight: ym === curYm ? 800 : 700, whiteSpace: 'nowrap' }}>{tlMonthLabel(ym)}</th>
+                              ))}
+                              <th></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {recurring.map(g => (
+                              <tr key={`a_${g.name}`} style={{ borderTop: '1px solid #f0f0f0' }}>
+                                <td style={{ padding: '4px 8px', position: 'sticky', left: 0, background: '#fff', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={g.name}>
+                                  {g.cat.label} <b>{g.name}</b> <span style={{ color: '#8e8e93', fontSize: 11 }}>×{g.count}</span>
+                                </td>
+                                <td style={{ textAlign: 'right', padding: '4px 8px', fontWeight: 700 }}>{formatAmount(g.avg, 'EUR')}</td>
+                                <td style={{ textAlign: 'center', padding: '4px 8px', color: '#6e6e73' }}>~{g.usualDay}</td>
+                                {tlMonths.map(ym => {
+                                  const paid = g.months.includes(ym);
+                                  const future = ym >= curYm;
+                                  return (
+                                    <td key={ym} title={paid ? `Оплачен в ${tlMonthLabel(ym)}` : future ? `Ожидается ~${g.usualDay} числа` : 'Платежа не было'}
+                                      style={{ textAlign: 'center', padding: '4px 6px', background: ym === curYm ? '#f0f7ff' : 'transparent' }}>
+                                      {paid ? '🟢' : future ? <span style={{ color: '#c7c7cc' }}>◌</span> : <span style={{ color: '#e3e6ea' }}>·</span>}
+                                    </td>
+                                  );
+                                })}
+                                <td></td>
+                              </tr>
+                            ))}
+                            {manualRows.map(g => (
+                              <tr key={`m_${g.id}`} style={{ borderTop: '1px solid #f0f0f0', background: '#fffdf5' }}>
+                                <td style={{ padding: '4px 8px', position: 'sticky', left: 0, background: '#fffdf5', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={g.name}>
+                                  {g.cat.label} <b>{g.name}</b> <span style={{ color: '#b8860b', fontSize: 11 }}>✋ вручную</span>
+                                </td>
+                                <td style={{ textAlign: 'right', padding: '4px 8px', fontWeight: 700 }}>{g.avg != null ? formatAmount(g.avg, 'EUR') : '—'}</td>
+                                <td style={{ textAlign: 'center', padding: '4px 8px', color: '#6e6e73' }}>~{g.usualDay}</td>
+                                {tlMonths.map(ym => (
+                                  <td key={ym} title={ym >= curYm ? `Ожидается ~${g.usualDay} числа` : 'Плановый платёж'}
+                                    style={{ textAlign: 'center', padding: '4px 6px', background: ym === curYm ? '#f0f7ff' : 'transparent' }}>
+                                    {ym >= curYm ? <span style={{ color: '#b8860b' }}>◌</span> : <span style={{ color: '#e3e6ea' }}>·</span>}
+                                  </td>
+                                ))}
+                                <td style={{ padding: '4px 4px' }}>
+                                  <button onClick={() => removePlannedPayment(g.id)} title="Удалить плановый платёж" style={{ border: 'none', background: 'none', color: '#e74c3c', cursor: 'pointer', fontSize: 13, padding: '0 4px' }}>✕</button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 0 }}>
                   <select value={bankFilter} onChange={e => setBankFilter(e.target.value)} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ddd', fontSize: 14, background: '#fff', color: '#333', height: 36, boxSizing: 'border-box' }}>
                     <option value="all">Все движения</option>
@@ -6306,6 +6463,36 @@ ${bodyHtml}
                 })}
                 {!bankLoading && bankMovements.length > 0 && visible.length === 0 && (
                   <p style={{ color: '#95a5a6' }}>Ничего не найдено по текущему фильтру.</p>
+                )}
+                {plannedModal && (
+                  <div onClick={() => setPlannedModal(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 150, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+                    <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 18, width: '100%', maxWidth: 380 }}>
+                      <h3 style={{ margin: '0 0 12px', fontSize: 17 }}>＋ Плановый платёж</h3>
+                      <div style={{ display: 'grid', gap: 10 }}>
+                        <label style={{ fontSize: 12, color: '#6e6e73' }}>Название (например: Коммуналка, Страховка, Телефон, Интернет, Уборка, Бассейн)
+                          <input autoFocus value={plannedForm.title} onChange={e => setPlannedForm(f => ({ ...f, title: e.target.value }))} placeholder="Например: Интернет Movistar" style={{ display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 4, padding: '8px 10px', borderRadius: 8, border: '1px solid #d2d2d7', fontSize: 14 }} />
+                        </label>
+                        <label style={{ fontSize: 12, color: '#6e6e73' }}>Категория
+                          <select value={plannedForm.category} onChange={e => setPlannedForm(f => ({ ...f, category: e.target.value }))} style={{ display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 4, padding: '8px 10px', borderRadius: 8, border: '1px solid #d2d2d7', fontSize: 14, background: '#fff' }}>
+                            {RECUR_CATS.filter(c => c.key !== 'other').map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+                            <option value="other">🔁 Другое</option>
+                          </select>
+                        </label>
+                        <div style={{ display: 'flex', gap: 10 }}>
+                          <label style={{ fontSize: 12, color: '#6e6e73', flex: 1 }}>Сумма, € (необязательно)
+                            <input type="number" min="0" step="0.01" value={plannedForm.amount} onChange={e => setPlannedForm(f => ({ ...f, amount: e.target.value }))} placeholder="0.00" style={{ display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 4, padding: '8px 10px', borderRadius: 8, border: '1px solid #d2d2d7', fontSize: 14 }} />
+                          </label>
+                          <label style={{ fontSize: 12, color: '#6e6e73', flex: 1 }}>День месяца
+                            <input type="number" min="1" max="31" value={plannedForm.day} onChange={e => setPlannedForm(f => ({ ...f, day: e.target.value }))} style={{ display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 4, padding: '8px 10px', borderRadius: 8, border: '1px solid #d2d2d7', fontSize: 14 }} />
+                          </label>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
+                        <button onClick={() => setPlannedModal(false)} style={{ padding: '8px 16px', borderRadius: 980, border: '1px solid #c7c7cc', background: '#fff', cursor: 'pointer' }}>Отмена</button>
+                        <button onClick={savePlannedPayment} disabled={plannedSaving} style={{ padding: '8px 16px', borderRadius: 980, border: 'none', background: '#0071e3', color: '#fff', fontWeight: 700, cursor: plannedSaving ? 'wait' : 'pointer' }}>{plannedSaving ? '⏳ Сохранение…' : 'Сохранить'}</button>
+                      </div>
+                    </div>
+                  </div>
                 )}
                 {linkPicker && (() => {
                   const mvAmt = Math.abs(Number(linkPicker.amount) || 0);
