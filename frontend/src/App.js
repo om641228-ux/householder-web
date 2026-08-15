@@ -939,7 +939,12 @@ function CrmTab({ user, token }) {
     video.src = url;
     let settled = false;
     let audioCtx = null;
-    const cleanup = () => { URL.revokeObjectURL(url); if (audioCtx) audioCtx.close().catch(() => {}); };
+    let watchdog = null;
+    const cleanup = () => {
+      if (watchdog) clearInterval(watchdog);
+      URL.revokeObjectURL(url);
+      if (audioCtx) audioCtx.close().catch(() => {});
+    };
     const fail = (msg) => { if (settled) return; settled = true; cleanup(); reject(new Error(msg)); };
     video.onerror = () => fail('браузер не может прочитать это видео');
     video.onloadedmetadata = () => {
@@ -974,11 +979,22 @@ function CrmTab({ user, token }) {
       const chunks = [];
       let stopped = false;
       let rafId = null;
+      let lastProgressAt = Date.now();
+      // Завершение — по ПЕРВОМУ из событий: 'ended', currentTime почти у duration
+      // (некоторые .mov глохнут за долю секунды до конца и 'ended' не приходит — v37.1)
+      const finish = () => {
+        if (stopped) return;
+        stopped = true;
+        try { video.pause(); } catch (e) {}
+        if (rafId) cancelAnimationFrame(rafId);
+        try { if (rec.state !== 'inactive') rec.stop(); } catch (e) {}
+      };
       rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
       rec.onerror = () => fail('ошибка кодирования видео');
       rec.onstop = () => {
         if (settled) return;
         settled = true;
+        try { stream.getTracks().forEach(tr => tr.stop()); } catch (e) {}
         cleanup();
         const type = mimeType ? mimeType.split(';')[0].replace(/"/g, '') : 'video/webm';
         const ext = type === 'video/mp4' ? '.mp4' : '.webm';
@@ -986,8 +1002,19 @@ function CrmTab({ user, token }) {
         if (!blob.size) return reject(new Error('пустой результат кодирования'));
         resolve(new File([blob], file.name.replace(/\.[^.]+$/, ext), { type, lastModified: Date.now() }));
       };
-      video.ontimeupdate = () => { if (onProgress && duration) onProgress(Math.min(99, Math.round(video.currentTime / duration * 100))); };
-      video.onended = () => { stopped = true; if (rafId) cancelAnimationFrame(rafId); if (rec.state !== 'inactive') rec.stop(); };
+      video.ontimeupdate = () => {
+        lastProgressAt = Date.now();
+        if (onProgress && duration) onProgress(Math.min(99, Math.round(video.currentTime / duration * 100)));
+        if (video.currentTime >= duration - 0.25) finish();
+      };
+      video.onended = finish;
+      // Сторожевой таймер: нет прогресса 15 сек — у конца дорисовываем хвост, иначе честная ошибка
+      watchdog = setInterval(() => {
+        if (settled || stopped) return;
+        if (Date.now() - lastProgressAt < 15000) return;
+        if (video.currentTime >= duration - 1) finish();
+        else fail(`видео остановилось на ${Math.round(video.currentTime / duration * 100)}% — файл повреждён или формат не поддерживается браузером`);
+      }, 3000);
       const hasRvfc = typeof video.requestVideoFrameCallback === 'function';
       const drawFrame = () => {
         if (stopped) return;
