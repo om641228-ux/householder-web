@@ -15,7 +15,15 @@ require('dotenv').config();
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
-const crmMediaUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } }); // CRM-медиа (v36): видео/аудио до 100 МБ
+const crmMediaUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } }); // CRM-медиа (v36.1): видео/аудио до 500 МБ
+// Обёртка над multer: LIMIT_FILE_SIZE и прочие ошибки отдаём JSON (413/400), а не HTML-страницей Express → фронт покажет понятный текст
+const crmMediaMulter = (field) => (req, res, next) => {
+  crmMediaUpload.array(field)(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'Файл слишком большой — максимум 500 МБ на файл' });
+    return res.status(400).json({ error: 'Ошибка приёма файла: ' + err.message });
+  });
+};
 
 // ========== SUPABASE with WS transport ==========
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -3145,7 +3153,7 @@ app.delete('/api/crm/counterparties/:id', requireAuth, async (req, res) => {
 // attachments — jsonb [{url, kind: photo|video|audio, name, ts, actor}] в Storage (папка crm_cp/).
 // CRM — командное пространство: добавлять/удалять файлы может любой авторизованный пользователь.
 // POST /api/crm/counterparties/:id/files — multipart/form-data, поле files (количество не ограничено)
-app.post('/api/crm/counterparties/:id/files', requireAuth, crmMediaUpload.array('files'), async (req, res) => {
+app.post('/api/crm/counterparties/:id/files', requireAuth, crmMediaMulter('files'), async (req, res) => {
   try {
     const { data: cp, error: e0 } = await supabaseAdmin.from('crm_counterparties').select('*').eq('id', req.params.id).single();
     if (e0 || !cp) return res.status(404).json({ error: 'Контрагент не найден' });
@@ -3153,6 +3161,7 @@ app.post('/api/crm/counterparties/:id/files', requireAuth, crmMediaUpload.array(
     const files = req.files || [];
     if (!files.length) return res.status(400).json({ error: 'Нет файлов: передайте поле files (multipart/form-data)' });
     const items = [];
+    let lastErr = null;
     for (const f of files) {
       try {
         const mt = f.mimetype || '';
@@ -3162,9 +3171,9 @@ app.post('/api/crm/counterparties/:id/files', requireAuth, crmMediaUpload.array(
         if (mkind === 'photo') { buf = await processImage(f.buffer); ct = 'image/jpeg'; }
         const url = await uploadToStorage(buf, f.originalname || 'file', 'crm_cp', ct);
         items.push({ url, kind: mkind, name: f.originalname || '', ts: Date.now(), actor: userName });
-      } catch (e) { console.error('CRM cp file skip:', e.message); }
+      } catch (e) { console.error('CRM cp file skip:', e.message); lastErr = e.message; }
     }
-    if (!items.length) return res.status(400).json({ error: 'Не удалось загрузить ни одного файла (нужны фото, видео или аудио)' });
+    if (!items.length) return res.status(400).json({ error: 'Не удалось загрузить ни одного файла (нужны фото, видео или аудио)' + (lastErr ? `. Причина: ${lastErr}` : '') });
     const cur = Array.isArray(cp.attachments) ? cp.attachments : [];
     const { data, error } = await supabaseAdmin.from('crm_counterparties')
       .update({ attachments: [...cur, ...items], updated_at: new Date().toISOString() })
@@ -3362,8 +3371,8 @@ app.delete('/api/crm/tasks/:id', requireAuth, async (req, res) => {
 // photos_before / photos_after — jsonb-массивы URL в Storage (bucket receipt-images, папка crm/).
 // Добавлять/удалять фото может постановщик или исполнитель; у закрытой задачи отчёт заморожен.
 // Каждая операция дописывает событие в timeline (action: photo | photo_del).
-// POST /api/crm/tasks/:id/photos?kind=before|after — multipart/form-data, поле photos (фото/видео/аудио, количество не ограничено, ≤100 МБ на файл)
-app.post('/api/crm/tasks/:id/photos', requireAuth, crmMediaUpload.array('photos'), async (req, res) => {
+// POST /api/crm/tasks/:id/photos?kind=before|after — multipart/form-data, поле photos (фото/видео/аудио, количество не ограничено, ≤500 МБ на файл)
+app.post('/api/crm/tasks/:id/photos', requireAuth, crmMediaMulter('photos'), async (req, res) => {
   try {
     const kind = req.query.kind === 'after' ? 'after' : 'before';
     const col = kind === 'after' ? 'photos_after' : 'photos_before';
@@ -3377,6 +3386,7 @@ app.post('/api/crm/tasks/:id/photos', requireAuth, crmMediaUpload.array('photos'
     const files = req.files || [];
     if (!files.length) return res.status(400).json({ error: 'Нет файлов: передайте поле photos (multipart/form-data)' });
     const items = [];
+    let lastErr = null;
     for (const f of files) {
       try {
         const mt = f.mimetype || '';
@@ -3386,9 +3396,9 @@ app.post('/api/crm/tasks/:id/photos', requireAuth, crmMediaUpload.array('photos'
         if (mkind === 'photo') { buf = await processImage(f.buffer); ct = 'image/jpeg'; }
         const url = await uploadToStorage(buf, `${kind}_${f.originalname || 'file'}`, 'crm', ct);
         items.push({ url, kind: mkind, name: f.originalname || '', ts: Date.now(), actor: userName });
-      } catch (e) { console.error('CRM media skip:', e.message); }
+      } catch (e) { console.error('CRM media skip:', e.message); lastErr = e.message; }
     }
-    if (!items.length) return res.status(400).json({ error: 'Не удалось загрузить ни одного файла (нужны фото, видео или аудио)' });
+    if (!items.length) return res.status(400).json({ error: 'Не удалось загрузить ни одного файла (нужны фото, видео или аудио)' + (lastErr ? `. Причина: ${lastErr}` : '') });
     const nP = items.filter(u => u.kind === 'photo').length;
     const nV = items.filter(u => u.kind === 'video').length;
     const nA = items.filter(u => u.kind === 'audio').length;

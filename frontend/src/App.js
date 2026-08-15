@@ -751,6 +751,7 @@ function CrmTab({ user, token }) {
   const [photoBusy, setPhotoBusy] = useState(null);
   const [photoViewer, setPhotoViewer] = useState(null);
   const [photoZoom, setPhotoZoom] = useState(false); // false — уместить в экран, true — натуральный размер
+  const [mediaProgress, setMediaProgress] = useState(null); // текст прогресса сжатия видео (v37), null — скрыт
 
   // ---- Загрузка CRM (v33): с сервера; при недоступности — локальный режим (localStorage) ----
   const crmApi = useCallback(async (path, options) => {
@@ -925,6 +926,85 @@ function CrmTab({ user, token }) {
   // (старые записи — просто строка-URL, трактуем как фото).
   const mediaOf = (entry) => (entry && typeof entry === 'object') ? entry : { url: entry, kind: 'photo', name: '' };
   const fileMediaKind = (f) => /^image\//.test(f.type || '') ? 'photo' : /^video\//.test(f.type || '') ? 'video' : 'audio';
+
+  // Сжатие видео до ~targetMB (v37): realtime-транскодинг в браузере —
+  // кадры через <canvas> → captureStream(30), звук через AudioContext, запись MediaRecorder.
+  // Результат: mp4 (Safari/новый Chrome) или webm — что поддержит браузер. Время ≈ длительности видео.
+  const compressVideoFile = (file, targetMB, onProgress) => new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const video = document.createElement('video');
+    video.muted = true; // на поток через AudioContext не влияет
+    video.playsInline = true;
+    video.preload = 'auto';
+    video.src = url;
+    let settled = false;
+    let audioCtx = null;
+    const cleanup = () => { URL.revokeObjectURL(url); if (audioCtx) audioCtx.close().catch(() => {}); };
+    const fail = (msg) => { if (settled) return; settled = true; cleanup(); reject(new Error(msg)); };
+    video.onerror = () => fail('браузер не может прочитать это видео');
+    video.onloadedmetadata = () => {
+      const duration = video.duration;
+      if (!duration || !isFinite(duration)) return fail('не удалось определить длительность видео');
+      // целевой битрейт: ёмкость targetMB на длительность, запас ~8%, звук 96 кбит/с
+      const audioBps = 96000;
+      let videoBps = Math.floor((targetMB * 8 * 1024 * 1024) / duration * 0.92 - audioBps);
+      if (videoBps < 300000) videoBps = 300000; // ниже — нечитаемая каша
+      let w = video.videoWidth || 640, h = video.videoHeight || 360;
+      const scale = Math.min(1, 1280 / w, 720 / h); // больше 720p не нужно для отчётов
+      w = Math.max(2, Math.round(w * scale / 2) * 2);
+      h = Math.max(2, Math.round(h * scale / 2) * 2);
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      const stream = canvas.captureStream(30);
+      try {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const srcNode = audioCtx.createMediaElementSource(video);
+        const dest = audioCtx.createMediaStreamDestination();
+        srcNode.connect(dest);
+        audioCtx.resume().catch(() => {});
+        dest.stream.getAudioTracks().forEach(tr => stream.addTrack(tr));
+      } catch (e) { console.warn('видео без звуковой дорожки:', e); }
+      const mimeCandidates = ['video/mp4;codecs="avc1.42E01E,mp4a.40.2"', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
+      const mimeType = mimeCandidates.find(m => { try { return window.MediaRecorder && MediaRecorder.isTypeSupported(m); } catch (e) { return false; } }) || '';
+      let rec;
+      try {
+        rec = new MediaRecorder(stream, { ...(mimeType ? { mimeType } : {}), videoBitsPerSecond: videoBps, audioBitsPerSecond: audioBps });
+      } catch (e) { return fail('MediaRecorder недоступен в этом браузере'); }
+      const chunks = [];
+      let stopped = false;
+      let rafId = null;
+      rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+      rec.onerror = () => fail('ошибка кодирования видео');
+      rec.onstop = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        const type = mimeType ? mimeType.split(';')[0].replace(/"/g, '') : 'video/webm';
+        const ext = type === 'video/mp4' ? '.mp4' : '.webm';
+        const blob = new Blob(chunks, { type });
+        if (!blob.size) return reject(new Error('пустой результат кодирования'));
+        resolve(new File([blob], file.name.replace(/\.[^.]+$/, ext), { type, lastModified: Date.now() }));
+      };
+      video.ontimeupdate = () => { if (onProgress && duration) onProgress(Math.min(99, Math.round(video.currentTime / duration * 100))); };
+      video.onended = () => { stopped = true; if (rafId) cancelAnimationFrame(rafId); if (rec.state !== 'inactive') rec.stop(); };
+      const hasRvfc = typeof video.requestVideoFrameCallback === 'function';
+      const drawFrame = () => {
+        if (stopped) return;
+        ctx.drawImage(video, 0, 0, w, h);
+        if (hasRvfc) video.requestVideoFrameCallback(drawFrame);
+      };
+      video.onplay = () => {
+        if (hasRvfc) { video.requestVideoFrameCallback(drawFrame); }
+        else {
+          const loop = () => { if (stopped) return; ctx.drawImage(video, 0, 0, w, h); rafId = requestAnimationFrame(loop); };
+          loop();
+        }
+      };
+      rec.start(1000);
+      video.play().catch(() => fail('браузер запретил воспроизведение для сжатия'));
+    };
+  });
   const mediaNote = (kind, items) => {
     const nP = items.filter(u => u.kind === 'photo').length;
     const nV = items.filter(u => u.kind === 'video').length;
@@ -936,18 +1016,37 @@ function CrmTab({ user, token }) {
     return `Медиа «${kind === 'after' ? 'после' : 'до'}»: ${parts.join(', ')}`;
   };
   const addTaskPhotos = async (taskId, kind, fileList) => {
-    const files = Array.from(fileList || []).filter(f => /^(image|video|audio)\//.test(f.type || ''));
+    let files = Array.from(fileList || []).filter(f => /^(image|video|audio)\//.test(f.type || ''));
+    const tooBig = files.filter(f => f.size > 500 * 1024 * 1024 && fileMediaKind(f) !== 'video');
+    if (tooBig.length) alert(`Слишком большие файлы (максимум 500 МБ) — пропущены:\n${tooBig.map(f => `${f.name} — ${(f.size / 1024 / 1024).toFixed(0)} МБ`).join('\n')}`);
+    files = files.filter(f => !(f.size > 500 * 1024 * 1024 && fileMediaKind(f) !== 'video'));
     if (!files.length) { alert('Выберите фото, видео или аудио'); return; }
     setPhotoBusy(`${taskId}_${kind}`);
     try {
       const prepared = [];
-      for (const f of files) prepared.push(fileMediaKind(f) === 'photo' ? await compressImageFile(f) : f);
+      for (const f of files) {
+        const mk = fileMediaKind(f);
+        if (mk === 'photo') { prepared.push(await compressImageFile(f)); continue; }
+        if (mk === 'video' && f.size > 48 * 1024 * 1024) {
+          try {
+            const cv = await compressVideoFile(f, 48, (pct) => setMediaProgress(`🎬 Сжатие видео до ~50 МБ: ${pct}%`));
+            prepared.push(cv.size < f.size ? cv : f);
+          } catch (e) {
+            console.warn('Сжатие видео не удалось, отправляю оригинал:', e && e.message);
+            prepared.push(f);
+          } finally { setMediaProgress(null); }
+          continue;
+        }
+        prepared.push(f);
+      }
       if (useServer) {
         const fd = new FormData();
         prepared.forEach(f => fd.append('photos', f));
         const res = await fetch(`${API_URL}/api/crm/tasks/${taskId}/photos?kind=${kind}&token=${token}`, { method: 'POST', body: fd });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        const rawText = await res.text().catch(() => '');
+        let data = {};
+        try { data = JSON.parse(rawText); } catch (e) { data = {}; }
+        if (!res.ok) throw new Error(data.error || (rawText && rawText.length < 300 ? rawText : `HTTP ${res.status}`));
         setTasks(prev => (prev || []).map(t => String(t.id) === String(taskId) ? data.task : t));
       } else {
         const items = await Promise.all(prepared.map(f => new Promise((resolve, reject) => {
@@ -1031,6 +1130,7 @@ function CrmTab({ user, token }) {
     return (
       <div style={{ marginTop: 10 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: '#6e6e73', marginBottom: 6 }}>📷 Фотоотчёт (фото · видео · аудио)</div>
+        <div style={{ fontSize: 11, color: '#8e8e93', marginBottom: 6 }}>Видео больше ~50 МБ сжимаются автоматически (время ≈ длительности видео).</div>
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
           {block('before', '🕐 До выполнения', 'Добавить фото/видео/аудио «до»')}
           {block('after', '✅ После выполнения', 'Добавить фото/видео/аудио «после»')}
@@ -1041,18 +1141,37 @@ function CrmTab({ user, token }) {
 
   // ---- файлы контрагента (v36): фото/видео/аудио, attachments в crm_counterparties (миграция v23) ----
   const addCpFiles = async (cpId, fileList) => {
-    const files = Array.from(fileList || []).filter(f => /^(image|video|audio)\//.test(f.type || ''));
+    let files = Array.from(fileList || []).filter(f => /^(image|video|audio)\//.test(f.type || ''));
+    const tooBig = files.filter(f => f.size > 500 * 1024 * 1024 && fileMediaKind(f) !== 'video');
+    if (tooBig.length) alert(`Слишком большие файлы (максимум 500 МБ) — пропущены:\n${tooBig.map(f => `${f.name} — ${(f.size / 1024 / 1024).toFixed(0)} МБ`).join('\n')}`);
+    files = files.filter(f => !(f.size > 500 * 1024 * 1024 && fileMediaKind(f) !== 'video'));
     if (!files.length) { alert('Выберите фото, видео или аудио'); return; }
     setPhotoBusy(`cp_${cpId}`);
     try {
       const prepared = [];
-      for (const f of files) prepared.push(fileMediaKind(f) === 'photo' ? await compressImageFile(f) : f);
+      for (const f of files) {
+        const mk = fileMediaKind(f);
+        if (mk === 'photo') { prepared.push(await compressImageFile(f)); continue; }
+        if (mk === 'video' && f.size > 48 * 1024 * 1024) {
+          try {
+            const cv = await compressVideoFile(f, 48, (pct) => setMediaProgress(`🎬 Сжатие видео до ~50 МБ: ${pct}%`));
+            prepared.push(cv.size < f.size ? cv : f);
+          } catch (e) {
+            console.warn('Сжатие видео не удалось, отправляю оригинал:', e && e.message);
+            prepared.push(f);
+          } finally { setMediaProgress(null); }
+          continue;
+        }
+        prepared.push(f);
+      }
       if (useServer) {
         const fd = new FormData();
         prepared.forEach(f => fd.append('files', f));
         const res = await fetch(`${API_URL}/api/crm/counterparties/${cpId}/files?token=${token}`, { method: 'POST', body: fd });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        const rawText = await res.text().catch(() => '');
+        let data = {};
+        try { data = JSON.parse(rawText); } catch (e) { data = {}; }
+        if (!res.ok) throw new Error(data.error || (rawText && rawText.length < 300 ? rawText : `HTTP ${res.status}`));
         setCps(prev => (prev || []).map(c => String(c.id) === String(cpId) ? data.counterparty : c));
       } else {
         const items = await Promise.all(prepared.map(f => new Promise((resolve, reject) => {
@@ -1088,6 +1207,7 @@ function CrmTab({ user, token }) {
     return (
       <div style={{ marginTop: 10 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: '#6e6e73', marginBottom: 6 }}>📎 Файлы — фото · видео · аудио ({items.length})</div>
+        <div style={{ fontSize: 11, color: '#8e8e93', marginBottom: 6 }}>Видео больше ~50 МБ сжимаются автоматически (время ≈ длительности видео).</div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {items.map((entry, i) => renderMediaThumb(entry, i, () => removeCpFile(cp.id, mediaOf(entry).url)))}
           <label title="Добавить фото, видео или аудио" style={{ width: 64, height: 64, borderRadius: 8, border: '1px dashed #c7c7cc', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: busy ? 'wait' : 'pointer', fontSize: 20, color: '#8e8e93', background: '#f5f5f7' }}>
@@ -1833,6 +1953,11 @@ function CrmTab({ user, token }) {
           </div>
         );
       })()}
+      {/* ======== ИНДИКАТОР СЖАТИЯ ВИДЕО (v37) ======== */}
+      {mediaProgress && (
+        <div style={{ position: 'fixed', bottom: 18, left: '50%', transform: 'translateX(-50%)', background: '#1d1d1f', color: '#fff', padding: '10px 18px', borderRadius: 999, fontSize: 13, fontWeight: 600, zIndex: 2700, boxShadow: '0 8px 24px rgba(0,0,0,0.3)', whiteSpace: 'nowrap' }}>{mediaProgress}</div>
+      )}
+
       {/* ======== ПРОСМОТР ФОТО ИЗ ФОТООТЧЁТА (v35) ======== */}
       {photoViewer && (
         <div
