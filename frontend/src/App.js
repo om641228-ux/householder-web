@@ -752,6 +752,7 @@ function CrmTab({ user, token }) {
   const [photoViewer, setPhotoViewer] = useState(null);
   const [photoZoom, setPhotoZoom] = useState(false); // false — уместить в экран, true — натуральный размер
   const [mediaProgress, setMediaProgress] = useState(null); // текст прогресса сжатия видео (v37), null — скрыт
+  const [viewerError, setViewerError] = useState(false); // браузер не смог воспроизвести видео (v37.4)
 
   // ---- Загрузка CRM (v33): с сервера; при недоступности — локальный режим (localStorage) ----
   const crmApi = useCallback(async (path, options) => {
@@ -1139,8 +1140,8 @@ function CrmTab({ user, token }) {
     return (
       <span key={key} style={{ position: 'relative', display: 'inline-block' }}>
         {m.kind === 'video' ? (
-          <span onClick={() => setPhotoViewer({ url: m.url, kind: 'video', name: m.name || '' })} title={m.name || 'Видео — открыть'} style={{ cursor: 'pointer', display: 'inline-block' }}>
-            <video src={m.url} muted preload="metadata" style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, border: '1px solid #e0e0e0', display: 'block', pointerEvents: 'none' }} />
+          <span onClick={() => { setPhotoViewer({ url: m.url, kind: 'video', name: m.name || '' }); setViewerError(false); }} title={m.name || 'Видео — открыть'} style={{ cursor: 'pointer', display: 'inline-block' }}>
+            <video src={`${m.url}#t=0.1`} muted playsInline preload="auto" style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, border: '1px solid #e0e0e0', display: 'block', pointerEvents: 'none', background: '#1d1d1f' }} />
             <span style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 22, textShadow: '0 1px 4px rgba(0,0,0,0.8)', pointerEvents: 'none' }}>▶</span>
           </span>
         ) : m.kind === 'audio' ? (
@@ -2034,7 +2035,16 @@ function CrmTab({ user, token }) {
           onClick={() => { setPhotoViewer(null); setPhotoZoom(false); }}
         >
           {photoViewer.kind === 'video' ? (
-            <video src={photoViewer.url} controls autoPlay onClick={e => e.stopPropagation()} style={{ maxWidth: '96vw', maxHeight: '92vh', borderRadius: 12, boxShadow: '0 12px 40px rgba(0,0,0,0.5)' }} />
+            viewerError ? (
+              <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: '22px 26px', maxWidth: 420, textAlign: 'center', boxShadow: '0 12px 40px rgba(0,0,0,0.5)' }}>
+                <div style={{ fontSize: 28, marginBottom: 8 }}>🎬</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: '#1d1d1f', marginBottom: 6 }}>Браузер не смог воспроизвести это видео</div>
+                <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 12 }}>Формат записан другим браузером (например, webm из Chrome не играет в Safari). Новые сжатия сохраняются в mp4, где возможно.</div>
+                <a href={photoViewer.url} target="_blank" rel="noopener noreferrer" style={{ color: '#0071e3', fontWeight: 600, fontSize: 14 }}>Открыть/скачать оригинал ↗</a>
+              </div>
+            ) : (
+              <video src={photoViewer.url} controls autoPlay onClick={e => e.stopPropagation()} onError={() => setViewerError(true)} style={{ maxWidth: '96vw', maxHeight: '92vh', borderRadius: 12, boxShadow: '0 12px 40px rgba(0,0,0,0.5)', background: '#000' }} />
+            )
           ) : photoViewer.kind === 'audio' ? (
             <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: '18px 22px', display: 'flex', flexDirection: 'column', gap: 8, maxWidth: '92vw', boxShadow: '0 12px 40px rgba(0,0,0,0.5)' }}>
               <div style={{ fontSize: 13, fontWeight: 700, color: '#1d1d1f' }}>🎵 {photoViewer.name || 'Аудио'}</div>
