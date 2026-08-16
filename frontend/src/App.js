@@ -2485,6 +2485,12 @@ function App() {
   const [plannedSaving, setPlannedSaving] = useState(false);
   const [payCalOffset, setPayCalOffset] = useState(0); // сдвиг 2-месячного окна календаря платежей (v42.1)
   const [calPicker, setCalPicker] = useState(null);    // id движения с открытым меню «в календарь» (v44)
+  useEffect(() => {
+    if (calPicker === null) return undefined;
+    const close = () => setCalPicker(null);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, [calPicker]);
   const [linkSearch, setLinkSearch] = useState('');
   const [linkSaving, setLinkSaving] = useState(false);
   // Вкладка «Налоги» (v30): черновик форм (отдельный выбор квартала убран в v30.5 — платежи следуют за диапазоном «с/по»)
@@ -3818,6 +3824,21 @@ function App() {
       setPlannedPayments(prev => prev.filter(p => String(p.id) !== String(id)));
     } catch (e) { alert('Не удалилось: ' + e.message); }
   };
+  // Сброс выбора (v44.1): удалить из календаря все плановые платежи этого контрагента
+  const resetCalendarChoice = async (m) => {
+    setCalPicker(null);
+    const norm = (v) => String(v || '').toLowerCase().replace(/[^a-zа-яё0-9]+/gi, ' ').trim().slice(0, 40);
+    const key = norm(m.counterparty) || norm(m.concept);
+    const doomed = plannedPayments.filter(pp => norm(pp.counterparty) && norm(pp.counterparty) === key);
+    if (!doomed.length) { alert('Этот платёж не добавлен в календарь'); return; }
+    if (!window.confirm(`Убрать из календаря: ${doomed.map(pp => pp.title).join(', ')}?`)) return;
+    for (const pp of doomed) {
+      try {
+        await fetch(`${API_URL}/api/planned-payments/${pp.id}?token=${token}`, { method: 'DELETE' });
+        setPlannedPayments(prev => prev.filter(x => String(x.id) !== String(pp.id)));
+      } catch (e) { console.error(e); }
+    }
+  };
   // Привязка платежа из строки выписки к календарю (v44): имя + частота (1/2/6/12 мес)
   const assignToCalendar = async (m, name, freqMonths) => {
     setCalPicker(null);
@@ -3836,6 +3857,9 @@ function App() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (data.item && data.item.freqMonths == null) {
+        alert('⚠️ Сервер не сохранил частоту — платёж станет ежемесячным. Выполните миграцию supabase-migration-v27-planned-freq.sql и сделайте redeploy householder-api.');
+      }
       setPlannedPayments(prev => [...prev, data.item]);
     } catch (e) { alert('Не сохранилось в календарь: ' + e.message); }
   };
@@ -6548,10 +6572,13 @@ ${bodyHtml}
                       )}
                       {isOut(m) && (
                         <span style={{ position: 'relative', flex: '0 0 auto' }}>
-                          <button onClick={() => setCalPicker(calPicker === m.id ? null : m.id)} title="Добавить платёж в календарь (имя + частота)" style={{ border: '1px solid #d2d2d7', background: calPicker === m.id ? '#eef4ff' : '#fff', color: '#1d1d1f', borderRadius: 10, padding: '3px 9px', fontSize: 12, cursor: 'pointer' }}>📅▾</button>
+                          <button onClick={(e) => { e.stopPropagation(); setCalPicker(calPicker === m.id ? null : m.id); }} title="Добавить платёж в календарь (имя + частота)" style={{ border: '1px solid #d2d2d7', background: calPicker === m.id ? '#eef4ff' : '#fff', color: '#1d1d1f', borderRadius: 10, padding: '3px 9px', fontSize: 12, cursor: 'pointer' }}>📅▾</button>
                           {calPicker === m.id && (
-                            <div style={{ position: 'absolute', right: 0, top: '110%', zIndex: 120, background: '#fff', border: '1px solid #d2d2d7', borderRadius: 12, boxShadow: '0 8px 24px rgba(0,0,0,0.16)', padding: 6, width: 230, maxHeight: 330, overflowY: 'auto' }}>
-                              <div style={{ fontSize: 10, color: '#8e8e93', padding: '2px 8px 6px' }}>В календарь: имя → частота (мес)</div>
+                            <div onClick={e => e.stopPropagation()} style={{ position: 'absolute', right: 0, top: '110%', zIndex: 120, background: '#fff', border: '1px solid #d2d2d7', borderRadius: 12, boxShadow: '0 8px 24px rgba(0,0,0,0.16)', padding: 6, width: 230, maxHeight: 330, overflowY: 'auto' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', padding: '2px 4px 6px 8px' }}>
+                                <span style={{ fontSize: 10, color: '#8e8e93', flex: 1 }}>В календарь: имя → частота (мес)</span>
+                                <button onClick={() => setCalPicker(null)} title="Закрыть меню" style={{ border: 'none', background: 'none', color: '#8e8e93', cursor: 'pointer', fontSize: 13, padding: '0 4px' }}>✕</button>
+                              </div>
                               {CAL_PAYEES.map(name => (
                                 <div key={name}>
                                   <div style={{ fontSize: 11, fontWeight: 800, color: '#1d1d1f', padding: '5px 8px 1px', borderTop: '1px solid #f0f0f0' }}>{name}</div>
@@ -6563,6 +6590,12 @@ ${bodyHtml}
                                   ))}
                                 </div>
                               ))}
+                              {plannedPayments.some(pp => normCpKey(pp.counterparty) && normCpKey(pp.counterparty) === (normCpKey(m.counterparty) || normCpKey(m.concept))) && (
+                                <button onClick={() => resetCalendarChoice(m)}
+                                  style={{ display: 'block', width: '100%', textAlign: 'left', WebkitAppearance: 'none', appearance: 'none', border: 'none', borderTop: '1px solid #f0f0f0', background: 'none', margin: '4px 0 0', padding: '7px 8px 3px', fontSize: 12, color: '#e74c3c', cursor: 'pointer', fontWeight: 700, fontFamily: 'inherit' }}>
+                                  ✖ Сбросить выбор (убрать из календаря)
+                                </button>
+                              )}
                             </div>
                           )}
                         </span>
