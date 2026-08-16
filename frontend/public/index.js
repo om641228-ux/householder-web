@@ -125,7 +125,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v46.2-2026-08-16', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v47-2026-08-16', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -3434,7 +3434,7 @@ app.post('/api/planned-payments', requireAuth, async (req, res) => {
     if (!title || !String(title).trim()) return res.status(400).json({ error: 'Поле title обязательно' });
     const day = Math.max(1, Math.min(31, parseInt(day_of_month, 10) || 1));
     const { data, error } = await supabaseAdmin.from('planned_payments')
-      .insert([{ owner_id: req.user.id, title: String(title).trim(), category: category || 'other', amount: amount != null && amount !== '' ? Number(amount) : null, day_of_month: day, note: note || null, freq_months: [1, 2, 6, 12].includes(Number(freq_months)) ? Number(freq_months) : 1, counterparty: counterparty || null, start_date: start_date || null, object_name: object_name || null, file_url: file_url || null, file_name: file_name || null }])
+      .insert([{ owner_id: req.user.id, title: String(title).trim(), category: category || 'other', amount: amount != null && amount !== '' ? Number(amount) : null, day_of_month: day, note: note || null, freq_months: [0, 1, 2, 6, 12].includes(Number(freq_months)) ? Number(freq_months) : 1, counterparty: counterparty || null, start_date: start_date || null, object_name: object_name || null, file_url: file_url || null, file_name: file_name || null }])
       .select().single();
     if (error) throw error;
     res.json({ item: ppToApi(data) });

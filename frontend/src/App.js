@@ -706,8 +706,8 @@ function crmSeed() {
 // Фото жмутся на клиенте (compressImageFile), видео > 48 МБ жмёт сервер (ffmpeg), остальное — как есть.
 // Имена для Excel-меню привязки платежа к календарю (v44)
 const CAL_PAYEES = ['Duque', 'Kit', 'Maria', 'Volvo', 'Porsche', 'Mercedes'];
-const CAL_FREQS = [1, 2, 6, 12]; // частота оплаты в месяцах
-const calFreqLabel = (n) => n === 1 ? 'каждый месяц' : n === 12 ? 'раз в год (12 мес)' : `раз в ${n} мес`;
+const CAL_FREQS = [1, 2, 6, 12, 0]; // частота оплаты в месяцах (0 = одноразовый)
+const calFreqLabel = (n) => n === 0 ? 'одноразовый (только месяц начала)' : n === 1 ? 'каждый месяц' : n === 12 ? 'раз в год (12 мес)' : `раз в ${n} мес`;
 
 const DOC_SECTIONS = [
   { key: 'home', title: '🏠 Дома' },
@@ -2481,8 +2481,7 @@ function App() {
   // Таймлайн повторяющихся платежей (v41): ручные плановые платежи (сервер, таблица planned_payments)
   const [plannedPayments, setPlannedPayments] = useState([]);
   const [plannedModal, setPlannedModal] = useState(false);
-  const [plannedReceiptPicker, setPlannedReceiptPicker] = useState(false);
-  const [plannedReceiptSearch, setPlannedReceiptSearch] = useState('');
+  const [plannedPickMode, setPlannedPickMode] = useState(false); // режим выбора чека для планового платежа на вкладке «Чеки/фактуры»
   const [plannedForm, setPlannedForm] = useState({ title: '', amount: '', day: '1', category: 'utilities', freq: '1', object: '', counterparty: '', fileUrl: '', fileName: '' });
   const [plannedSaving, setPlannedSaving] = useState(false);
   const [payCalOffset, setPayCalOffset] = useState(0); // сдвиг 2-месячного окна календаря платежей (v42.1)
@@ -5960,6 +5959,13 @@ ${bodyHtml}
 
       {activeTab === 'list' && (
         <div className="list-section">
+          {plannedPickMode && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#f4ecfb', border: '1px solid #8e44ad', borderRadius: 10, padding: '8px 12px', marginBottom: 10, fontSize: 14, flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 700, color: '#8e44ad' }}>🧾 Выбор фактуры для планового платежа</span>
+              <span style={{ color: '#6e6e73', fontSize: 13 }}>Найдите чек/фактуру фильтрами и нажмите «✅ Выбрать» на карточке</span>
+              <button onClick={() => { setPlannedPickMode(false); setActiveTab('analysis'); setPlannedModal(true); }} style={{ marginLeft: 'auto', border: '1px solid #8e44ad', background: '#fff', color: '#8e44ad', borderRadius: 980, padding: '4px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>← Назад к платежу без выбора</button>
+            </div>
+          )}
           <div className="filters" style={{ flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
             <ExcelFilter label="Год" options={availableYears.map(y => ({ value: y, label: String(y) }))} selected={filterYears} onChange={v => { setFilterYears(v); setCurrentPage(1); }} />
             <ExcelFilter label="Месяц" options={MONTH_NAMES.map((n, i) => ({ value: i + 1, label: n }))} selected={filterMonths} onChange={v => { setFilterMonths(v); setCurrentPage(1); }} />
@@ -6216,6 +6222,10 @@ ${bodyHtml}
                           на узком экране уходит ПОД заголовок, а не сжимает его до 3 букв в строке */}
                       <div className="receipt-header" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, paddingTop: 2, flexWrap: 'wrap' }}>
                         <input type="checkbox" checked={selectedReceiptIds.has(receipt.id)} onChange={() => toggleSelect(receipt.id)} style={{ width: 20, height: 20, cursor: 'pointer', flexShrink: 0, marginTop: 2 }} />
+                        {plannedPickMode && (
+                          <button onClick={() => { setPlannedForm(f => ({ ...f, fileUrl: `receipt:${receipt.id}`, fileName: receipt.store_name || receipt.store_name_ru || `Чек #${receipt.id}` })); setPlannedPickMode(false); setActiveTab('analysis'); setPlannedModal(true); }}
+                            style={{ flexShrink: 0, marginTop: 2, border: 'none', background: '#8e44ad', color: '#fff', borderRadius: 8, padding: '4px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>✅ Выбрать</button>
+                        )}
                         <div style={{ flex: '1 1 180px', minWidth: 0 }}>
                           <h3 style={{ margin: 0, lineHeight: 1.3, overflowWrap: 'break-word' }}>
                             <HighlightText text={receipt.store_name || receipt.store_name_ru || 'Без названия'} query={searchQuery} />
@@ -6418,6 +6428,7 @@ ${bodyHtml}
             const plannedCpOptions = [...new Set(bankMovements.map(m => m.counterparty).filter(Boolean))].sort((a, b) => a.localeCompare(b));
             const dueInMonth = (g, ymStr) => {
               const diff = ((+ymStr.slice(0, 4)) - (+g.startYm.slice(0, 4))) * 12 + ((+ymStr.slice(5, 7)) - (+g.startYm.slice(5, 7)));
+              if (g.freq === 0) return diff === 0; // одноразовый: только месяц начала
               return diff >= 0 && diff % g.freq === 0;
             };
             // Компактный таймлайн: 12 месяцев от текущего (v45.2: иначе годовые платежи не видны)
@@ -6630,7 +6641,7 @@ ${bodyHtml}
                                   {CAL_FREQS.map(n => (
                                     <button key={n} onClick={() => assignToCalendar(m, name, n)}
                                       style={{ display: 'block', width: '100%', textAlign: 'left', WebkitAppearance: 'none', appearance: 'none', border: 'none', borderRadius: 6, background: 'none', boxShadow: 'none', margin: 0, padding: '4px 8px 4px 20px', fontSize: 13, color: '#3457d5', cursor: 'pointer', fontFamily: 'inherit' }}>
-                                      {n} — {calFreqLabel(n)}
+                                      {n === 0 ? '⚡ 1 раз — одноразовый' : `${n} — ${calFreqLabel(n)}`}
                                     </button>
                                   ))}
                                 </div>
@@ -6691,29 +6702,7 @@ ${bodyHtml}
                           ) : (
                             <div style={{ display: 'flex', gap: 8, marginTop: 4, alignItems: 'center', flexWrap: 'wrap' }}>
                               <input type="file" accept=".pdf,image/*,.jpg,.jpeg,.png,.webp,.heic" onChange={e => { const fl = e.target.files && e.target.files[0]; if (fl) uploadPlannedFile(fl); e.target.value = ''; }} style={{ fontSize: 13, flex: '1 1 180px' }} />
-                              <button type="button" onClick={() => { setPlannedReceiptPicker(v => !v); setPlannedReceiptSearch(''); }} style={{ border: '1px solid #8e44ad', background: plannedReceiptPicker ? '#8e44ad' : '#fff', color: plannedReceiptPicker ? '#fff' : '#8e44ad', borderRadius: 8, padding: '5px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>🧾 Из распознанных</button>
-                            </div>
-                          )}
-                          {plannedReceiptPicker && !plannedForm.fileUrl && (
-                            <div style={{ marginTop: 6, border: '1px solid #e3e6ea', borderRadius: 8, padding: 6 }}>
-                              <input autoFocus value={plannedReceiptSearch} onChange={e => setPlannedReceiptSearch(e.target.value)} placeholder="Поиск по названию, сумме, номеру…" style={{ width: '100%', boxSizing: 'border-box', padding: '6px 8px', borderRadius: 6, border: '1px solid #d2d2d7', fontSize: 13, marginBottom: 4 }} />
-                              <div style={{ maxHeight: 200, overflowY: 'auto' }}>
-                                {receipts
-                                  .filter(r => {
-                                    const q = plannedReceiptSearch.trim().toLowerCase();
-                                    if (!q) return true;
-                                    return [r.store_name, r.store_name_ru, r.provider, r.invoice_number, r.total_amount].some(v => String(v == null ? '' : v).toLowerCase().includes(q));
-                                  })
-                                  .slice(0, 50)
-                                  .map(r => (
-                                    <button type="button" key={r.id} onClick={() => { setPlannedForm(f => ({ ...f, fileUrl: `receipt:${r.id}`, fileName: r.store_name || r.store_name_ru || `Чек #${r.id}` })); setPlannedReceiptPicker(false); }}
-                                      style={{ display: 'flex', width: '100%', gap: 8, alignItems: 'center', textAlign: 'left', border: 'none', background: 'none', padding: '6px 4px', borderBottom: '1px solid #f2f2f7', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
-                                      <span style={{ color: '#8e8e93', flex: '0 0 74px', fontSize: 11 }}>{formatDate(r.purchase_date)}</span>
-                                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}>{r.store_name || r.store_name_ru || `Чек #${r.id}`}</span>
-                                      <span style={{ color: '#1d1d1f', fontWeight: 700, whiteSpace: 'nowrap' }}>{r.total_amount != null ? formatAmount(Number(r.total_amount), 'EUR') : ''}</span>
-                                    </button>
-                                  ))}
-                              </div>
+                              <button type="button" onClick={() => { setPlannedModal(false); setPlannedPickMode(true); setActiveTab('list'); loadReceipts(); }} style={{ border: '1px solid #8e44ad', background: '#fff', color: '#8e44ad', borderRadius: 8, padding: '5px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>🧾 Выбрать из распознанных →</button>
                             </div>
                           )}
                         </div>
