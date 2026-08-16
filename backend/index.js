@@ -125,7 +125,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v46.1-2026-08-16', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v49-2026-08-16', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -3420,7 +3420,7 @@ const ppToApi = (r) => r && ({
 
 app.get('/api/planned-payments', requireAuth, async (req, res) => {
   try {
-    const { data, error } = await supabaseAdmin.from('planned_payments').select('*').eq('active', true).order('day_of_month', { ascending: true });
+    const { data, error } = await supabaseAdmin.from('planned_payments').select('*').order('active', { ascending: false }).order('day_of_month', { ascending: true });
     if (error) throw error;
     res.json({ items: (data || []).map(ppToApi) });
   } catch (e) {
@@ -3434,7 +3434,7 @@ app.post('/api/planned-payments', requireAuth, async (req, res) => {
     if (!title || !String(title).trim()) return res.status(400).json({ error: 'Поле title обязательно' });
     const day = Math.max(1, Math.min(31, parseInt(day_of_month, 10) || 1));
     const { data, error } = await supabaseAdmin.from('planned_payments')
-      .insert([{ owner_id: req.user.id, title: String(title).trim(), category: category || 'other', amount: amount != null && amount !== '' ? Number(amount) : null, day_of_month: day, note: note || null, freq_months: [1, 2, 6, 12].includes(Number(freq_months)) ? Number(freq_months) : 1, counterparty: counterparty || null, start_date: start_date || null, object_name: object_name || null, file_url: file_url || null, file_name: file_name || null }])
+      .insert([{ owner_id: req.user.id, title: String(title).trim(), category: category || 'other', amount: amount != null && amount !== '' ? Number(amount) : null, day_of_month: day, note: note || null, freq_months: [0, 1, 2, 6, 12].includes(Number(freq_months)) ? Number(freq_months) : 1, counterparty: counterparty || null, start_date: start_date || null, object_name: object_name || null, file_url: file_url || null, file_name: file_name || null }])
       .select().single();
     if (error) throw error;
     res.json({ item: ppToApi(data) });
@@ -3443,13 +3443,28 @@ app.post('/api/planned-payments', requireAuth, async (req, res) => {
   }
 });
 
+// Переключение активности планового платежа (v49)
+app.patch('/api/planned-payments/:id', requireAuth, async (req, res) => {
+  try {
+    const { active } = req.body || {};
+    const { data, error } = await supabaseAdmin.from('planned_payments').update({ active: active !== false }).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json({ item: ppToApi(data) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Загрузка файла фактуры к плановому платежу (v46): multipart/form-data, поле file
 app.post('/api/planned-payments/upload', requireAuth, crmMediaMulter('file'), async (req, res) => {
   try {
     const f = (req.files && req.files[0]) || req.file;
     if (!f) return res.status(400).json({ error: 'Файл не получен' });
-    const url = await uploadToStorage(f.buffer, f.originalname || 'factura', req.user.id, f.mimetype || 'application/octet-stream');
-    res.json({ url, name: f.originalname || 'factura' });
+    // multer отдаёт originalname в latin1 — восстанавливаем UTF-8 (русские имена файлов)
+    let origName = f.originalname || 'factura';
+    try { const dec = Buffer.from(origName, 'latin1').toString('utf8'); if (!dec.includes('�')) origName = dec; } catch (_) {}
+    const url = await uploadToStorage(f.buffer, origName, req.user.id, f.mimetype || 'application/octet-stream');
+    res.json({ url, name: origName });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

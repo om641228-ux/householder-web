@@ -3837,6 +3837,18 @@ function App() {
     } catch (e) { alert('Не сохранилось: ' + e.message); }
     finally { setPlannedSaving(false); }
   };
+  // Активна/неактивна (v49): неактивный платёж остаётся в списке, но не идёт в календарь/таймлайн
+  const togglePlannedPayment = async (g) => {
+    try {
+      const res = await fetch(`${API_URL}/api/planned-payments/${g.id}?token=${token}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: !g.active })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setPlannedPayments(prev => prev.map(x => String(x.id) === String(g.id) ? data.item : x));
+    } catch (e) { alert('Не переключилось: ' + e.message); }
+  };
   const removePlannedPayment = async (id) => {
     if (!window.confirm('Удалить этот плановый платёж?')) return;
     try {
@@ -6424,7 +6436,7 @@ ${bodyHtml}
               manual: true, id: p.id, name: p.title, avg: p.amount, usualDay: p.dayOfMonth || 1,
               freq: p.freqMonths || 1,
               startYm: (p.startDate || '').slice(0, 7) || curYm,
-              cpKey: normCpKey(p.counterparty), fileUrl: p.fileUrl || '', fileName: p.fileName || '',
+              cpKey: normCpKey(p.counterparty), fileUrl: p.fileUrl || '', fileName: p.fileName || '', active: p.active !== false,
               cat: RECUR_CATS.find(c => c.key === p.category) || RECUR_CATS[RECUR_CATS.length - 1]
             }));
             const bmMonths = [...new Set(bankMovements.map(m => (m.operation_date || '').slice(0, 7)).filter(Boolean))].sort().reverse();
@@ -6507,7 +6519,7 @@ ${bodyHtml}
                           const ymStr = `${cy}-${String(cmo + 1).padStart(2, '0')}`;
                           const dim = new Date(cy, cmo + 1, 0).getDate();
                           const cells = buildCalWeeks(base);
-                          const dayItems = manualRows.filter(g => dueInMonth(g, ymStr)).map(g => ({
+                          const dayItems = manualRows.filter(g => g.active && dueInMonth(g, ymStr)).map(g => ({
                             key: `m_${g.id}`, label: `${g.cat.label} ${g.name}`, amount: g.avg,
                             day: Math.min(g.usualDay || 1, dim),
                             paid: g.cpKey ? paidSet.has(`${g.cpKey}|${ymStr}`) : false,
@@ -6547,12 +6559,33 @@ ${bodyHtml}
                       </div>
                     )}
                     {!payCalCollapsed && manualRows.length > 0 && (
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                      <div style={{ marginTop: 8 }}>
                         {manualRows.map(g => (
-                          <span key={`del_${g.id}`} style={{ fontSize: 11, background: '#fff6dd', border: '1px solid #f0dfa8', borderRadius: 980, padding: '2px 8px', color: '#8a6d3b' }}>
-                            ✋ {g.name} · ~{g.usualDay} числа · {calFreqLabel(g.freq)}{g.fileUrl && (<> · {g.fileUrl.startsWith('receipt:') ? <button type="button" onClick={() => openReceiptById(g.fileUrl.slice(8))} style={{ border: 'none', background: 'none', color: '#0071e3', cursor: 'pointer', fontSize: 12, padding: 0, fontFamily: 'inherit' }}>📎 {g.fileName || 'фактура'}</button> : <a href={g.fileUrl} target="_blank" rel="noreferrer" style={{ color: '#0071e3' }}>📎 {g.fileName || 'фактура'}</a>}</>)}{(() => { for (let i = 0; i < 24; i++) { const dd2 = new Date(nowD.getFullYear(), nowD.getMonth() + i, 1); const ym2 = `${dd2.getFullYear()}-${String(dd2.getMonth() + 1).padStart(2, '0')}`; if (dueInMonth(g, ym2)) return ` · след: ${MONTH_NAMES[+ym2.slice(5, 7) - 1].slice(0, 3)} ${ym2.slice(2, 4)}`; } return ''; })()}{g.avg != null ? ` · ${formatAmount(g.avg, 'EUR')}` : ''}
-                            <button onClick={() => removePlannedPayment(g.id)} title="Удалить плановый платёж" style={{ border: 'none', background: 'none', color: '#e74c3c', cursor: 'pointer', marginLeft: 4, padding: 0, fontSize: 11 }}>✕</button>
-                          </span>
+                          <div key={`del_${g.id}`} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 6, boxShadow: '0 1px 3px rgba(0,0,0,0.06)', opacity: g.active ? 1 : 0.55 }}>
+                            <span style={{ flex: '0 0 86px', color: '#7f8c8d', fontSize: 13 }}>~{String(g.usualDay || 1).padStart(2, '0')} числа</span>
+                            <span style={{ flex: '1 1 240px', minWidth: 0, overflowWrap: 'break-word', fontSize: 14 }}>
+                              <b>{g.name}</b>
+                              <span title={`Повторяющийся платёж: ${calFreqLabel(g.freq)}`} style={{ marginLeft: 6, fontSize: 10, color: '#5856d6', background: '#efeffd', borderRadius: 8, padding: '1px 7px', fontWeight: 700, whiteSpace: 'nowrap' }}>🔁 {calFreqLabel(g.freq)}</span>
+                              {g.active && (<span style={{ marginLeft: 6, fontSize: 11, color: '#8e8e93', whiteSpace: 'nowrap' }}>{(() => { for (let i = 0; i < 24; i++) { const dd2 = new Date(nowD.getFullYear(), nowD.getMonth() + i, 1); const ym2 = `${dd2.getFullYear()}-${String(dd2.getMonth() + 1).padStart(2, '0')}`; if (dueInMonth(g, ym2)) return `след: ${MONTH_NAMES[+ym2.slice(5, 7) - 1].slice(0, 3)} ${ym2.slice(2, 4)}`; } return ''; })()}</span>)}
+                            </span>
+                            <span style={{ flex: '0 0 110px', textAlign: 'right' }}>
+                              <span style={{ fontWeight: 700, color: '#e74c3c' }}>−{formatAmount(g.avg || 0, 'EUR')}</span>
+                            </span>
+                            {g.fileUrl ? (
+                              g.fileUrl.startsWith('receipt:') ? (
+                                <button type="button" onClick={() => openReceiptById(g.fileUrl.slice(8))} title={g.fileName || 'Фактура'} style={{ flex: '0 0 auto', fontSize: 12, color: '#27ae60', background: '#e8f8ef', border: '1px solid #27ae60', borderRadius: 10, padding: '3px 10px', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', fontFamily: 'inherit' }}>🟢 {g.fileName || 'Фактура'}</button>
+                              ) : (
+                                <a href={g.fileUrl} target="_blank" rel="noreferrer" title={g.fileName || 'Фактура'} style={{ flex: '0 0 auto', fontSize: 12, color: '#27ae60', background: '#e8f8ef', border: '1px solid #27ae60', borderRadius: 10, padding: '3px 10px', fontWeight: 700, textDecoration: 'none', whiteSpace: 'nowrap' }}>🟢 Фактура</a>
+                              )
+                            ) : (
+                              <span style={{ flex: '0 0 auto', fontSize: 12, color: '#e67e22', background: '#fdf2e3', borderRadius: 10, padding: '3px 10px', fontWeight: 700 }}>⚪ Без фактуры</span>
+                            )}
+                            <button onClick={() => togglePlannedPayment(g)} title={g.active ? 'Сделать неактивным (убрать из календаря и таймлайна)' : 'Сделать активным'}
+                              style={{ flex: '0 0 auto', border: `1px solid ${g.active ? '#27ae60' : '#8e8e93'}`, background: g.active ? '#e8f8ef' : '#f2f2f7', color: g.active ? '#27ae60' : '#8e8e93', borderRadius: 10, padding: '3px 10px', fontWeight: 700, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                              {g.active ? '🟢 Активна' : '⚪ Неактивна'}
+                            </button>
+                            <button onClick={() => removePlannedPayment(g.id)} title="Удалить плановый платёж" style={{ flex: '0 0 auto', border: '1px solid #e74c3c', background: '#fff', color: '#e74c3c', borderRadius: 10, padding: '3px 8px', fontSize: 12, cursor: 'pointer' }}>✕</button>
+                          </div>
                         ))}
                       </div>
                     )}
@@ -6560,7 +6593,7 @@ ${bodyHtml}
                       <div style={{ marginTop: 10, borderTop: '1px dashed #e3e6ea', paddingTop: 8 }}>
                         <div style={{ fontSize: 12, fontWeight: 800, color: '#6e6e73', marginBottom: 4 }}>🗓 Таймлайн платежей на 12 месяцев</div>
                         {tlNextMonths.map(ym => {
-                          const due = manualRows.filter(g => dueInMonth(g, ym)).sort((a, b) => (a.usualDay || 1) - (b.usualDay || 1));
+                          const due = manualRows.filter(g => g.active && dueInMonth(g, ym)).sort((a, b) => (a.usualDay || 1) - (b.usualDay || 1));
                           if (!due.length) return null;
                           const sum = due.reduce((a, g) => a + (g.avg || 0), 0);
                           return (
