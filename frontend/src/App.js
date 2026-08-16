@@ -6467,6 +6467,8 @@ ${bodyHtml}
               }
             }
             const tlYmLabel = ym => `${MONTH_NAMES[+ym.slice(5, 7) - 1]} ${ym.slice(0, 4)}`;
+            // Σ за весь выбранный диапазон (v51): активные платежи, причитающиеся в каждом месяце диапазона
+            const tlTotal = tlNextMonths.reduce((acc, ym) => acc + manualRows.filter(g => g.active && dueInMonth(g, ym)).reduce((a, g) => a + (g.avg || 0), 0), 0);
             const railTarget = new Map();
             bmMonths.forEach(ym => railTarget.set(ym, `bm-${ym}`));
             tlNextMonths.forEach(ym => { if (!railTarget.has(ym)) railTarget.set(ym, `tl-${ym}`); });
@@ -6613,6 +6615,7 @@ ${bodyHtml}
                           <select value={tlTo} onChange={e => setTlTo(e.target.value)} style={{ padding: '3px 8px', borderRadius: 6, border: '1px solid #ddd', fontSize: 12, background: '#fff' }}>
                             {tlOptions.map(ym => <option key={`t_${ym}`} value={ym}>{tlYmLabel(ym)}</option>)}
                           </select>
+                          <span style={{ marginLeft: 'auto', fontSize: 13, fontWeight: 800, color: '#e74c3c', whiteSpace: 'nowrap' }}>Σ за период: −{formatAmount(tlTotal, 'EUR')}</span>
                         </div>
                         {tlNextMonths.map(ym => {
                           const due = manualRows.filter(g => g.active && dueInMonth(g, ym)).sort((a, b) => (a.usualDay || 1) - (b.usualDay || 1));
