@@ -6451,6 +6451,10 @@ ${bodyHtml}
               <>
                 {railYears.length > 0 && (
                   <div style={{ position: 'fixed', right: 6, top: '50%', transform: 'translateY(-50%)', zIndex: 90, width: 76, maxHeight: '86vh', overflowY: 'auto', scrollbarWidth: 'none', msOverflowStyle: 'none', background: 'rgba(255,255,255,0.96)', borderRadius: 14, padding: '6px 4px', boxShadow: '0 2px 12px rgba(0,0,0,0.10)' }}>
+                    <button onClick={() => { const el = document.getElementById('paycal-top'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} title="К началу плана платежей"
+                      style={{ display: 'block', width: '100%', WebkitAppearance: 'none', appearance: 'none', border: 'none', background: 'none', boxShadow: 'none', margin: 0, padding: '3px 0', fontSize: 18, cursor: 'pointer', borderRadius: 6, fontFamily: 'inherit', lineHeight: 1.2 }}>📅</button>
+                    <button onClick={() => { const el = document.getElementById('banklist-top'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} title="К началу выписки банка"
+                      style={{ display: 'block', width: '100%', WebkitAppearance: 'none', appearance: 'none', border: 'none', background: 'none', boxShadow: 'none', margin: '0 0 4px', padding: '3px 0', fontSize: 18, cursor: 'pointer', borderRadius: 6, fontFamily: 'inherit', lineHeight: 1.2 }}>🏦</button>
                     {railYears.map(y => {
                       const months = [...railTarget.keys()].filter(ym => ym.startsWith(y)).sort().reverse();
                       return (
@@ -6483,7 +6487,7 @@ ${bodyHtml}
                     {stat('Счета без платежа в банке', unpaidBills.length, '#e74c3c', '#fdecea')}
                 </div>
                 {(manualRows.length > 0 || bankMovements.length > 0) && (
-                  <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: '10px 12px', marginBottom: 10 }}>
+                  <div id="paycal-top" style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: '10px 12px', marginBottom: 10, scrollMarginTop: 100 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: payCalCollapsed ? 0 : 8 }}>
                       <button onClick={() => setPayCalCollapsed(c => !c)} title="Свернуть/развернуть блок" style={{ border: '1px solid #d2d2d7', background: '#fff', borderRadius: 8, padding: '2px 8px', cursor: 'pointer', fontSize: 12, lineHeight: 1.4 }}>{payCalCollapsed ? '▸' : '▾'}</button>
                       <span style={{ fontSize: 15, fontWeight: 800, color: '#1d1d1f' }}>📅 Обязательные повторяющиеся платежи</span>
@@ -6593,7 +6597,7 @@ ${bodyHtml}
                     )}
                   </div>
                 )}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 8px' }}>
+                <div id="banklist-top" style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 8px', scrollMarginTop: 100 }}>
                   <button onClick={() => setBankListCollapsed(c => !c)} title="Свернуть/развернуть выписку" style={{ border: '1px solid #d2d2d7', background: '#fff', borderRadius: 8, padding: '2px 8px', cursor: 'pointer', fontSize: 12, lineHeight: 1.4 }}>{bankListCollapsed ? '▸' : '▾'}</button>
                   <span style={{ fontSize: 15, fontWeight: 800, color: '#1d1d1f' }}>🏦 Выписка банка</span>
                   {bankListCollapsed && <span style={{ fontSize: 11, color: '#8e8e93' }}>скрыто строк: {visible.length} · Σ −{formatAmount(sumVis.out, 'EUR')}</span>}
