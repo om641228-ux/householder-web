@@ -1021,3 +1021,13 @@ crm_tasks(id bigserial PK, owner_id text, title text NOT NULL, description text,
 - Таймлайн расширен 6 → 12 месяцев (`tlNextMonths`, заголовок «на 12 месяцев»).
 - Чип планового платежа теперь показывает частоту и ближайший месяц оплаты: `✋ Имя · ~N числа · раз в 12 мес · след: Апр 27 · сумма` (поиск next due перебором 24 мес через dueInMonth).
 - Только App.js. Линт: 0 ошибок, 3 прежних warning.
+
+## v46 (2026-08-16) — Таймлайн как выписка + объект/контрагент/фактура в плановом платеже
+
+- **Таймлайн** перерисован в стиле строк банковской выписки: месяц-заголовок + Σ справа, строки `~09.04.2027 | **название** 🔁 частота | −сумма красным | 🟢 Фактура / ⚪ Без фактуры`, сортировка по дню.
+- **Модалка «＋ Плановый платёж»**: новые поля — «Объект» (select CAL_PAYEES, как меню 📅▾), «Контрагент» (input + datalist `#planned-cp-list` из уникальных контрагентов выписки), «Фактура» (file input pdf/image → POST /api/planned-payments/upload → fileUrl/fileName; чип со ссылкой и ✕). Если объект выбран, title = `${object} — ${counterparty || title}`.
+- `assignToCalendar` теперь шлёт `object_name: name`.
+- manualRows + ✋-чип: `fileUrl/fileName`, ссылка «📎 фактура».
+- **Backend**: ppToApi/POST принимают `object_name, file_url, file_name`; новый `POST /api/planned-payments/upload` (crmMediaMulter('file') → uploadToStorage); build `v46-2026-08-16`.
+- **Миграция supabase-migration-v28-planned-object-file.sql**: `object_name text, file_url text, file_name text` + notify pgrst. ОБЯЗАТЕЛЬНА перед деплоем бэкенда.
+- Линт: 0 ошибок, 3 прежних warning.

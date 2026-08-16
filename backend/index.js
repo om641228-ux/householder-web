@@ -125,7 +125,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v46-2026-08-16', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -3413,6 +3413,7 @@ const ppToApi = (r) => r && ({
   dayOfMonth: r.day_of_month != null ? Number(r.day_of_month) : null,
   freqMonths: r.freq_months != null ? Number(r.freq_months) : 1,
   counterparty: r.counterparty || '', startDate: r.start_date || '',
+  objectName: r.object_name || '', fileUrl: r.file_url || '', fileName: r.file_name || '',
   note: r.note || '', active: r.active !== false,
   createdAt: r.created_at ? Date.parse(r.created_at) : null
 });
@@ -3429,16 +3430,27 @@ app.get('/api/planned-payments', requireAuth, async (req, res) => {
 
 app.post('/api/planned-payments', requireAuth, async (req, res) => {
   try {
-    const { title, category, amount, day_of_month, note, freq_months, counterparty, start_date } = req.body || {};
+    const { title, category, amount, day_of_month, note, freq_months, counterparty, start_date, object_name, file_url, file_name } = req.body || {};
     if (!title || !String(title).trim()) return res.status(400).json({ error: 'Поле title обязательно' });
     const day = Math.max(1, Math.min(31, parseInt(day_of_month, 10) || 1));
     const { data, error } = await supabaseAdmin.from('planned_payments')
-      .insert([{ owner_id: req.user.id, title: String(title).trim(), category: category || 'other', amount: amount != null && amount !== '' ? Number(amount) : null, day_of_month: day, note: note || null, freq_months: [1, 2, 6, 12].includes(Number(freq_months)) ? Number(freq_months) : 1, counterparty: counterparty || null, start_date: start_date || null }])
+      .insert([{ owner_id: req.user.id, title: String(title).trim(), category: category || 'other', amount: amount != null && amount !== '' ? Number(amount) : null, day_of_month: day, note: note || null, freq_months: [1, 2, 6, 12].includes(Number(freq_months)) ? Number(freq_months) : 1, counterparty: counterparty || null, start_date: start_date || null, object_name: object_name || null, file_url: file_url || null, file_name: file_name || null }])
       .select().single();
     if (error) throw error;
     res.json({ item: ppToApi(data) });
   } catch (e) {
     res.status(500).json({ error: e.message, hint: 'Выполни supabase-migration-v26-planned-payments.sql в SQL Editor проекта householder' });
+  }
+});
+
+// Загрузка файла фактуры к плановому платежу (v46): multipart/form-data, поле file
+app.post('/api/planned-payments/upload', requireAuth, crmMediaMulter('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Файл не получен' });
+    const url = await uploadToStorage(req.file.buffer, req.file.originalname || 'factura', req.user.id, req.file.mimetype || 'application/octet-stream');
+    res.json({ url, name: req.file.originalname || 'factura' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
