@@ -6307,6 +6307,22 @@ ${bodyHtml}
               const usualDay = days.length ? days[Math.floor(days.length / 2)] : 1;
               return { name: g.name, count: g.items.length, months, avg, usualDay, cat: recurCatOf(g.name) };
             }).filter(g => g.months.length >= 2).sort((a, b) => a.usualDay - b.usualDay);
+            // Метки периодичности для строк выписки (v43): по всем группам с ≥2 платежами
+            const freqByKey = {};
+            Object.entries(recurGroups).forEach(([key, g]) => {
+              const dates = g.items.map(m => m.operation_date).filter(Boolean).sort();
+              if (dates.length < 2) return;
+              const fD = new Date(dates[0]), lD = new Date(dates[dates.length - 1]);
+              const span = Math.max(1, (lD.getFullYear() - fD.getFullYear()) * 12 + (lD.getMonth() - fD.getMonth()) + 1);
+              const perMonth = g.items.length / span;
+              let info;
+              if (perMonth >= 1.5) info = { icon: '🔂', text: `${Math.round(perMonth)} раза в месяц` };
+              else if (perMonth >= 0.5) info = { icon: '📅', text: 'ежемесячный' };
+              else if (span >= 10) info = { icon: '🗓', text: 'ежегодный' };
+              else info = { icon: '🔁', text: 'периодический' };
+              freqByKey[key] = info;
+            });
+            const freqOfMovement = (m) => freqByKey[normCpKey(m.counterparty) || normCpKey(m.concept)] || null;
             // Календарь (v42): текущий + следующий месяц, платежи по датам
             const nowD = new Date();
             const curYm = `${nowD.getFullYear()}-${String(nowD.getMonth() + 1).padStart(2, '0')}`;
@@ -6340,7 +6356,7 @@ ${bodyHtml}
                   <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: '10px 12px', marginBottom: 10 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
                       <span style={{ fontSize: 15, fontWeight: 800, color: '#1d1d1f' }}>📅 Обязательные повторяющиеся платежи</span>
-                      <span style={{ fontSize: 11, color: '#8e8e93' }}>🟢 оплачен в этом месяце · ◌ ожидается (~день месяца) · жёлтый — добавлен вручную</span>
+                      <span style={{ fontSize: 11, color: '#8e8e93' }}>🟢 оплачен в этом месяце · ◌ ожидается · жёлтый — вручную · клик по дню — добавить платёж</span>
                       <button onClick={() => setPlannedModal(true)} style={{ marginLeft: 'auto', border: 'none', background: '#0071e3', color: '#fff', borderRadius: 980, padding: '5px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>＋ Добавить платёж</button>
                     </div>
                     {(recurring.length === 0 && manualRows.length === 0) ? (
@@ -6379,7 +6395,8 @@ ${bodyHtml}
                                   const itemsHere = d ? dayItems.filter(it => it.day === d) : [];
                                   const isToday = ymStr === curYm && d === nowD.getDate();
                                   return (
-                                    <div key={ci} style={{ minHeight: 58, minWidth: 0, overflow: 'hidden', borderRadius: 8, border: `1px solid ${isToday ? '#0a84ff' : '#f0f0f0'}`, background: d ? (isToday ? '#f0f7ff' : '#fafafa') : 'transparent', padding: 2 }}>
+                                    <div key={ci} onClick={() => { if (d) { setPlannedForm(f => ({ ...f, day: String(d) })); setPlannedModal(true); } }} title={d ? 'Нажмите, чтобы добавить платёж на этот день' : ''}
+                                      style={{ minHeight: 58, minWidth: 0, overflow: 'hidden', borderRadius: 8, border: `1px solid ${isToday ? '#0a84ff' : '#f0f0f0'}`, background: d ? (isToday ? '#f0f7ff' : '#fafafa') : 'transparent', padding: 2, cursor: d ? 'pointer' : 'default' }}>
                                       {d && <div style={{ fontSize: 10, fontWeight: isToday ? 800 : 600, color: isToday ? '#0a84ff' : '#6e6e73', textAlign: 'right', paddingRight: 3 }}>{d}</div>}
                                       {itemsHere.map(it => (
                                         <div key={it.key} title={`${it.label}${it.amount != null ? ` — ${formatAmount(it.amount, 'EUR')}` : ''}${it.paid ? ' (оплачен)' : ' (ожидается)'}`}
@@ -6445,6 +6462,11 @@ ${bodyHtml}
                       <span style={{ flex: '1 1 240px', minWidth: 0, overflowWrap: 'break-word', fontSize: 14 }}>
                         <b>{m.concept || '—'}</b>
                         {m.prefix && <span style={{ marginLeft: 6, fontSize: 11, color: '#95a5a6' }}>{m.prefix}</span>}
+                        {freqOfMovement(m) && (
+                          <span title={`Повторяющийся платёж: ${freqOfMovement(m).text}`} style={{ marginLeft: 6, fontSize: 10, color: '#5856d6', background: '#efeffd', borderRadius: 8, padding: '1px 7px', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                            {freqOfMovement(m).icon} {freqOfMovement(m).text}
+                          </span>
+                        )}
                       </span>
                       <span style={{ flex: '0 0 130px', textAlign: 'right' }}>
                         <span style={{ fontWeight: 700, color: isOut(m) ? '#e74c3c' : '#27ae60' }}>
