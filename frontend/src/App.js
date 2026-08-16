@@ -2485,6 +2485,8 @@ function App() {
   const [plannedForm, setPlannedForm] = useState({ title: '', amount: '', day: '1', category: 'utilities', freq: '1', object: '', counterparty: '', fileUrl: '', fileName: '' });
   const [plannedSaving, setPlannedSaving] = useState(false);
   const [payCalOffset, setPayCalOffset] = useState(0); // сдвиг 2-месячного окна календаря платежей (v42.1)
+  const [payCalCollapsed, setPayCalCollapsed] = useState(false);   // свёрнут блок «Обязательные платежи» (v48)
+  const [bankListCollapsed, setBankListCollapsed] = useState(false); // свёрнута выписка (v48)
   const [calPicker, setCalPicker] = useState(null);    // id движения с открытым меню «в календарь» (v44)
   useEffect(() => {
     if (calPicker === null) return undefined;
@@ -6425,6 +6427,7 @@ ${bodyHtml}
               cpKey: normCpKey(p.counterparty), fileUrl: p.fileUrl || '', fileName: p.fileName || '',
               cat: RECUR_CATS.find(c => c.key === p.category) || RECUR_CATS[RECUR_CATS.length - 1]
             }));
+            const bmMonths = [...new Set(bankMovements.map(m => (m.operation_date || '').slice(0, 7)).filter(Boolean))].sort().reverse();
             const plannedCpOptions = [...new Set(bankMovements.map(m => m.counterparty).filter(Boolean))].sort((a, b) => a.localeCompare(b));
             const dueInMonth = (g, ymStr) => {
               const diff = ((+ymStr.slice(0, 4)) - (+g.startYm.slice(0, 4))) * 12 + ((+ymStr.slice(5, 7)) - (+g.startYm.slice(5, 7)));
@@ -6442,6 +6445,24 @@ ${bodyHtml}
             }
             return (
               <>
+                {(tlNextMonths.length > 0 || bmMonths.length > 0) && (
+                  <div style={{ position: 'fixed', right: 6, top: '50%', transform: 'translateY(-50%)', zIndex: 90, width: 62, maxHeight: '82vh', overflowY: 'auto', background: '#fff', border: '1px solid #d2d2d7', borderRadius: 12, padding: 4, boxShadow: '0 2px 10px rgba(0,0,0,0.10)' }}>
+                    <div style={{ fontSize: 9, color: '#8e8e93', textAlign: 'center', padding: '2px 0' }}>📅 план</div>
+                    {tlNextMonths.map(ym => (
+                      <button key={`r_${ym}`} onClick={() => { const el = document.getElementById(`tl-${ym}`); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
+                        style={{ display: 'block', width: '100%', WebkitAppearance: 'none', appearance: 'none', border: 'none', background: ym === curYm ? '#eef4ff' : 'none', boxShadow: 'none', margin: 0, padding: '4px 0', fontSize: 10, fontWeight: 700, color: '#1d1d1f', cursor: 'pointer', borderRadius: 6, whiteSpace: 'nowrap', fontFamily: 'inherit' }}>
+                        {MONTH_NAMES[+ym.slice(5, 7) - 1].slice(0, 3)} {ym.slice(2, 4)}
+                      </button>
+                    ))}
+                    <div style={{ fontSize: 9, color: '#8e8e93', textAlign: 'center', padding: '4px 0 2px', borderTop: '1px solid #f0f0f0', marginTop: 2 }}>🏦 выписка</div>
+                    {bmMonths.map(ym => (
+                      <button key={`r_b${ym}`} onClick={() => { const el = document.getElementById(`bm-${ym}`); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
+                        style={{ display: 'block', width: '100%', WebkitAppearance: 'none', appearance: 'none', border: 'none', background: 'none', boxShadow: 'none', margin: 0, padding: '4px 0', fontSize: 10, fontWeight: ym.endsWith('-01') ? 800 : 700, color: ym.endsWith('-01') ? '#0071e3' : '#1d1d1f', cursor: 'pointer', borderRadius: 6, whiteSpace: 'nowrap', fontFamily: 'inherit' }}>
+                        {ym.endsWith('-01') ? ym.slice(0, 4) : MONTH_NAMES[+ym.slice(5, 7) - 1].slice(0, 3)}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 {bankMovements.length === 0 && !bankLoading && (
                   <div style={{ background: 'linear-gradient(180deg,#ffffff,#ececf0)', border: '1px solid #d2d2d7', borderRadius: 12, padding: 12, marginBottom: 4 }}>
                     Выписка ещё не загружена. Откройте вкладку «Загрузка» → кнопка «🏦 Выписка банка» и выберите Excel-файл (.xlsx) из банка — движения появятся здесь, а фактуры с совпавшими суммами сами получат статус 🟢 Оплачено.
@@ -6456,12 +6477,13 @@ ${bodyHtml}
                 </div>
                 {(manualRows.length > 0 || bankMovements.length > 0) && (
                   <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: '10px 12px', marginBottom: 10 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: payCalCollapsed ? 0 : 8 }}>
+                      <button onClick={() => setPayCalCollapsed(c => !c)} title="Свернуть/развернуть блок" style={{ border: '1px solid #d2d2d7', background: '#fff', borderRadius: 8, padding: '2px 8px', cursor: 'pointer', fontSize: 12, lineHeight: 1.4 }}>{payCalCollapsed ? '▸' : '▾'}</button>
                       <span style={{ fontSize: 15, fontWeight: 800, color: '#1d1d1f' }}>📅 Обязательные повторяющиеся платежи</span>
                       <span style={{ fontSize: 11, color: '#8e8e93' }}>🟢 оплачен (по выписке) · жёлтый — плановый · клик по дню — добавить · 📅 в строке выписки — в календарь (Duque, Kit, Maria, Volvo, Porsche, Mercedes × 1/2/6/12 мес)</span>
                       <button onClick={() => setPlannedModal(true)} style={{ marginLeft: 'auto', border: 'none', background: '#0071e3', color: '#fff', borderRadius: 980, padding: '5px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>＋ Добавить платёж</button>
                     </div>
-                    {false ? null : (
+                    {payCalCollapsed ? null : (
                       <div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                         <button onClick={() => setPayCalOffset(o => o - 2)} title="На 2 месяца назад" style={{ border: '1px solid #d2d2d7', background: '#fff', borderRadius: 980, padding: '3px 12px', cursor: 'pointer', fontSize: 13 }}>←</button>
@@ -6513,7 +6535,7 @@ ${bodyHtml}
                       </div>
                       </div>
                     )}
-                    {manualRows.length > 0 && (
+                    {!payCalCollapsed && manualRows.length > 0 && (
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
                         {manualRows.map(g => (
                           <span key={`del_${g.id}`} style={{ fontSize: 11, background: '#fff6dd', border: '1px solid #f0dfa8', borderRadius: 980, padding: '2px 8px', color: '#8a6d3b' }}>
@@ -6523,7 +6545,7 @@ ${bodyHtml}
                         ))}
                       </div>
                     )}
-                    {manualRows.length > 0 && (
+                    {!payCalCollapsed && manualRows.length > 0 && (
                       <div style={{ marginTop: 10, borderTop: '1px dashed #e3e6ea', paddingTop: 8 }}>
                         <div style={{ fontSize: 12, fontWeight: 800, color: '#6e6e73', marginBottom: 4 }}>🗓 Таймлайн платежей на 12 месяцев</div>
                         {tlNextMonths.map(ym => {
@@ -6531,7 +6553,7 @@ ${bodyHtml}
                           if (!due.length) return null;
                           const sum = due.reduce((a, g) => a + (g.avg || 0), 0);
                           return (
-                            <div key={ym} style={{ marginBottom: 10 }}>
+                            <div key={ym} id={`tl-${ym}`} style={{ marginBottom: 10, scrollMarginTop: 100 }}>
                               <div style={{ display: 'flex', alignItems: 'baseline', padding: '0 2px 5px' }}>
                                 <span style={{ fontWeight: 800, fontSize: 13, color: ym === curYm ? '#0071e3' : '#1d1d1f' }}>{MONTH_NAMES[+ym.slice(5, 7) - 1].slice(0, 3)} {ym.slice(2, 4)}</span>
                                 <span style={{ marginLeft: 'auto', fontWeight: 700, fontSize: 12, color: '#6e6e73', whiteSpace: 'nowrap' }}>Σ {formatAmount(sum, 'EUR')}</span>
@@ -6564,7 +6586,12 @@ ${bodyHtml}
                     )}
                   </div>
                 )}
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 8px' }}>
+                  <button onClick={() => setBankListCollapsed(c => !c)} title="Свернуть/развернуть выписку" style={{ border: '1px solid #d2d2d7', background: '#fff', borderRadius: 8, padding: '2px 8px', cursor: 'pointer', fontSize: 12, lineHeight: 1.4 }}>{bankListCollapsed ? '▸' : '▾'}</button>
+                  <span style={{ fontSize: 15, fontWeight: 800, color: '#1d1d1f' }}>🏦 Выписка банка</span>
+                  {bankListCollapsed && <span style={{ fontSize: 11, color: '#8e8e93' }}>скрыто строк: {visible.length} · Σ −{formatAmount(sumVis.out, 'EUR')}</span>}
+                </div>
+                <div style={{ display: bankListCollapsed ? 'none' : 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 0 }}>
                   <select value={bankFilter} onChange={e => setBankFilter(e.target.value)} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ddd', fontSize: 14, background: '#fff', color: '#333', height: 36, boxSizing: 'border-box' }}>
                     <option value="all">Все движения</option>
                     <option value="out">Только платежи</option>
@@ -6583,16 +6610,18 @@ ${bodyHtml}
                   <button onClick={rematchBank} title="Повторно запустить автопривязку (после загрузки новых фактур)" style={{ padding: '6px 12px', borderRadius: 6, border: 'none', background: '#8e44ad', color: '#fff', cursor: 'pointer' }}>🔁 Автопривязка</button>
                   <button onClick={loadBankMovements} style={{ padding: '6px 12px', borderRadius: 6, border: 'none', background: '#3498db', color: '#fff', cursor: 'pointer' }}>🔄 Обновить</button>
                 </div>
-                <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', fontSize: 12, color: '#555', marginBottom: 4, background: '#f4f6f7', borderRadius: 8, padding: '6px 10px' }}>
+                <div style={{ display: bankListCollapsed ? 'none' : 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', fontSize: 12, color: '#555', marginBottom: 4, background: '#f4f6f7', borderRadius: 8, padding: '6px 10px' }}>
                   <span>Показано строк: <b>{visible.length}</b> из {bankMovements.length}</span>
                   <span>Σ по фильтру: <b style={{ color: '#e74c3c' }}>−{formatAmount(sumVis.out, 'EUR')}</b> / <b style={{ color: '#27ae60' }}>+{formatAmount(sumVis.inc, 'EUR')}</b></span>
                   <span style={{ marginLeft: 'auto', textAlign: 'right', whiteSpace: 'nowrap' }}>Σ всей выписки: <b style={{ color: '#e74c3c' }}>−{formatAmount(sumAll.out, 'EUR')}</b> / <b style={{ color: '#27ae60' }}>+{formatAmount(sumAll.inc, 'EUR')}</b></span>
                 </div>
                 {bankLoading && <div className="loading-center"><div className="spinner"></div><p>Загрузка движений...</p></div>}
-                {!bankLoading && visible.map(m => {
+                {!bankLoading && !bankListCollapsed && visible.map((m, mi) => {
+                  const bmYm = (m.operation_date || '').slice(0, 7);
+                  const bmAnchor = mi === 0 || (visible[mi - 1].operation_date || '').slice(0, 7) !== bmYm;
                   const linked = linkedReceiptOf(m);
                   return (
-                    <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 6, boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+                    <div key={m.id} id={bmAnchor ? `bm-${bmYm}` : undefined} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 6, boxShadow: '0 1px 3px rgba(0,0,0,0.06)', scrollMarginTop: 100 }}>
                       <span style={{ flex: '0 0 86px', color: '#7f8c8d', fontSize: 13 }}>{formatDate(m.operation_date)}</span>
                       <span style={{ flex: '1 1 240px', minWidth: 0, overflowWrap: 'break-word', fontSize: 14 }}>
                         <b>{m.concept || '—'}</b>
@@ -6659,7 +6688,7 @@ ${bodyHtml}
                     </div>
                   );
                 })}
-                {!bankLoading && bankMovements.length > 0 && visible.length === 0 && (
+                {!bankLoading && !bankListCollapsed && bankMovements.length > 0 && visible.length === 0 && (
                   <p style={{ color: '#95a5a6' }}>Ничего не найдено по текущему фильтру.</p>
                 )}
                 {plannedModal && (
