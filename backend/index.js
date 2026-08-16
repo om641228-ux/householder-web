@@ -125,7 +125,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v46-2026-08-16', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v46.1-2026-08-16', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -3446,9 +3446,10 @@ app.post('/api/planned-payments', requireAuth, async (req, res) => {
 // Загрузка файла фактуры к плановому платежу (v46): multipart/form-data, поле file
 app.post('/api/planned-payments/upload', requireAuth, crmMediaMulter('file'), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'Файл не получен' });
-    const url = await uploadToStorage(req.file.buffer, req.file.originalname || 'factura', req.user.id, req.file.mimetype || 'application/octet-stream');
-    res.json({ url, name: req.file.originalname || 'factura' });
+    const f = (req.files && req.files[0]) || req.file;
+    if (!f) return res.status(400).json({ error: 'Файл не получен' });
+    const url = await uploadToStorage(f.buffer, f.originalname || 'factura', req.user.id, f.mimetype || 'application/octet-stream');
+    res.json({ url, name: f.originalname || 'factura' });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
