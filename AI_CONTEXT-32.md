@@ -1075,3 +1075,19 @@ crm_tasks(id bigserial PK, owner_id text, title text NOT NULL, description text,
 ## v49.1 — Фикс «Не переключилось: Load failed»
 
 - Причина: CORS `methods` не содержал PATCH → preflight OPTIONS падал в браузере. Исправлено: добавлен PATCH в methods; переключение переведено на POST `/api/planned-payments/:id/toggle` (общий handler togglePlannedHandler, PATCH оставлен как алиас). Build `v49.1-2026-08-16`.
+
+## v50 (2026-08-16) — Диапазон вывода таймлайна
+
+- Стейты `tlFrom`/`tlTo` (default: текущий месяц … +11). `tlNextMonths` строится по диапазону (cap 48 мес); `tlOptions` — 72 месяца (год-2 … +3), `tlYmLabel` = «Август 2026». Шапка таймлайна: «🗓 Таймлайн платежей с [select] по [select]» — как «с/по» в налоговых формах.
+- Только App.js. Линт: 0 ошибок, 3 прежних warning.
+
+## v51 — Σ за выбранный диапазон таймлайна
+
+- `tlTotal`: сумма активных платежей по всем месяцам диапазона (manualRows active + dueInMonth). Выводится в шапке таймлайна справа: «Σ за период: −X EUR». Линт: 0 ошибок, 3 warning.
+
+## v52 (2026-08-17) — Локальный Mac OCR (Apple Vision) как модель распознавания
+
+- **Архитектура**: на Mac пользователя крутится `mac-ocr-server.py` (127.0.0.1:8787, pip3 install ocrmac; POST /ocr — сырое тело файла, ?name= для расширения; языки es/ru/en; CORS *). Фронт при выборе модели `local-mac-ocr` шлёт каждую страницу на локальный сервер → собирает тексты → POST /api/upload-document-pages с полем `ocr_texts` (JSON-массив).
+- **Backend**: в upload-document-pages ветка `req.body.ocr_texts` (перед проверкой genAI) — vision пропускается, `finalizeDocumentFromPageTexts(pageTexts)`, страницы в Storage (page_urls), method `local mac-ocr Np (async)`, job-режим как обычно. Build `v52-2026-08-16`.
+- **Frontend**: `LOCAL_MAC_MODEL` ('local-mac-ocr', '🖥 Mac OCR (локально, Vision)') добавлен в начало списка моделей (`modelsAll`); в recognizeDocumentPages при этой модели — локальный OCR с прогрессом, ошибка с инструкцией запуска. `LOCAL_OCR_URL = http://127.0.0.1:8787/ocr`.
+- Деливерабл: mac-ocr-server.py. Линт: 0 ошибок, 3 прежних warning.

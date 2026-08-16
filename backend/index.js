@@ -125,7 +125,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v49.1-2026-08-16', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v52-2026-08-16', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -2698,6 +2698,45 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
         console.error(`Задача ${jobIdW} (word) упала:`, e);
         jobW.status = 'error';
         jobW.error = e.message;
+      }
+      return;
+    }
+
+    // ЛОКАЛЬНЫЙ MAC OCR (v52): фронт прислал готовые тексты страниц (ocr_texts, JSON-массив) — vision не нужен,
+    // текст структурируем обычной финализацией; страницы сохраняем в Storage как обычно
+    if (req.body.ocr_texts) {
+      let pageTexts = null;
+      try { pageTexts = JSON.parse(req.body.ocr_texts); } catch (_) { pageTexts = null; }
+      if (!Array.isArray(pageTexts) || !pageTexts.length || pageTexts.some(t => !t || !String(t).trim())) {
+        return res.status(400).json({ error: 'Локальный OCR не вернул текст по страницам — проверьте mac-ocr-server на Mac' });
+      }
+      const pageBuffersL = [];
+      const mimeTypesL = [];
+      for (const f of files) {
+        const isPdf = f.mimetype === 'application/pdf' || /\.pdf$/i.test(f.originalname || '');
+        pageBuffersL.push(isPdf ? f.buffer : await processImage(f.buffer));
+        mimeTypesL.push(isPdf ? 'application/pdf' : 'image/jpeg');
+      }
+      const jobIdL = createDocJob(pageTexts.length);
+      res.json({ success: true, jobId: jobIdL, async: true });
+      const jobL = docJobs.get(jobIdL);
+      const t0l = Date.now();
+      try {
+        const receiptData = await finalizeDocumentFromPageTexts(pageTexts.map(String), currency, docType, () => { jobL.stage = 'translate'; jobL.translateDone++; });
+        receiptData.docType = docType === 'auto' ? (receiptData.document_type || 'other') : docType;
+        receiptData.object = (object && object !== 'other') ? object : (receiptData.object || 'other');
+        if (subtypeOverride) receiptData.subtype = subtypeOverride;
+        if (paymentStatusOverride) receiptData.payment_status = paymentStatusOverride;
+        receiptData.page_urls = await uploadPagesToStorage(pageBuffersL, mimeTypesL, user.id);
+        const imageUrl = receiptData.page_urls[0] || await uploadToStorage(pageBuffersL[0], files[0].originalname, user.id, mimeTypesL[0]);
+        const saved = await saveReceiptToDB(receiptData, imageUrl, user, `local mac-ocr ${pageTexts.length}p (async)`);
+        jobL.status = 'done';
+        jobL.result = { success: true, id: saved.id, ...saved, image_url: imageUrl };
+        console.log(`Задача ${jobIdL}: local mac-ocr ${pageTexts.length} стр. готов за ${Math.round((Date.now() - t0l) / 1000)}с`);
+      } catch (e) {
+        console.error(`Задача ${jobIdL} (local mac-ocr) упала:`, e);
+        jobL.status = 'error';
+        jobL.error = e.message;
       }
       return;
     }

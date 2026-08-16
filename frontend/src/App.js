@@ -407,6 +407,10 @@ const fixImageUrl = (url) => {
   return url.replace(/^http:\/\//, 'https://');
 };
 
+// Локальный OCR на Mac (Apple Vision через mac-ocr-server.py на 127.0.0.1:8787) — v52
+const LOCAL_MAC_MODEL = { name: 'local-mac-ocr', displayName: '🖥 Mac OCR (локально, Vision)', provider: 'Mac (локально)', active: null };
+const LOCAL_OCR_URL = 'http://127.0.0.1:8787/ocr';
+
 const FALLBACK_MODELS = [
   { name: 'ocrspace-engine1', displayName: 'OCR.space Engine 1 (Basic)', provider: 'OCR.space' },
   { name: 'ocrspace-engine2', displayName: 'OCR.space Engine 2 (Advanced)', provider: 'OCR.space' },
@@ -2817,12 +2821,32 @@ function App() {
     setLastSavedReceipt(null);
     try {
       const formData = new FormData();
+      const prepared = [];
       for (const f of files) {
         let fileToUpload = f;
         if (!isPdfFile(f) && f.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
           fileToUpload = await compressImageFile(f);
         }
+        prepared.push(fileToUpload);
         formData.append('pages', fileToUpload);
+      }
+      // Локальный Mac OCR (v52): каждая страница → текст на этом Mac (127.0.0.1:8787), дальше сервер структурирует
+      if (selectedModel === 'local-mac-ocr') {
+        const ocrTexts = [];
+        for (let i = 0; i < prepared.length; i++) {
+          setProgressStage('upload');
+          setUploadProgress(Math.round(((i + 1) / prepared.length) * 30));
+          let r;
+          try {
+            r = await fetch(`${LOCAL_OCR_URL}?name=${encodeURIComponent(files[i].name || `page${i + 1}.jpg`)}`, { method: 'POST', body: prepared[i] });
+          } catch (err) {
+            throw new Error('Локальный Mac OCR недоступен. Запустите на Mac: python3 mac-ocr-server.py (нужен pip3 install ocrmac). Порт 127.0.0.1:8787');
+          }
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error('Mac OCR: ' + (j.error || `HTTP ${r.status}`));
+          ocrTexts.push(j.text || '');
+        }
+        formData.append('ocr_texts', JSON.stringify(ocrTexts));
       }
       formData.append('model', selectedModel);
       formData.append('currency', currency);
@@ -5053,7 +5077,8 @@ ${bodyHtml}
 
   const activeModelDisplay = models.find(m => m.name === selectedModel) || FALLBACK_MODELS.find(m => m.name === selectedModel) || { displayName: selectedModel, provider: '?' };
 
-  const filteredModels = models.filter(m => {
+  const modelsAll = [LOCAL_MAC_MODEL, ...models];
+  const filteredModels = modelsAll.filter(m => {
     if (!modelSearch) return true;
     const q = modelSearch.toLowerCase();
     return m.displayName.toLowerCase().includes(q) || m.provider.toLowerCase().includes(q) || m.name.toLowerCase().includes(q);
