@@ -2466,6 +2466,27 @@ function App() {
     const v = url.trim().replace(/\/+$/, '');
     try { v ? localStorage.setItem('mac_ocr_url_v1', v) : localStorage.removeItem('mac_ocr_url_v1'); } catch { /* приватный режим */ }
     setMacOcrUrl(v);
+    if (v) {
+      // v52.3: сразу проверяем связь, чтобы не узнавать об обрыве в середине распознавания
+      testMacOcr(v).then(res => window.alert(res.ok
+        ? `✅ Связь есть: ${v}\nMac OCR-сервер отвечает, можно распознавать.`
+        : `❌ Нет связи с ${v}\nПричина: ${res.detail}\n\nПроверьте на Mac:\n1) запущен ли python3 mac-ocr-server.py;\n2) запущен ли cloudflared tunnel --url http://127.0.0.1:8787;\n3) URL скопирован из ТЕКУЩЕГО окна туннеля — при каждом перезапуске cloudflared выдаёт НОВЫЙ адрес.`));
+    }
+  };
+  // v52.3: базовый адрес Mac OCR и проверка связи (GET / отвечает {"status":"ok"})
+  const macOcrBase = () => (macOcrUrl || LOCAL_MAC_OCR_DEFAULT).replace(/\/+$/, '');
+  const testMacOcr = async (base) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    try {
+      const r = await fetch(`${base}/`, { signal: ctrl.signal });
+      const j = await r.json().catch(() => ({}));
+      return r.ok && j.status === 'ok' ? { ok: true } : { ok: false, detail: `HTTP ${r.status} — это не mac-ocr-server` };
+    } catch (e) {
+      return { ok: false, detail: (e && e.name === 'AbortError') ? 'таймаут 8 сек' : ((e && e.message) || 'сеть недоступна') };
+    } finally {
+      clearTimeout(timer);
+    }
   };
   const [currency, setCurrency] = useState('auto');
   const [docType, setDocType] = useState('auto');
@@ -2854,17 +2875,23 @@ function App() {
         } catch (_) {
           throw new Error('Бэкенд householder-api устарел и не принимает локальный OCR. Запушьте новый index.js и сделайте redeploy (в /api/health должно быть build v52+).');
         }
+        // v52.3: сначала проверяем, что сервер вообще отвечает — иначе падали бы на 1-й странице без диагностики
+        const macBase = macOcrBase();
+        const probe = await testMacOcr(macBase);
+        if (!probe.ok) {
+          throw new Error(macOcrUrl
+            ? `Mac OCR не отвечает (${macBase}): ${probe.detail}.\nПроверьте, что на Mac запущены И mac-ocr-server.py, И cloudflared-туннель, и что URL в ⚙ — из текущего окна туннеля (при перезапуске cloudflared адрес меняется!).`
+            : `Mac OCR не отвечает (${macBase}): ${probe.detail}.\nЗапустите python3 mac-ocr-server.py. Если сервер запущен, а ошибка остаётся — браузер блокирует http://127.0.0.1 с https-страницы: поднимите туннель «cloudflared tunnel --url http://127.0.0.1:8787» и задайте его URL через ⚙.`);
+        }
         const ocrTexts = [];
         for (let i = 0; i < prepared.length; i++) {
           setProgressStage('upload');
           setUploadProgress(Math.round(((i + 1) / prepared.length) * 30));
           let r;
           try {
-            r = await fetch(`${(macOcrUrl || LOCAL_MAC_OCR_DEFAULT).replace(/\/+$/, '')}/ocr?name=${encodeURIComponent(files[i].name || `page${i + 1}.jpg`)}`, { method: 'POST', body: prepared[i] });
+            r = await fetch(`${macOcrBase()}/ocr?name=${encodeURIComponent(files[i].name || `page${i + 1}.jpg`)}`, { method: 'POST', body: prepared[i] });
           } catch (err) {
-            throw new Error(macOcrUrl
-              ? `Mac OCR недоступен по адресу ${macOcrUrl}. Проверьте, что туннель и mac-ocr-server.py запущены, или очистите URL через ⚙.`
-              : 'Mac OCR: сервер запущен, но браузер блокирует обращение к http://127.0.0.1 с https-страницы (mixed content). Решение: на Mac выполните «brew install cloudflared», затем «cloudflared tunnel --url http://127.0.0.1:8787» и вставьте выданный https://…trycloudflare.com через ⚙ рядом с кнопкой.');
+            throw new Error(`Mac OCR: обрыв на странице ${i + 1}/${prepared.length} (${(err && err.message) || 'сеть'}). Проверьте, что туннель и mac-ocr-server.py ещё запущены; адрес туннеля в ⚙ должен быть из текущего окна cloudflared.`);
           }
           const j = await r.json().catch(() => ({}));
           if (!r.ok) throw new Error('Mac OCR: ' + (j.error || `HTTP ${r.status}`));
