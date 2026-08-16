@@ -3858,7 +3858,12 @@ function App() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       if (data.item && data.item.freqMonths == null) {
-        alert('⚠️ Сервер не сохранил частоту — платёж станет ежемесячным. Выполните миграцию supabase-migration-v27-planned-freq.sql и сделайте redeploy householder-api.');
+        let buildInfo = '';
+        try {
+          const h = await fetch(`${API_URL}/api/health`).then(r => r.json());
+          buildInfo = h.build ? `Сервер: ${h.build}` : 'Сервер: СТАРАЯ версия (без метки сборки) — новый index.js не задеплоен!';
+        } catch (_) { buildInfo = 'Не удалось проверить версию сервера'; }
+        alert('⚠️ Сервер не сохранил частоту — платёж станет ежемесячным.\n\n' + buildInfo + '\n\nЧто сделать:\n1) Закоммитьте и запушьте новый index.js в git-репозиторий householder-api (Railway «Redeploy» пересобирает СТАРЫЙ коммит — без push кода ничего не изменится);\n2) Выполните supabase-migration-v27-planned-freq.sql в SQL Editor проекта householder;\n3) Redeploy householder-api.');
       }
       setPlannedPayments(prev => [...prev, data.item]);
     } catch (e) { alert('Не сохранилось в календарь: ' + e.message); }
@@ -6393,11 +6398,11 @@ ${bodyHtml}
               const diff = ((+ymStr.slice(0, 4)) - (+g.startYm.slice(0, 4))) * 12 + ((+ymStr.slice(5, 7)) - (+g.startYm.slice(5, 7)));
               return diff >= 0 && diff % g.freq === 0;
             };
-            // Компактный таймлайн: 6 месяцев от текущего
+            // Компактный таймлайн: 12 месяцев от текущего (v45.2: иначе годовые платежи не видны)
             const tlNextMonths = [];
             {
               const dd = new Date(nowD.getFullYear(), nowD.getMonth(), 1);
-              for (let i = 0; i < 6; i++) {
+              for (let i = 0; i < 12; i++) {
                 tlNextMonths.push(`${dd.getFullYear()}-${String(dd.getMonth() + 1).padStart(2, '0')}`);
                 dd.setMonth(dd.getMonth() + 1);
               }
@@ -6479,7 +6484,7 @@ ${bodyHtml}
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
                         {manualRows.map(g => (
                           <span key={`del_${g.id}`} style={{ fontSize: 11, background: '#fff6dd', border: '1px solid #f0dfa8', borderRadius: 980, padding: '2px 8px', color: '#8a6d3b' }}>
-                            ✋ {g.name} · ~{g.usualDay} числа{g.avg != null ? ` · ${formatAmount(g.avg, 'EUR')}` : ''}
+                            ✋ {g.name} · ~{g.usualDay} числа · {calFreqLabel(g.freq)}{(() => { for (let i = 0; i < 24; i++) { const dd2 = new Date(nowD.getFullYear(), nowD.getMonth() + i, 1); const ym2 = `${dd2.getFullYear()}-${String(dd2.getMonth() + 1).padStart(2, '0')}`; if (dueInMonth(g, ym2)) return ` · след: ${MONTH_NAMES[+ym2.slice(5, 7) - 1].slice(0, 3)} ${ym2.slice(2, 4)}`; } return ''; })()}{g.avg != null ? ` · ${formatAmount(g.avg, 'EUR')}` : ''}
                             <button onClick={() => removePlannedPayment(g.id)} title="Удалить плановый платёж" style={{ border: 'none', background: 'none', color: '#e74c3c', cursor: 'pointer', marginLeft: 4, padding: 0, fontSize: 11 }}>✕</button>
                           </span>
                         ))}
@@ -6487,7 +6492,7 @@ ${bodyHtml}
                     )}
                     {manualRows.length > 0 && (
                       <div style={{ marginTop: 10, borderTop: '1px dashed #e3e6ea', paddingTop: 8 }}>
-                        <div style={{ fontSize: 12, fontWeight: 800, color: '#6e6e73', marginBottom: 4 }}>🗓 Таймлайн платежей на 6 месяцев</div>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: '#6e6e73', marginBottom: 4 }}>🗓 Таймлайн платежей на 12 месяцев</div>
                         {tlNextMonths.map(ym => {
                           const due = manualRows.filter(g => dueInMonth(g, ym));
                           if (!due.length) return null;

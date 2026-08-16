@@ -1008,3 +1008,16 @@ crm_tasks(id bigserial PK, owner_id text, title text NOT NULL, description text,
 
 **2026-07-08**
 - auth in-memory (Railway read-only fs); entry point index.js; bucket receipt-images; /health
+
+## v45.1 (2026-08-16) — Диагностика «частота не сохраняется»
+
+- Симптом у пользователя: alert «Сервер не сохранил частоту» даже после redeploy. Причина: Railway Redeploy пересобирает тот же коммит — старый index.js игнорирует freq_months (успешный insert, freq=1 по умолчанию).
+- index.js: `/api/health` теперь возвращает `build: 'v45-2026-08-16'` + список features — позволяет проверить, какая версия реально задеплоена.
+- App.js: alert в `assignToCalendar` дополнительно запрашивает `/api/health` и показывает билд сервера + пошаговую инструкцию (push index.js в git → миграция v27 → redeploy).
+
+## v45.2 (2026-08-16) — Годовые платежи не были видны
+
+- Причина: `assignToCalendar` шлёт `start_date: m.operation_date` — страховка (апрель) с freq=12 корректно выходит только в апреле, а таймлайн был 6 мес (авг–янв) → «не отображается».
+- Таймлайн расширен 6 → 12 месяцев (`tlNextMonths`, заголовок «на 12 месяцев»).
+- Чип планового платежа теперь показывает частоту и ближайший месяц оплаты: `✋ Имя · ~N числа · раз в 12 мес · след: Апр 27 · сумма` (поиск next due перебором 24 мес через dueInMonth).
+- Только App.js. Линт: 0 ошибок, 3 прежних warning.
