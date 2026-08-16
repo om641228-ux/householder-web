@@ -1071,3 +1071,7 @@ crm_tasks(id bigserial PK, owner_id text, title text NOT NULL, description text,
 - **Активность**: manualRows получили `active: p.active !== false`; неактивные — полупрозрачные (opacity .55), НЕ участвуют в календаре (`dayItems`) и таймлайне (`due`), «след:» скрыт. `togglePlannedPayment(g)` → PATCH /api/planned-payments/:id {active}.
 - **Backend**: GET /api/planned-payments возвращает все записи (active desc, day asc) — раньше только active=true; новый PATCH /:id (update active → ppToApi). Build `v49-2026-08-16`.
 - Линт: 0 ошибок, 3 прежних warning.
+
+## v49.1 — Фикс «Не переключилось: Load failed»
+
+- Причина: CORS `methods` не содержал PATCH → preflight OPTIONS падал в браузере. Исправлено: добавлен PATCH в methods; переключение переведено на POST `/api/planned-payments/:id/toggle` (общий handler togglePlannedHandler, PATCH оставлен как алиас). Build `v49.1-2026-08-16`.

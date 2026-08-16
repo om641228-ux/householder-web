@@ -116,7 +116,7 @@ function requireAuth(req, res, next) {
 // ========== CORS ==========
 app.use(cors({
   origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-token'],
   credentials: true
 }));
@@ -125,7 +125,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v49-2026-08-16', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v49.1-2026-08-16', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -3443,8 +3443,8 @@ app.post('/api/planned-payments', requireAuth, async (req, res) => {
   }
 });
 
-// Переключение активности планового платежа (v49)
-app.patch('/api/planned-payments/:id', requireAuth, async (req, res) => {
+// Переключение активности планового платежа (v49): POST toggle (CORS-safe) + PATCH
+const togglePlannedHandler = async (req, res) => {
   try {
     const { active } = req.body || {};
     const { data, error } = await supabaseAdmin.from('planned_payments').update({ active: active !== false }).eq('id', req.params.id).select().single();
@@ -3453,7 +3453,9 @@ app.patch('/api/planned-payments/:id', requireAuth, async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
-});
+};
+app.post('/api/planned-payments/:id/toggle', requireAuth, togglePlannedHandler);
+app.patch('/api/planned-payments/:id', requireAuth, togglePlannedHandler);
 
 // Загрузка файла фактуры к плановому платежу (v46): multipart/form-data, поле file
 app.post('/api/planned-payments/upload', requireAuth, crmMediaMulter('file'), async (req, res) => {

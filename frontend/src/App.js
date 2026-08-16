@@ -3840,8 +3840,8 @@ function App() {
   // Активна/неактивна (v49): неактивный платёж остаётся в списке, но не идёт в календарь/таймлайн
   const togglePlannedPayment = async (g) => {
     try {
-      const res = await fetch(`${API_URL}/api/planned-payments/${g.id}?token=${token}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      const res = await fetch(`${API_URL}/api/planned-payments/${g.id}/toggle?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: !g.active })
       });
       const data = await res.json().catch(() => ({}));
