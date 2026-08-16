@@ -6443,24 +6443,31 @@ ${bodyHtml}
                 dd.setMonth(dd.getMonth() + 1);
               }
             }
+            const railTarget = new Map();
+            bmMonths.forEach(ym => railTarget.set(ym, `bm-${ym}`));
+            tlNextMonths.forEach(ym => { if (!railTarget.has(ym)) railTarget.set(ym, `tl-${ym}`); });
+            const railYears = [...new Set([...railTarget.keys()].map(ym => ym.slice(0, 4)))].sort().reverse();
             return (
               <>
-                {(tlNextMonths.length > 0 || bmMonths.length > 0) && (
-                  <div style={{ position: 'fixed', right: 6, top: '50%', transform: 'translateY(-50%)', zIndex: 90, width: 62, maxHeight: '82vh', overflowY: 'auto', background: '#fff', border: '1px solid #d2d2d7', borderRadius: 12, padding: 4, boxShadow: '0 2px 10px rgba(0,0,0,0.10)' }}>
-                    <div style={{ fontSize: 9, color: '#8e8e93', textAlign: 'center', padding: '2px 0' }}>📅 план</div>
-                    {tlNextMonths.map(ym => (
-                      <button key={`r_${ym}`} onClick={() => { const el = document.getElementById(`tl-${ym}`); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
-                        style={{ display: 'block', width: '100%', WebkitAppearance: 'none', appearance: 'none', border: 'none', background: ym === curYm ? '#eef4ff' : 'none', boxShadow: 'none', margin: 0, padding: '4px 0', fontSize: 10, fontWeight: 700, color: '#1d1d1f', cursor: 'pointer', borderRadius: 6, whiteSpace: 'nowrap', fontFamily: 'inherit' }}>
-                        {MONTH_NAMES[+ym.slice(5, 7) - 1].slice(0, 3)} {ym.slice(2, 4)}
-                      </button>
-                    ))}
-                    <div style={{ fontSize: 9, color: '#8e8e93', textAlign: 'center', padding: '4px 0 2px', borderTop: '1px solid #f0f0f0', marginTop: 2 }}>🏦 выписка</div>
-                    {bmMonths.map(ym => (
-                      <button key={`r_b${ym}`} onClick={() => { const el = document.getElementById(`bm-${ym}`); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
-                        style={{ display: 'block', width: '100%', WebkitAppearance: 'none', appearance: 'none', border: 'none', background: 'none', boxShadow: 'none', margin: 0, padding: '4px 0', fontSize: 10, fontWeight: ym.endsWith('-01') ? 800 : 700, color: ym.endsWith('-01') ? '#0071e3' : '#1d1d1f', cursor: 'pointer', borderRadius: 6, whiteSpace: 'nowrap', fontFamily: 'inherit' }}>
-                        {ym.endsWith('-01') ? ym.slice(0, 4) : MONTH_NAMES[+ym.slice(5, 7) - 1].slice(0, 3)}
-                      </button>
-                    ))}
+                {railYears.length > 0 && (
+                  <div style={{ position: 'fixed', right: 6, top: '50%', transform: 'translateY(-50%)', zIndex: 90, width: 76, maxHeight: '86vh', overflowY: 'auto', scrollbarWidth: 'none', msOverflowStyle: 'none', background: 'rgba(255,255,255,0.96)', borderRadius: 14, padding: '6px 4px', boxShadow: '0 2px 12px rgba(0,0,0,0.10)' }}>
+                    {railYears.map(y => {
+                      const months = [...railTarget.keys()].filter(ym => ym.startsWith(y)).sort().reverse();
+                      return (
+                        <div key={`ry_${y}`}>
+                          <button onClick={() => { const el = document.getElementById(railTarget.get(months[0])); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
+                            style={{ display: 'block', width: '100%', WebkitAppearance: 'none', appearance: 'none', border: 'none', background: 'none', boxShadow: 'none', margin: '4px 0 0', padding: '3px 0', fontSize: 14, fontWeight: 800, color: '#1d1d1f', cursor: 'pointer', borderRadius: 6, whiteSpace: 'nowrap', fontFamily: 'inherit' }}>
+                            {y}
+                          </button>
+                          {months.map(ym => (
+                            <button key={`r_${ym}`} onClick={() => { const el = document.getElementById(railTarget.get(ym)); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
+                              style={{ display: 'block', width: '100%', WebkitAppearance: 'none', appearance: 'none', border: 'none', background: ym === curYm ? '#eef4ff' : 'none', boxShadow: 'none', margin: 0, padding: '3px 0', fontSize: 13, fontWeight: 600, color: '#3a3a3c', cursor: 'pointer', borderRadius: 6, whiteSpace: 'nowrap', fontFamily: 'inherit' }}>
+                              {MONTH_NAMES[+ym.slice(5, 7) - 1].slice(0, 3)}
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
                 {bankMovements.length === 0 && !bankLoading && (
