@@ -3411,6 +3411,8 @@ const ppToApi = (r) => r && ({
   id: r.id, title: r.title, category: r.category || 'other',
   amount: r.amount != null ? Number(r.amount) : null,
   dayOfMonth: r.day_of_month != null ? Number(r.day_of_month) : null,
+  freqMonths: r.freq_months != null ? Number(r.freq_months) : 1,
+  counterparty: r.counterparty || '', startDate: r.start_date || '',
   note: r.note || '', active: r.active !== false,
   createdAt: r.created_at ? Date.parse(r.created_at) : null
 });
@@ -3427,11 +3429,11 @@ app.get('/api/planned-payments', requireAuth, async (req, res) => {
 
 app.post('/api/planned-payments', requireAuth, async (req, res) => {
   try {
-    const { title, category, amount, day_of_month, note } = req.body || {};
+    const { title, category, amount, day_of_month, note, freq_months, counterparty, start_date } = req.body || {};
     if (!title || !String(title).trim()) return res.status(400).json({ error: 'Поле title обязательно' });
     const day = Math.max(1, Math.min(31, parseInt(day_of_month, 10) || 1));
     const { data, error } = await supabaseAdmin.from('planned_payments')
-      .insert([{ owner_id: req.user.id, title: String(title).trim(), category: category || 'other', amount: amount != null && amount !== '' ? Number(amount) : null, day_of_month: day, note: note || null }])
+      .insert([{ owner_id: req.user.id, title: String(title).trim(), category: category || 'other', amount: amount != null && amount !== '' ? Number(amount) : null, day_of_month: day, note: note || null, freq_months: [1, 2, 6, 12].includes(Number(freq_months)) ? Number(freq_months) : 1, counterparty: counterparty || null, start_date: start_date || null }])
       .select().single();
     if (error) throw error;
     res.json({ item: ppToApi(data) });
