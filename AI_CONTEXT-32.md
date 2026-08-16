@@ -1031,3 +1031,14 @@ crm_tasks(id bigserial PK, owner_id text, title text NOT NULL, description text,
 - **Backend**: ppToApi/POST принимают `object_name, file_url, file_name`; новый `POST /api/planned-payments/upload` (crmMediaMulter('file') → uploadToStorage); build `v46-2026-08-16`.
 - **Миграция supabase-migration-v28-planned-object-file.sql**: `object_name text, file_url text, file_name text` + notify pgrst. ОБЯЗАТЕЛЬНА перед деплоем бэкенда.
 - Линт: 0 ошибок, 3 прежних warning.
+
+## v46.1 — Фикс загрузки фактуры планового платежа
+
+- Баг «Файл не получен»: crmMediaMulter использует `.array(field)` → файл в `req.files[0]`, а не `req.file`. Эндпоинт `/api/planned-payments/upload` теперь берёт `(req.files && req.files[0]) || req.file`. Build `v46.1-2026-08-16`.
+
+## v46.2 — Русские имена файлов + привязка распознанного чека к плановому платежу
+
+- **Backend**: multer отдаёт originalname в latin1 → mojibake для кириллицы; в `/api/planned-payments/upload` имя восстанавливается `Buffer.from(name,'latin1').toString('utf8')` (с проверкой на U+FFFD). Build `v46.2-2026-08-16`.
+- **Frontend**: в модалке планового платежа кнопка «🧾 Из распознанных» — пикер чеков/фактур из `receipts` (поиск по названию/сумме/номеру, до 50 строк: дата, название, сумма). Выбор сохраняет `fileUrl = 'receipt:{id}'`, `fileName = store_name`.
+- Отображение: если fileUrl начинается с `receipt:` — рендерится кнопка `openReceiptById(id)` (✋-чип и строка таймлайна), иначе обычная <a>. Без новой миграции: используется file_url/file_name из v28.
+- Линт: 0 ошибок, 3 прежних warning.
