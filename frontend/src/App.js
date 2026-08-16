@@ -409,7 +409,7 @@ const fixImageUrl = (url) => {
 
 // Локальный OCR на Mac (Apple Vision через mac-ocr-server.py на 127.0.0.1:8787) — v52
 const LOCAL_MAC_MODEL = { name: 'local-mac-ocr', displayName: '🖥 Mac OCR (локально, Vision)', provider: 'Mac (локально)', active: null };
-const LOCAL_OCR_URL = 'http://127.0.0.1:8787/ocr';
+const LOCAL_MAC_OCR_DEFAULT = 'http://127.0.0.1:8787';
 
 const FALLBACK_MODELS = [
   { name: 'ocrspace-engine1', displayName: 'OCR.space Engine 1 (Basic)', provider: 'OCR.space' },
@@ -2452,6 +2452,21 @@ function App() {
     try { v ? localStorage.setItem('localOcrUrl', v) : localStorage.removeItem('localOcrUrl'); } catch { /* приватный режим */ }
     setLocalOcrUrl(v);
   };
+  // Свой URL Mac OCR (v52.2): Safari/Chrome блокируют fetch с https-страницы на http://127.0.0.1 (mixed content).
+  // Решение — HTTPS-туннель cloudflared на порт 8787; URL хранится в localStorage 'mac_ocr_url_v1'
+  const [macOcrUrl, setMacOcrUrl] = useState(() => {
+    try { return localStorage.getItem('mac_ocr_url_v1') || ''; } catch { return ''; }
+  });
+  const configureMacOcr = () => {
+    const url = window.prompt(
+      'Адрес Mac OCR-сервера (mac-ocr-server.py).\n\nПусто = прямой http://127.0.0.1:8787 (может блокироваться Safari/Chrome с https-страницы!).\n\nЕсли не работает — поднимите HTTPS-туннель:\nbrew install cloudflared\ncloudflared tunnel --url http://127.0.0.1:8787\nи вставьте сюда выданный https://….trycloudflare.com',
+      macOcrUrl
+    );
+    if (url === null) return;
+    const v = url.trim().replace(/\/+$/, '');
+    try { v ? localStorage.setItem('mac_ocr_url_v1', v) : localStorage.removeItem('mac_ocr_url_v1'); } catch { /* приватный режим */ }
+    setMacOcrUrl(v);
+  };
   const [currency, setCurrency] = useState('auto');
   const [docType, setDocType] = useState('auto');
   // Режим обработки НЕСКОЛЬКИХ страниц (v29.1):
@@ -2845,9 +2860,11 @@ function App() {
           setUploadProgress(Math.round(((i + 1) / prepared.length) * 30));
           let r;
           try {
-            r = await fetch(`${LOCAL_OCR_URL}?name=${encodeURIComponent(files[i].name || `page${i + 1}.jpg`)}`, { method: 'POST', body: prepared[i] });
+            r = await fetch(`${(macOcrUrl || LOCAL_MAC_OCR_DEFAULT).replace(/\/+$/, '')}/ocr?name=${encodeURIComponent(files[i].name || `page${i + 1}.jpg`)}`, { method: 'POST', body: prepared[i] });
           } catch (err) {
-            throw new Error('Локальный Mac OCR недоступен. Запустите на Mac: python3 mac-ocr-server.py (нужен pip3 install ocrmac). Порт 127.0.0.1:8787');
+            throw new Error(macOcrUrl
+              ? `Mac OCR недоступен по адресу ${macOcrUrl}. Проверьте, что туннель и mac-ocr-server.py запущены, или очистите URL через ⚙.`
+              : 'Mac OCR: сервер запущен, но браузер блокирует обращение к http://127.0.0.1 с https-страницы (mixed content). Решение: на Mac выполните «brew install cloudflared», затем «cloudflared tunnel --url http://127.0.0.1:8787» и вставьте выданный https://…trycloudflare.com через ⚙ рядом с кнопкой.');
           }
           const j = await r.json().catch(() => ({}));
           if (!r.ok) throw new Error('Mac OCR: ' + (j.error || `HTTP ${r.status}`));
@@ -5743,6 +5760,13 @@ ${bodyHtml}
                 </span>
                 <span className="model-active-name">{activeModelDisplay.displayName}</span>
               </span>
+              {selectedModel === 'local-mac-ocr' && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); configureMacOcr(); }}
+                  title="Адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
+                  style={{ marginLeft: 6, border: 'none', background: 'none', cursor: 'pointer', fontSize: 15, padding: 0 }}
+                >⚙</button>
+              )}
               {recognizing && progressStage ? (
                 <>
                   <span style={{
