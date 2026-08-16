@@ -2832,6 +2832,13 @@ function App() {
       }
       // Локальный Mac OCR (v52): каждая страница → текст на этом Mac (127.0.0.1:8787), дальше сервер структурирует
       if (selectedModel === 'local-mac-ocr') {
+        // Проверка, что бэкенд умеет принимать готовые тексты (v52+), иначе чек сохранится пустым
+        try {
+          const h = await fetch(`${API_URL}/api/health`).then(r => r.json());
+          if (!h.build || h.build < 'v52') throw new Error('old');
+        } catch (_) {
+          throw new Error('Бэкенд householder-api устарел и не принимает локальный OCR. Запушьте новый index.js и сделайте redeploy (в /api/health должно быть build v52+).');
+        }
         const ocrTexts = [];
         for (let i = 0; i < prepared.length; i++) {
           setProgressStage('upload');
@@ -2845,6 +2852,9 @@ function App() {
           const j = await r.json().catch(() => ({}));
           if (!r.ok) throw new Error('Mac OCR: ' + (j.error || `HTTP ${r.status}`));
           ocrTexts.push(j.text || '');
+        }
+        if (ocrTexts.some(t => !t || t.trim().length < 10)) {
+          throw new Error('Mac OCR вернул пустой/короткий текст по странице — проверьте фото (резкость, поворот) или выберите другую модель.');
         }
         formData.append('ocr_texts', JSON.stringify(ocrTexts));
       }
