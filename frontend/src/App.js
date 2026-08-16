@@ -2486,6 +2486,8 @@ function App() {
   const [plannedSaving, setPlannedSaving] = useState(false);
   const [payCalOffset, setPayCalOffset] = useState(0); // сдвиг 2-месячного окна календаря платежей (v42.1)
   const [payCalCollapsed, setPayCalCollapsed] = useState(false);   // свёрнут блок «Обязательные платежи» (v48)
+  const [tlFrom, setTlFrom] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; }); // диапазон таймлайна (v50)
+  const [tlTo, setTlTo] = useState(() => { const d = new Date(); d.setMonth(d.getMonth() + 11); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; });
   const [bankListCollapsed, setBankListCollapsed] = useState(false); // свёрнута выписка (v48)
   const [calPicker, setCalPicker] = useState(null);    // id движения с открытым меню «в календарь» (v44)
   useEffect(() => {
@@ -6446,15 +6448,25 @@ ${bodyHtml}
               if (g.freq === 0) return diff === 0; // одноразовый: только месяц начала
               return diff >= 0 && diff % g.freq === 0;
             };
-            // Компактный таймлайн: 12 месяцев от текущего (v45.2: иначе годовые платежи не видны)
+            // Таймлайн: диапазон месяцев, выбирается пользователем (v50)
             const tlNextMonths = [];
             {
-              const dd = new Date(nowD.getFullYear(), nowD.getMonth(), 1);
-              for (let i = 0; i < 12; i++) {
+              const dd = new Date(+tlFrom.slice(0, 4), +tlFrom.slice(5, 7) - 1, 1);
+              const end = new Date(+tlTo.slice(0, 4), +tlTo.slice(5, 7) - 1, 1);
+              for (let i = 0; i < 48 && dd <= end; i++) {
                 tlNextMonths.push(`${dd.getFullYear()}-${String(dd.getMonth() + 1).padStart(2, '0')}`);
                 dd.setMonth(dd.getMonth() + 1);
               }
             }
+            const tlOptions = [];
+            {
+              const dd = new Date(nowD.getFullYear() - 2, 0, 1);
+              for (let i = 0; i < 72; i++) {
+                tlOptions.push(`${dd.getFullYear()}-${String(dd.getMonth() + 1).padStart(2, '0')}`);
+                dd.setMonth(dd.getMonth() + 1);
+              }
+            }
+            const tlYmLabel = ym => `${MONTH_NAMES[+ym.slice(5, 7) - 1]} ${ym.slice(0, 4)}`;
             const railTarget = new Map();
             bmMonths.forEach(ym => railTarget.set(ym, `bm-${ym}`));
             tlNextMonths.forEach(ym => { if (!railTarget.has(ym)) railTarget.set(ym, `tl-${ym}`); });
@@ -6591,7 +6603,17 @@ ${bodyHtml}
                     )}
                     {!payCalCollapsed && manualRows.length > 0 && (
                       <div style={{ marginTop: 10, borderTop: '1px dashed #e3e6ea', paddingTop: 8 }}>
-                        <div style={{ fontSize: 12, fontWeight: 800, color: '#6e6e73', marginBottom: 4 }}>🗓 Таймлайн платежей на 12 месяцев</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 12, fontWeight: 800, color: '#6e6e73' }}>🗓 Таймлайн платежей</span>
+                          <span style={{ fontSize: 12, color: '#8e8e93' }}>с</span>
+                          <select value={tlFrom} onChange={e => setTlFrom(e.target.value)} style={{ padding: '3px 8px', borderRadius: 6, border: '1px solid #ddd', fontSize: 12, background: '#fff' }}>
+                            {tlOptions.map(ym => <option key={`f_${ym}`} value={ym}>{tlYmLabel(ym)}</option>)}
+                          </select>
+                          <span style={{ fontSize: 12, color: '#8e8e93' }}>по</span>
+                          <select value={tlTo} onChange={e => setTlTo(e.target.value)} style={{ padding: '3px 8px', borderRadius: 6, border: '1px solid #ddd', fontSize: 12, background: '#fff' }}>
+                            {tlOptions.map(ym => <option key={`t_${ym}`} value={ym}>{tlYmLabel(ym)}</option>)}
+                          </select>
+                        </div>
                         {tlNextMonths.map(ym => {
                           const due = manualRows.filter(g => g.active && dueInMonth(g, ym)).sort((a, b) => (a.usualDay || 1) - (b.usualDay || 1));
                           if (!due.length) return null;
