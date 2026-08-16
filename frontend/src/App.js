@@ -704,6 +704,11 @@ function crmSeed() {
 // Разделы: Дома / Авто / Личное. Файлы ЛЮБЫХ типов. Сервер: /api/docs (таблица doc_sections,
 // миграция supabase-migration-v25-docs.sql), Storage папка docs/<категория>/.
 // Фото жмутся на клиенте (compressImageFile), видео > 48 МБ жмёт сервер (ffmpeg), остальное — как есть.
+// Имена для Excel-меню привязки платежа к календарю (v44)
+const CAL_PAYEES = ['Duque', 'Kit', 'Maria', 'Volvo', 'Porsche', 'Mercedes'];
+const CAL_FREQS = [1, 2, 6, 12]; // частота оплаты в месяцах
+const calFreqLabel = (n) => n === 1 ? 'каждый месяц' : n === 12 ? 'раз в год (12 мес)' : `раз в ${n} мес`;
+
 const DOC_SECTIONS = [
   { key: 'home', title: '🏠 Дома' },
   { key: 'auto', title: '🚗 Авто' },
@@ -2476,9 +2481,10 @@ function App() {
   // Таймлайн повторяющихся платежей (v41): ручные плановые платежи (сервер, таблица planned_payments)
   const [plannedPayments, setPlannedPayments] = useState([]);
   const [plannedModal, setPlannedModal] = useState(false);
-  const [plannedForm, setPlannedForm] = useState({ title: '', amount: '', day: '1', category: 'utilities' });
+  const [plannedForm, setPlannedForm] = useState({ title: '', amount: '', day: '1', category: 'utilities', freq: '1' });
   const [plannedSaving, setPlannedSaving] = useState(false);
   const [payCalOffset, setPayCalOffset] = useState(0); // сдвиг 2-месячного окна календаря платежей (v42.1)
+  const [calPicker, setCalPicker] = useState(null);    // id движения с открытым меню «в календарь» (v44)
   const [linkSearch, setLinkSearch] = useState('');
   const [linkSaving, setLinkSaving] = useState(false);
   // Вкладка «Налоги» (v30): черновик форм (отдельный выбор квартала убран в v30.5 — платежи следуют за диапазоном «с/по»)
@@ -3791,14 +3797,16 @@ function App() {
           title: plannedForm.title.trim(),
           category: plannedForm.category,
           amount: plannedForm.amount !== '' ? Number(plannedForm.amount) : null,
-          day_of_month: parseInt(plannedForm.day, 10) || 1
+          day_of_month: parseInt(plannedForm.day, 10) || 1,
+          freq_months: parseInt(plannedForm.freq, 10) || 1,
+          start_date: (() => { const nd = new Date(); return `${nd.getFullYear()}-${String(nd.getMonth() + 1).padStart(2, '0')}-01`; })()
         })
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       setPlannedPayments(prev => [...prev, data.item].sort((a, b) => (a.dayOfMonth || 1) - (b.dayOfMonth || 1)));
       setPlannedModal(false);
-      setPlannedForm({ title: '', amount: '', day: '1', category: 'utilities' });
+      setPlannedForm({ title: '', amount: '', day: '1', category: 'utilities', freq: '1' });
     } catch (e) { alert('Не сохранилось: ' + e.message); }
     finally { setPlannedSaving(false); }
   };
@@ -3809,6 +3817,27 @@ function App() {
       if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `HTTP ${res.status}`); }
       setPlannedPayments(prev => prev.filter(p => String(p.id) !== String(id)));
     } catch (e) { alert('Не удалилось: ' + e.message); }
+  };
+  // Привязка платежа из строки выписки к календарю (v44): имя + частота (1/2/6/12 мес)
+  const assignToCalendar = async (m, name, freqMonths) => {
+    setCalPicker(null);
+    try {
+      const res = await fetch(`${API_URL}/api/planned-payments?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: `${name} — ${m.counterparty || m.concept || 'платёж'}`,
+          category: 'other',
+          amount: Math.abs(Number(m.amount) || 0),
+          day_of_month: m.operation_date ? +m.operation_date.slice(8, 10) : 1,
+          freq_months: freqMonths,
+          counterparty: m.counterparty || m.concept || '',
+          start_date: m.operation_date || null
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setPlannedPayments(prev => [...prev, data.item]);
+    } catch (e) { alert('Не сохранилось в календарь: ' + e.message); }
   };
 
   // Импорт выписки банка (.xlsx Ruralvía) → автопривязка фактур к платежам
@@ -6285,11 +6314,6 @@ ${bodyHtml}
               { key: 'pool', label: '🏊 Бассейн', kw: ['piscina', 'pool', 'бассейн'] },
               { key: 'other', label: '🔁 Платёж', kw: [] }
             ];
-            const recurCatOf = (name) => {
-              const n = String(name || '').toLowerCase();
-              const found = RECUR_CATS.find(c => c.kw.some(k => n.includes(k)));
-              return found || RECUR_CATS[RECUR_CATS.length - 1];
-            };
             const normCpKey = (v) => String(v || '').toLowerCase().replace(/[^a-zа-яё0-9]+/gi, ' ').trim().slice(0, 40);
             const recurGroups = {};
             out.forEach(m => {
@@ -6298,15 +6322,6 @@ ${bodyHtml}
               if (!recurGroups[key]) recurGroups[key] = { name: String(m.counterparty || m.concept || '').trim(), items: [] };
               recurGroups[key].items.push(m);
             });
-            const recurring = Object.values(recurGroups).map(g => {
-              const dates = g.items.map(m => m.operation_date).filter(Boolean).sort();
-              const months = [...new Set(dates.map(d => d.slice(0, 7)))];
-              const amounts = g.items.map(m => Math.abs(Number(m.amount) || 0));
-              const avg = amounts.reduce((a, b) => a + b, 0) / (amounts.length || 1);
-              const days = dates.map(d => +d.slice(8, 10)).sort((a, b) => a - b);
-              const usualDay = days.length ? days[Math.floor(days.length / 2)] : 1;
-              return { name: g.name, count: g.items.length, months, avg, usualDay, cat: recurCatOf(g.name) };
-            }).filter(g => g.months.length >= 2).sort((a, b) => a.usualDay - b.usualDay);
             // Метки периодичности для строк выписки (v43): по всем группам с ≥2 платежами
             const freqByKey = {};
             Object.entries(recurGroups).forEach(([key, g]) => {
@@ -6337,7 +6352,32 @@ ${bodyHtml}
               while (cells.length % 7) cells.push(null);
               return cells;
             };
-            const manualRows = plannedPayments.map(p => ({ manual: true, id: p.id, name: p.title, avg: p.amount, usualDay: p.dayOfMonth || 1, cat: RECUR_CATS.find(c => c.key === p.category) || RECUR_CATS[RECUR_CATS.length - 1] }));
+            // Календарь (v44): только ручные записи planned_payments; авто-детект — только для меток периодичности
+            const paidSet = new Set();
+            out.forEach(m => {
+              const k = normCpKey(m.counterparty) || normCpKey(m.concept);
+              if (k && m.operation_date) paidSet.add(`${k}|${m.operation_date.slice(0, 7)}`);
+            });
+            const manualRows = plannedPayments.map(p => ({
+              manual: true, id: p.id, name: p.title, avg: p.amount, usualDay: p.dayOfMonth || 1,
+              freq: p.freqMonths || 1,
+              startYm: (p.startDate || '').slice(0, 7) || curYm,
+              cpKey: normCpKey(p.counterparty),
+              cat: RECUR_CATS.find(c => c.key === p.category) || RECUR_CATS[RECUR_CATS.length - 1]
+            }));
+            const dueInMonth = (g, ymStr) => {
+              const diff = ((+ymStr.slice(0, 4)) - (+g.startYm.slice(0, 4))) * 12 + ((+ymStr.slice(5, 7)) - (+g.startYm.slice(5, 7)));
+              return diff >= 0 && diff % g.freq === 0;
+            };
+            // Компактный таймлайн: 6 месяцев от текущего
+            const tlNextMonths = [];
+            {
+              const dd = new Date(nowD.getFullYear(), nowD.getMonth(), 1);
+              for (let i = 0; i < 6; i++) {
+                tlNextMonths.push(`${dd.getFullYear()}-${String(dd.getMonth() + 1).padStart(2, '0')}`);
+                dd.setMonth(dd.getMonth() + 1);
+              }
+            }
             return (
               <>
                 {bankMovements.length === 0 && !bankLoading && (
@@ -6352,16 +6392,14 @@ ${bodyHtml}
                     {stat('Платежи без фактуры', unmatchedOut.length, '#e67e22', '#fdf2e3')}
                     {stat('Счета без платежа в банке', unpaidBills.length, '#e74c3c', '#fdecea')}
                 </div>
-                {(recurring.length > 0 || manualRows.length > 0 || bankMovements.length > 0) && (
+                {(manualRows.length > 0 || bankMovements.length > 0) && (
                   <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: '10px 12px', marginBottom: 10 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
                       <span style={{ fontSize: 15, fontWeight: 800, color: '#1d1d1f' }}>📅 Обязательные повторяющиеся платежи</span>
-                      <span style={{ fontSize: 11, color: '#8e8e93' }}>🟢 оплачен в этом месяце · ◌ ожидается · жёлтый — вручную · клик по дню — добавить платёж</span>
+                      <span style={{ fontSize: 11, color: '#8e8e93' }}>🟢 оплачен (по выписке) · жёлтый — плановый · клик по дню — добавить · 📅 в строке выписки — в календарь (Duque, Kit, Maria, Volvo, Porsche, Mercedes × 1/2/6/12 мес)</span>
                       <button onClick={() => setPlannedModal(true)} style={{ marginLeft: 'auto', border: 'none', background: '#0071e3', color: '#fff', borderRadius: 980, padding: '5px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>＋ Добавить платёж</button>
                     </div>
-                    {(recurring.length === 0 && manualRows.length === 0) ? (
-                      <div style={{ fontSize: 13, color: '#8e8e93' }}>Повторяющиеся платежи не найдены (нужны ≥2 платежа одному контрагенту в разные месяцы) — или добавьте платёж вручную кнопкой «＋».</div>
-                    ) : (
+                    {false ? null : (
                       <div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                         <button onClick={() => setPayCalOffset(o => o - 2)} title="На 2 месяца назад" style={{ border: '1px solid #d2d2d7', background: '#fff', borderRadius: 980, padding: '3px 12px', cursor: 'pointer', fontSize: 13 }}>←</button>
@@ -6374,16 +6412,12 @@ ${bodyHtml}
                           const ymStr = `${cy}-${String(cmo + 1).padStart(2, '0')}`;
                           const dim = new Date(cy, cmo + 1, 0).getDate();
                           const cells = buildCalWeeks(base);
-                          const dayItems = [
-                            ...recurring.map(g => ({
-                              key: `a_${g.name}`, label: `${g.cat.label} ${g.name}`, amount: g.avg,
-                              day: Math.min(g.usualDay, dim), paid: g.months.includes(ymStr), manual: false
-                            })),
-                            ...manualRows.map(g => ({
-                              key: `m_${g.id}`, label: `${g.cat.label} ${g.name}`, amount: g.avg,
-                              day: Math.min(g.usualDay || 1, dim), paid: false, manual: true
-                            }))
-                          ];
+                          const dayItems = manualRows.filter(g => dueInMonth(g, ymStr)).map(g => ({
+                            key: `m_${g.id}`, label: `${g.cat.label} ${g.name}`, amount: g.avg,
+                            day: Math.min(g.usualDay || 1, dim),
+                            paid: g.cpKey ? paidSet.has(`${g.cpKey}|${ymStr}`) : false,
+                            manual: true
+                          }));
                           return (
                             <div key={ymStr} style={{ flex: '1 1 360px', minWidth: 300 }}>
                               <div style={{ fontSize: 14, fontWeight: 800, margin: '2px 0 6px', color: bi === 0 ? '#0071e3' : '#1d1d1f' }}>{MONTH_NAMES[cmo]} {cy}</div>
@@ -6425,6 +6459,27 @@ ${bodyHtml}
                             <button onClick={() => removePlannedPayment(g.id)} title="Удалить плановый платёж" style={{ border: 'none', background: 'none', color: '#e74c3c', cursor: 'pointer', marginLeft: 4, padding: 0, fontSize: 11 }}>✕</button>
                           </span>
                         ))}
+                      </div>
+                    )}
+                    {manualRows.length > 0 && (
+                      <div style={{ marginTop: 10, borderTop: '1px dashed #e3e6ea', paddingTop: 8 }}>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: '#6e6e73', marginBottom: 4 }}>🗓 Таймлайн платежей на 6 месяцев</div>
+                        {tlNextMonths.map(ym => {
+                          const due = manualRows.filter(g => dueInMonth(g, ym));
+                          if (!due.length) return null;
+                          const sum = due.reduce((a, g) => a + (g.avg || 0), 0);
+                          return (
+                            <div key={ym} style={{ display: 'flex', gap: 6, alignItems: 'baseline', flexWrap: 'wrap', padding: '2px 0', fontSize: 12 }}>
+                              <span style={{ flex: '0 0 62px', fontWeight: 800, color: ym === curYm ? '#0071e3' : '#1d1d1f' }}>{MONTH_NAMES[+ym.slice(5, 7) - 1].slice(0, 3)} {ym.slice(2, 4)}</span>
+                              {due.map(g => (
+                                <span key={g.id} title={`~${g.usualDay} числа · ${calFreqLabel(g.freq)}`} style={{ background: '#fff6dd', border: '1px solid #f0dfa8', borderRadius: 980, padding: '1px 8px', color: '#8a6d3b', whiteSpace: 'nowrap' }}>
+                                  {g.name}{g.avg != null ? ` · ${formatAmount(g.avg, 'EUR')}` : ''}
+                                </span>
+                              ))}
+                              <span style={{ marginLeft: 'auto', fontWeight: 700, color: '#6e6e73', whiteSpace: 'nowrap' }}>Σ {formatAmount(sum, 'EUR')}</span>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -6491,6 +6546,27 @@ ${bodyHtml}
                           </>
                         )
                       )}
+                      {isOut(m) && (
+                        <span style={{ position: 'relative', flex: '0 0 auto' }}>
+                          <button onClick={() => setCalPicker(calPicker === m.id ? null : m.id)} title="Добавить платёж в календарь (имя + частота)" style={{ border: '1px solid #d2d2d7', background: calPicker === m.id ? '#eef4ff' : '#fff', color: '#1d1d1f', borderRadius: 10, padding: '3px 9px', fontSize: 12, cursor: 'pointer' }}>📅▾</button>
+                          {calPicker === m.id && (
+                            <div style={{ position: 'absolute', right: 0, top: '110%', zIndex: 120, background: '#fff', border: '1px solid #d2d2d7', borderRadius: 12, boxShadow: '0 8px 24px rgba(0,0,0,0.16)', padding: 6, width: 230, maxHeight: 330, overflowY: 'auto' }}>
+                              <div style={{ fontSize: 10, color: '#8e8e93', padding: '2px 8px 6px' }}>В календарь: имя → частота (мес)</div>
+                              {CAL_PAYEES.map(name => (
+                                <div key={name}>
+                                  <div style={{ fontSize: 11, fontWeight: 800, color: '#1d1d1f', padding: '5px 8px 1px', borderTop: '1px solid #f0f0f0' }}>{name}</div>
+                                  {CAL_FREQS.map(n => (
+                                    <button key={n} onClick={() => assignToCalendar(m, name, n)}
+                                      style={{ display: 'block', width: '100%', textAlign: 'left', WebkitAppearance: 'none', appearance: 'none', border: 'none', borderRadius: 6, background: 'none', boxShadow: 'none', margin: 0, padding: '4px 8px 4px 20px', fontSize: 13, color: '#3457d5', cursor: 'pointer', fontFamily: 'inherit' }}>
+                                      {n} — {calFreqLabel(n)}
+                                    </button>
+                                  ))}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </span>
+                      )}
                     </div>
                   );
                 })}
@@ -6509,6 +6585,11 @@ ${bodyHtml}
                           <select value={plannedForm.category} onChange={e => setPlannedForm(f => ({ ...f, category: e.target.value }))} style={{ display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 4, padding: '8px 10px', borderRadius: 8, border: '1px solid #d2d2d7', fontSize: 14, background: '#fff' }}>
                             {RECUR_CATS.filter(c => c.key !== 'other').map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
                             <option value="other">🔁 Другое</option>
+                          </select>
+                        </label>
+                        <label style={{ fontSize: 12, color: '#6e6e73' }}>Частота
+                          <select value={plannedForm.freq} onChange={e => setPlannedForm(f => ({ ...f, freq: e.target.value }))} style={{ display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 4, padding: '8px 10px', borderRadius: 8, border: '1px solid #d2d2d7', fontSize: 14, background: '#fff' }}>
+                            {CAL_FREQS.map(n => <option key={n} value={n}>{calFreqLabel(n)}</option>)}
                           </select>
                         </label>
                         <div style={{ display: 'flex', gap: 10 }}>
