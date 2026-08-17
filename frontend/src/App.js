@@ -2998,6 +2998,13 @@ function App() {
   };
 
   const recognizeAndSave = async (fileArg, allowDuplicate = false) => {
+    // v54.4: Mac OCR — ВСЕГДА через постраничный конвейер (upload-document-pages + ocr_texts):
+    // upload-receipt не знает модель local-mac-ocr и молча уходит в дешёвую резервную цепочку.
+    // Режим «по страницам» (separate) обрабатывает recognizeFilesSequentially ниже (там mac-ветка).
+    if (selectedModel === 'local-mac-ocr' && !(fileArg instanceof File) && multiPageMode !== 'separate') {
+      const files = selectedFiles.length ? selectedFiles : [selectedFiles[currentFileIndex]].filter(Boolean);
+      if (files.length) return recognizeDocumentPages(files, 'local-mac-ocr', allowDuplicate);
+    }
     // Без явного файла и при выбранных нескольких — смотрим РЕЖИМ (v29.1):
     // auto — умный разбор (AI решает сам); separate — каждая в свою карточку;
     // single — все страницы в один документ (договор)
@@ -3216,6 +3223,18 @@ function App() {
     setFolderProgress(prev => ({ ...prev, phase: 'recognizing', current: 0, total: allFiles.length, fileRatio: 0 }));
     setRecognizing(true);
     const results = [];
+    // v54.4: пакетный Mac OCR — проверяем, что бэкенд принимает готовые тексты (v52+)
+    if (selectedModel === 'local-mac-ocr') {
+      try {
+        const h = await fetch(`${API_URL}/api/health`).then(r => r.json());
+        if (!h.build || h.build < 'v52') throw new Error('old');
+      } catch (_) {
+        alert('Бэкенд householder-api устарел и не принимает локальный OCR. Запушьте новый index.js и сделайте redeploy (в /api/health должно быть build v52+).');
+        setRecognizing(false);
+        setFolderProgress(prev => ({ ...prev, active: false }));
+        return results;
+      }
+    }
     for (let i = 0; i < allFiles.length; i++) {
       const file = allFiles[i];
       setFolderProgress(prev => ({ ...prev, current: i + 1, currentFile: file.name, fileRatio: 0, retryNote: '' }));
@@ -3224,6 +3243,44 @@ function App() {
       // До 2 попыток на файл: разовые 502 Bad Gateway (прокси Railway) / обрывы сети самозалечиваются повтором
       for (let attempt = 1; attempt <= 2 && !done; attempt++) {
         try {
+          // v54.4: Mac OCR в пакетном режиме — раньше файлы уходили на /api/upload-receipt
+          // с неизвестной бэкенду моделью и молча падали в дешёвую резервную цепочку (потеря качества!)
+          if (selectedModel === 'local-mac-ocr') {
+            let r;
+            try {
+              r = await fetch(`${macOcrBase()}/ocr?name=${encodeURIComponent(file.name || 'page.jpg')}`, { method: 'POST', body: file });
+            } catch (err) {
+              throw new Error(`Mac OCR недоступен (${(err && err.message) || 'сеть'}) — проверьте mac-ocr-server и туннель (⚙)`);
+            }
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error('Mac OCR: ' + (j.error || `HTTP ${r.status}`));
+            if (!j.text || j.text.trim().length < 10) throw new Error('Mac OCR вернул пустой/короткий текст — проверьте фото (резкость, поворот)');
+            const fd = new FormData();
+            // на бэкенд — сжатая копия (там нужна только для хранения/показа), OCR уже сделан по оригиналу
+            const up = isPdfFile(file) ? file : await compressImageFile(file, 1600, 2400, 0.72, true).catch(() => file);
+            fd.append('pages', up);
+            fd.append('ocr_texts', JSON.stringify([j.text]));
+            fd.append('model', 'local-mac-ocr');
+            fd.append('currency', currency);
+            fd.append('docType', docType);
+            fd.append('subtype', subtype);
+            fd.append('payment_status', paymentStatus);
+            fd.append('object', object);
+            fd.append('token', token);
+            const res = await uploadWithProgress(`${API_URL}/api/upload-document-pages?token=${token}`, fd, (ratio) => {
+              setFolderProgress(prev => ({ ...prev, fileRatio: ratio * 0.5 }));
+            });
+            const text = res.text;
+            let data;
+            try { data = JSON.parse(text); } catch { throw new Error(`Сервер вернул ${res.status}: ${text.slice(0, 200)}`); }
+            if (!res.ok || (!data.success && !data.id && !data.jobId)) throw new Error(data.error || `Ошибка сервера: ${res.status}`);
+            const rd = data.jobId ? await pollDocJob(data.jobId) : (data.data || data);
+            if (rd.image_url) rd.image_url = fixImageUrl(rd.image_url);
+            results.push({ file: file.name, status: 'success', receipt: rd });
+            setFolderProgress(prev => ({ ...prev, success: prev.success + 1, fileRatio: 1 }));
+            done = true;
+            continue;
+          }
           let fileToUpload = file;
           if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
             fileToUpload = await compressImageFile(file);
@@ -5679,7 +5736,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-17 · v54.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-17 · v54.4 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

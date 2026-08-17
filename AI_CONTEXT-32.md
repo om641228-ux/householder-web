@@ -1198,3 +1198,11 @@ crm_tasks(id bigserial PK, owner_id text, title text NOT NULL, description text,
 2) Русские названия: фолбэк-позиции (v54.2) получали name_ru=null → в карточке был испанский. Новый translateItemNames(items) — ОДИН пакетный вызов callTextChain, нумерованный список → name_ru. Вызывается в обеих точках фолбэка. Фронт уже рендерит name_ru || name (ничего не менял).
 Маркер: v54.3-2026-08-17. node --check OK. Фронтенд не менялся (v54.2).
 Действие пользователя: запушить index.js + redeploy householder-api (проверить /api/health → v54.3).
+
+## v54.4 — 2026-08-17 — Пакетное распознавание: потеря качества (Mac OCR обходился)
+Причина: «Распознать папку» и одиночный файл с моделью local-mac-ocr шли на /api/upload-receipt — бэкенд не знает эту модель → else-ветка recognizeWithFallback (дешёвый gemini flash) → резкая потеря качества. Локальный OCR работал только через recognizeDocumentPages (кнопка «Локально» / многостраничный режим).
+Исправлено в App.js:
+1. recognizeFilesSequentially: ветка local-mac-ocr — проверка /api/health (build ≥ v52) один раз в начале; для каждого файла: POST на mac-ocr-server → ocr_texts + сжатая копия (force 0.72) → upload-document-pages → pollDocJob. Те же 2 попытки/файл.
+2. recognizeAndSave: при selectedModel='local-mac-ocr' (кроме режима separate) — всегда recognizeDocumentPages(files, 'local-mac-ocr'); separate уходит в mac-aware recognizeFilesSequentially.
+Метка: v54.4. esbuild/eslint чисто (3 pre-existing warnings). Бэкенд не менялся (v54.3).
+Действие пользователя: запушить App.js + redeploy фронтенда.
