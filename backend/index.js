@@ -125,7 +125,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v54.1-2026-08-17', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v54.2-2026-08-17', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -1239,6 +1239,40 @@ function shouldUseDocumentPipeline(pageTexts) {
 }
 
 // Сборка документа из готовых текстов страниц: перевод по страницам + модули + JSON-сводка
+// ========== v54.2: строгий фолбэк извлечения ПОЗИЦИЙ чека из текста ==========
+// Когда LLM вернул items: [] при явном списке товаров в тексте (Mac OCR и др.).
+// Механический разбор: строка, оканчивающаяся ценой («34,99» / «5.95»), — позиция;
+// название — текст той же строки (без EAN-штрихкода) + предшествующие текстовые строки.
+function extractItemsFallback(rawText) {
+  const lines = String(rawText || '').split('\n').map(l => l.trim()).filter(Boolean);
+  const items = [];
+  const priceRe = /(?:^|\s)(\d{1,6}[.,]\d{2})\s*€?\s*$/;
+  const skipLine = /^(={3,}|[-–—_*]{3,}|📑|страница\s|p[aá]gina|итого|total\b|подытог|subtotal|оплата|pago\b|tarjeta|карта|наличн|efectivo|сдача|cambio|entregado|ндс|iva\b|igic|base imponible|cuota)/i;
+  const notName = /итого|total|iva|igic|fecha|дата|^чек|ticket|фактур|factura|simplificada|касс|cajero|documento|\bcif\b|\bnif\b|инн|^\d{8,14}$/i;
+  let pendingName = null;
+  for (const line of lines) {
+    if (skipLine.test(line)) { pendingName = null; continue; }
+    const m = line.match(priceRe);
+    if (m) {
+      const price = parseAmountLike(m[1]);
+      const namePart = line.slice(0, m.index).replace(/\b\d{8,14}\b/g, '').replace(/\s{2,}/g, ' ').trim();
+      let name = [pendingName, namePart].filter(Boolean).join(' ').replace(/\s{2,}/g, ' ').trim();
+      pendingName = null;
+      if (price == null || price <= 0 || price >= 1e6) continue;
+      if (name.length < 3) name = namePart.length >= 3 ? namePart : null;
+      if (!name || name.length < 3) continue;
+      if (notName.test(name) && name.length < 12) continue;
+      items.push({ name: name.slice(0, 120), name_ru: null, quantity: 1, price, total: price });
+    } else if (notName.test(line) || !/[a-zа-яёáéíóúñü]/i.test(line) || line.length < 4) {
+      pendingName = null; // служебная/не текстовая строка — разделитель, шапку в название не тянем
+    } else {
+      // текстовая строка — кандидат в название следующей ценовой строки (склеиваем до 2 строк)
+      pendingName = pendingName ? (pendingName + ' ' + line).slice(0, 140) : line;
+    }
+  }
+  return items.slice(0, 150);
+}
+
 // ========== v53: пост-контроль валюты и итога по тексту документа ==========
 // 1) Испанская фактура/адрес (€, CIF/NIF, IGIC/IVA, FACTURA, испанские города) → валюта EUR.
 // 2) Контроль итога: LLM иногда обрезает тысячи («1.171,27 €» → 1.17) или путает валюту.
@@ -1364,6 +1398,15 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
   data.raw_text_ru = raw_text_ru;
   if (!data.object) data.object = detectObjectByAddress(data.supply_address, raw_text);
   if (!Array.isArray(data.items)) data.items = [];
+  // v54.2: строгий фолбэк — LLM не извлёк позиции, а в тексте явный список товаров
+  if (data.items.length === 0) {
+    const fb = extractItemsFallback(raw_text);
+    if (fb.length >= 2 && /итого|total|ticket|factura|recibo/i.test(raw_text)) {
+      data.items = fb;
+      if (!data.document_type || data.document_type === 'other') data.document_type = 'receipt';
+      console.log(`v54.2: позиции восстановлены фолбэк-парсером (${fb.length} шт.)`);
+    }
+  }
   // Запасной вариант названия: первые содержательные строки первой страницы
   // (сводка могла вернуть store_name=null, если текст страниц частично пуст)
   if (!data.store_name) {
@@ -1492,6 +1535,14 @@ async function finalizeReceiptFromPageTexts(pageTexts, currency, docType) {
   data.raw_text_ru = raw_text_ru;
   if (!data.object) data.object = detectObjectByAddress(data.supply_address, raw_text);
   if (!Array.isArray(data.items)) data.items = [];
+  // v54.2: строгий фолбэк — LLM не извлёк позиции, а в тексте явный список товаров
+  if (data.items.length === 0) {
+    const fb = extractItemsFallback(raw_text);
+    if (fb.length >= 2) {
+      data.items = fb;
+      console.log(`v54.2: позиции восстановлены фолбэк-парсером (${fb.length} шт.)`);
+    }
+  }
   if (!data.store_name) {
     const firstLines = String(pageTexts[0] || '').split('\n')
       .map(l => l.trim())

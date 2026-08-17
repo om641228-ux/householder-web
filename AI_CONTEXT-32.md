@@ -1181,3 +1181,8 @@ crm_tasks(id bigserial PK, owner_id text, title text NOT NULL, description text,
 Фронт App.js: confirm-диалоги «Сохранить всё равно?» удалены; на карточке в списке — плашка «⚠ дубль» (по recognition_method содержащему «дубликат»); в панели «Сохранено» — строка «⚠️ Похоже на дубликат чека #ID …» при duplicate_of. Метка: v54.1.
 Проверки: node --check OK; esbuild OK; eslint 0 errors / 3 pre-existing warnings.
 Действие пользователя: запушить index.js + App.js, redeploy обоих сервисов; старые дубли удалить вручную.
+
+## v54.2 — 2026-08-17 — Строгий фолбэк позиций товаров (Mac OCR: «Товары 0»)
+Симптом: чек Леруа Мерлен через local mac-ocr — товары есть в raw_text, но items пуст (LLM вернул []).
+Исправлено в index.js: extractItemsFallback(rawText) — детерминированный парсер: строка, оканчивающаяся ценой («34,99»/«5.95»), — позиция; название = текст той же строки без EAN (8–14 цифр) + до 2 предшествующих текстовых строк; служебные строки (ИТОГО/TOTAL/IVA/IGIC/ФАКТУРА/CIF/оплата/сдача…) — разделители. Подключён в finalizeDocumentFromPageTexts (только если ≥2 позиций и есть ИТОГО/TOTAL/TICKET/FACTURA; document_type 'other'→'receipt') и в finalizeReceiptFromPageTexts (≥2 позиции). Дальше работает v53-контроль суммы по строкам. Тест на тексте чека (RU/ES): 6 позиций, чистые названия, шапка не затягивается. Маркер: v54.2-2026-08-17. node --check OK.
+Действие пользователя: запушить index.js + redeploy householder-api (проверить /api/health → v54.2). Фронтенд не менялся (v54.1).
