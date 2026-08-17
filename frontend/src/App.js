@@ -4883,6 +4883,17 @@ ${bodyHtml}
       }
     });
   });
+  // v54.2: пометка бэкенда «· ⚠ дубликат #ID» в recognition_method (сумма совпала ±0.02, дата в пределах ±40 дн. —
+  // ловит сбой OCR в дне, когда точный ключ выше не сработал) — вливаем в общую систему КОПИЯ/ОРИГИНАЛ
+  receipts.forEach(r => {
+    const m = String(r.recognition_method || '').match(/дубликат #(\d+)/i);
+    if (!m) return;
+    if (dupGroups.some(gr => gr.some(x => x.id === r.id))) return; // уже в группе по точному ключу
+    const orig = receipts.find(x => x.id === Number(m[1]));
+    if (!orig) return;
+    const g = dupGroups.find(gr => gr.some(x => x.id === orig.id));
+    if (g) g.push(r); else dupGroups.push([orig, r]);
+  });
   const dupAllIds = new Set(dupGroups.flat().map(r => r.id));           // все участники групп дубликатов
   const dupCopyIds = new Set(dupGroups.flatMap(g => g.slice(1)).map(r => r.id)); // копии (все, кроме оригинала)
 
@@ -5668,7 +5679,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-17 · v54.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-17 · v54.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -6192,13 +6203,6 @@ ${bodyHtml}
                           )}
                         </div>
                         <span className="type-badge" style={{ flexShrink: 0, marginLeft: 'auto' }}>{DOC_TYPE_LABELS[receipt.document_type] || receipt.document_type || '🧾 Чек'}</span>
-                        {/* v54.1: пометка возможного дубликата (ставит бэкенд в recognition_method) */}
-                        {typeof receipt.recognition_method === 'string' && receipt.recognition_method.includes('дубликат') && (
-                          <span
-                            title={`Возможный дубликат (${receipt.recognition_method}). Проверьте и удалите лишнюю карточку вручную.`}
-                            style={{ flexShrink: 0, background: '#fdeaea', color: '#c0392b', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10, border: '1px solid #e74c3c' }}
-                          >⚠ дубль</span>
-                        )}
                         {/* Значок статуса оплаты в правом верхнем углу карточки: 🟢 оплачено / 🟠 к оплате / 🔴 недоплачено */}
                         {receipt.payment_status && PAYMENT_STATUS_META[receipt.payment_status] && (
                           <span
