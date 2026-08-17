@@ -543,9 +543,9 @@ const GROQ_ALIASES_FRONT = {
 const isModelSelected = (modelName, selectedModel) =>
   modelName === selectedModel || GROQ_ALIASES_FRONT[selectedModel] === modelName;
 
-function compressImageFile(file, maxWidth = 1600, maxHeight = 2400, quality = 0.85) {
+function compressImageFile(file, maxWidth = 1600, maxHeight = 2400, quality = 0.85, force = false) {
   return new Promise((resolve, reject) => {
-    if (file.size <= MAX_FILE_SIZE_MB * 1024 * 1024) {
+    if (!force && file.size <= MAX_FILE_SIZE_MB * 1024 * 1024) {
       return resolve(file);
     }
     const reader = new FileReader();
@@ -2417,14 +2417,27 @@ function App() {
   // Загрузка с реальным прогрессом (XHR: fetch не даёт upload-прогресс)
   const uploadWithProgress = (url, formData, onUploadProgress) => new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    let lastBeat = Date.now();
+    let settled = false;
+    const finish = (fn, arg) => { if (settled) return; settled = true; clearInterval(watchdog); fn(arg); };
+    // v53.2: сторож фазы ЗАГРУЗКИ — если прогресс замер (сеть/VPN/прокси), не висим бесконечно.
+    // Отключается, когда тело отправлено (upload.onload): ОТВЕТ сервер может готовиться долго — это нормально.
+    const watchdog = setInterval(() => {
+      if (!settled && Date.now() - lastBeat > 120000) {
+        try { xhr.abort(); } catch (_) { /* noop */ }
+        finish(reject, new Error('Загрузка на сервер встала — 2 минуты без прогресса (сеть/VPN/прокси). Просто повторите; если повторится — загружайте меньше страниц за раз.'));
+      }
+    }, 10000);
     xhr.open('POST', url);
     xhr.timeout = 900000; // 15 мин: многостраничные документы (эскритура 29 стр.) распознаются постранично
     xhr.upload.onprogress = (e) => {
+      lastBeat = Date.now();
       if (e.lengthComputable) onUploadProgress(e.loaded / e.total);
     };
-    xhr.onload = () => resolve({ ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, text: xhr.responseText });
-    xhr.onerror = () => reject(new Error('Соединение оборвано (прокси или сеть). Если документ был многостраничным — обновите список: он мог успеть сохраниться на сервере'));
-    xhr.ontimeout = () => reject(new Error('Превышено время ожидания (15 мин). Проверьте список документов — документ мог успеть сохраниться на сервере'));
+    xhr.upload.onload = () => clearInterval(watchdog); // тело ушло — дальше ждём ответ сколько нужно
+    xhr.onload = () => finish(resolve, { ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status, text: xhr.responseText });
+    xhr.onerror = () => finish(reject, new Error('Соединение оборвано (прокси или сеть). Если документ был многостраничным — обновите список: он мог успеть сохраниться на сервере'));
+    xhr.ontimeout = () => finish(reject, new Error('Превышено время ожидания (15 мин). Проверьте список документов — документ мог успеть сохраниться на сервере'));
     xhr.send(formData);
   });
   const [lastSavedReceipt, setLastSavedReceipt] = useState(null);
@@ -2844,7 +2857,6 @@ function App() {
           fileToUpload = await compressImageFile(f);
         }
         prepared.push(fileToUpload);
-        formData.append('pages', fileToUpload);
       }
       // Локальный Mac OCR (v52): каждая страница → текст на этом Mac (127.0.0.1:8787), дальше сервер структурирует
       if (effModel === 'local-mac-ocr') {
@@ -2882,6 +2894,12 @@ function App() {
         }
         formData.append('ocr_texts', JSON.stringify(ocrTexts));
       }
+      // v53.2: для Mac OCR страницы на бэкенде нужны только для хранения/показа (текст уже есть) —
+      // жмём их сильнее, иначе upload 5+ тяжёлых страниц может встать на медленной сети
+      const pagesToUpload = effModel === 'local-mac-ocr'
+        ? await Promise.all(prepared.map(f => (isPdfFile(f) ? f : compressImageFile(f, 1600, 2400, 0.72, true).catch(() => f))))
+        : prepared;
+      for (const f of pagesToUpload) formData.append('pages', f);
       formData.append('model', effModel);
       formData.append('currency', currency);
       formData.append('docType', docType);
@@ -5648,7 +5666,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-17 · v53.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-17 · v53.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
