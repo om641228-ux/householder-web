@@ -125,7 +125,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v54.2-2026-08-17', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v54.3-2026-08-17', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -1273,6 +1273,26 @@ function extractItemsFallback(rawText) {
   return items.slice(0, 150);
 }
 
+// v54.3: пакетный перевод названий позиций фолбэк-парсера (name_ru) — одним вызовом
+async function translateItemNames(items) {
+  if (!Array.isArray(items) || !items.length) return;
+  try {
+    const list = items.map((it, i) => `${i + 1}. ${it.name}`).join('\n');
+    const ru = String(await callTextChain(
+      `Переведи на русский названия товаров из чека (стройматериалы, товары для дома, продукты). ` +
+      `Верни ТОЛЬКО переведённые строки: тот же порядок и нумерация («1. …»), без пояснений, названия кратко.\n${list}`
+    ) || '');
+    const map = new Map();
+    ru.split('\n').forEach(l => {
+      const m = l.match(/^\s*(\d+)[.)]\s*(.+)$/);
+      if (m) map.set(Number(m[1]), m[2].trim());
+    });
+    items.forEach((it, i) => { const v = map.get(i + 1); if (v) it.name_ru = v.slice(0, 140); });
+  } catch (e) {
+    console.warn('v54.3: перевод позиций фолбэка не удался (не критично):', e.message);
+  }
+}
+
 // ========== v53: пост-контроль валюты и итога по тексту документа ==========
 // 1) Испанская фактура/адрес (€, CIF/NIF, IGIC/IVA, FACTURA, испанские города) → валюта EUR.
 // 2) Контроль итога: LLM иногда обрезает тысячи («1.171,27 €» → 1.17) или путает валюту.
@@ -1318,6 +1338,18 @@ function enforceCurrencyAndTotal(data, rawText) {
     console.log(`v53: итог восстановлен как сумма строк = ${data.total_amount}`);
   }
 
+  // v54.3: штамп чека «дата+время» в подвале (…000929 10/01/2026 10:50) — самый надёжный источник даты.
+  // Для кассовых документов (ticket / factura simplificada / recibo) перекрывает даже дату от LLM (OCR путает день: 12.07→02.07)
+  const pad2 = (v) => String(v).padStart(2, '0');
+  const stamp = text.match(/(\d{1,2})[./-](\d{1,2})[./-](\d{4})\s+(\d{1,2}):(\d{2})/);
+  if (stamp && /ticket|factura\s+simplificada|recibo|чек|кассов/i.test(text)) {
+    const d = `${stamp[3]}-${pad2(stamp[2])}-${pad2(stamp[1])}`;
+    if (Number(stamp[1]) <= 31 && Number(stamp[2]) <= 12 && data.receipt_date !== d) {
+      console.log(`v54.3: дата по штампу чека ${data.receipt_date || '—'} → ${d}`);
+      data.receipt_date = d;
+      if (!data.receipt_time) data.receipt_time = `${pad2(stamp[4])}:${stamp[5]}`;
+    }
+  }
   // Дата-фолбэк
   if (!data.receipt_date) {
     const ES_MONTHS = { enero: 1, febrero: 2, marzo: 3, abril: 4, mayo: 5, junio: 6, julio: 7, agosto: 8, septiembre: 9, octubre: 10, noviembre: 11, diciembre: 12 };
@@ -1405,6 +1437,7 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
       data.items = fb;
       if (!data.document_type || data.document_type === 'other') data.document_type = 'receipt';
       console.log(`v54.2: позиции восстановлены фолбэк-парсером (${fb.length} шт.)`);
+      await translateItemNames(data.items);
     }
   }
   // Запасной вариант названия: первые содержательные строки первой страницы
@@ -1541,6 +1574,7 @@ async function finalizeReceiptFromPageTexts(pageTexts, currency, docType) {
     if (fb.length >= 2) {
       data.items = fb;
       console.log(`v54.2: позиции восстановлены фолбэк-парсером (${fb.length} шт.)`);
+      await translateItemNames(data.items);
     }
   }
   if (!data.store_name) {
