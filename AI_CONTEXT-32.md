@@ -1174,3 +1174,10 @@ crm_tasks(id bigserial PK, owner_id text, title text NOT NULL, description text,
 Фронт App.js: recognizeDocumentPages и recognizeAndSave получили параметр allowDuplicate; на ошибке /дубликат/i — window.confirm «Сохранить всё равно?» → повтор с allow_duplicate=1. Работает и для async job (текст дубликата приходит через job.error). Метка: v54.
 Проверки: node --check OK; esbuild OK; eslint 0 errors / 3 pre-existing warnings.
 Действие пользователя: запушить index.js + App.js, redeploy ОБОИХ сервисов; существующий дубль (02.07.2025) удалить вручную.
+
+## v54.1 — 2026-08-17 — Антидубликат: не блокировать, только ПОМЕТКА
+Требование пользователя: «сохраняй все распознанные чеки, не выводи предупреждение — только пометку дубликат».
+Бэкенд index.js: saveReceiptToDB больше НЕ бросает DUPLICATE — при совпадении (магазин-префикс + сумма ±0.02 + дата ±40 дн.) сохраняет всегда, добавляя в recognition_method метку «· ⚠ дубликат #ID» и duplicate_of {id,store_name,receipt_date,total_amount,currency} в ответ (не колонка БД). Маркер: v54.1-2026-08-17.
+Фронт App.js: confirm-диалоги «Сохранить всё равно?» удалены; на карточке в списке — плашка «⚠ дубль» (по recognition_method содержащему «дубликат»); в панели «Сохранено» — строка «⚠️ Похоже на дубликат чека #ID …» при duplicate_of. Метка: v54.1.
+Проверки: node --check OK; esbuild OK; eslint 0 errors / 3 pre-existing warnings.
+Действие пользователя: запушить index.js + App.js, redeploy обоих сервисов; старые дубли удалить вручную.

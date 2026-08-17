@@ -125,7 +125,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v54-2026-08-17', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v54.1-2026-08-17', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -2106,9 +2106,11 @@ async function saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod) {
     owner_name: user?.name || null
   };
   
-  // v54: антидубликат — тот же магазин (префикс названия), та же сумма (±0.02) и дата ±40 дней
-  // (OCR может перепутать день: 12.07 → 02.07). Обход: receiptData.allowDuplicate (подтверждение на фронте).
-  if (!receiptData.allowDuplicate && record.total_amount != null && record.receipt_date && record.store_name) {
+  // v54.1: антидубликат — тот же магазин (префикс названия), та же сумма (±0.02) и дата ±40 дней
+  // (OCR может перепутать день: 12.07 → 02.07). НЕ блокируем: сохраняем всегда,
+  // только ПОМЕТКА — в recognition_method («⚠ дубликат #ID») и duplicate_of в ответе фронту.
+  let dupFound = null;
+  if (record.total_amount != null && record.receipt_date && record.store_name) {
     try {
       const d0 = new Date(record.receipt_date);
       if (!isNaN(d0)) {
@@ -2131,13 +2133,12 @@ async function saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod) {
           return a.startsWith(b.slice(0, 8)) || b.startsWith(a.slice(0, 8));
         });
         if (dup) {
-          const err = new Error(`Похоже на дубликат чека #${dup.id}: «${dup.store_name || '—'}», ${dup.receipt_date || '—'}, ${dup.total_amount} ${dup.currency || ''}. Если это действительно ДРУГОЙ чек — подтвердите сохранение на фронте (или удалите старую карточку).`);
-          err.code = 'DUPLICATE';
-          throw err;
+          dupFound = dup;
+          record.recognition_method = `${record.recognition_method || ''} · ⚠ дубликат #${dup.id}`.trim();
+          console.log(`Антидубликат: новая карточка помечена как дубликат #${dup.id} (${dup.store_name}, ${dup.receipt_date}, ${dup.total_amount})`);
         }
       }
     } catch (e) {
-      if (e.code === 'DUPLICATE') throw e;
       console.warn('Антидубликат: проверка не удалась (не блокируем):', e.message);
     }
   }
@@ -2151,6 +2152,7 @@ async function saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod) {
     .single();
 
   if (error) throw error;
+  if (dupFound) data.duplicate_of = dupFound; // не колонка БД — только полезная нагрузка ответа
   // v33: постраничное хранение (document_pages) — best-effort, на сохранение чека не влияет
   try { await saveDocumentPages(data.id, receiptData); } catch (e) { console.warn('document_pages:', e.message); }
   try { await saveDocumentDetails(data.id, receiptData); } catch (e) { console.warn('document details:', e.message); }

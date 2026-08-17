@@ -2946,10 +2946,6 @@ function App() {
       loadReceipts();
     } catch (e) {
       console.error('Ошибка:', e);
-      // v54: сервер нашёл дубликат — даём осознанно сохранить повторно
-      if (!allowDuplicate && /дубликат/i.test(e.message || '') && window.confirm('⚠️ ' + e.message + '\n\nСохранить всё равно?')) {
-        return recognizeDocumentPages(files, modelOverride, true);
-      }
       alert('Ошибка: ' + e.message);
     }
     setRecognizing(false);
@@ -3085,10 +3081,6 @@ function App() {
       }
     } catch (e) {
       console.error('Ошибка:', e);
-      // v54: сервер нашёл дубликат — даём осознанно сохранить повторно
-      if (!allowDuplicate && /дубликат/i.test(e.message || '') && window.confirm('⚠️ ' + e.message + '\n\nСохранить всё равно?')) {
-        return recognizeAndSave(fileArg, true);
-      }
       alert('Ошибка: ' + e.message);
     }
     setRecognizing(false);
@@ -5676,7 +5668,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-17 · v54 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-17 · v54.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -5778,6 +5770,14 @@ ${bodyHtml}
                     <p><strong>Товаров:</strong> {lastSavedReceipt.items?.length || 0}</p>
                     <p><strong>Объект:</strong> {lastSavedReceipt.object || '—'}</p>
                     <p><strong>Метод:</strong> {lastSavedReceipt.recognition_method || '—'}</p>
+                    {lastSavedReceipt.duplicate_of && (
+                      <p style={{ color: '#c0392b' }}>
+                        <strong>⚠️ Похоже на дубликат чека #{lastSavedReceipt.duplicate_of.id}:</strong>{' '}
+                        {lastSavedReceipt.duplicate_of.store_name || '—'}, {formatDate(lastSavedReceipt.duplicate_of.receipt_date)},{' '}
+                        {formatAmount(lastSavedReceipt.duplicate_of.total_amount, lastSavedReceipt.duplicate_of.currency)}.
+                        Карточка сохранена — если это повтор, удалите одну из них.
+                      </p>
+                    )}
                     <p><strong>Добавил:</strong> {formatOwnerName(lastSavedReceipt)}</p>
                     {lastSavedReceipt.warning && <p className="error">⚠️ {lastSavedReceipt.warning}</p>}
                   </div>
@@ -6192,6 +6192,13 @@ ${bodyHtml}
                           )}
                         </div>
                         <span className="type-badge" style={{ flexShrink: 0, marginLeft: 'auto' }}>{DOC_TYPE_LABELS[receipt.document_type] || receipt.document_type || '🧾 Чек'}</span>
+                        {/* v54.1: пометка возможного дубликата (ставит бэкенд в recognition_method) */}
+                        {typeof receipt.recognition_method === 'string' && receipt.recognition_method.includes('дубликат') && (
+                          <span
+                            title={`Возможный дубликат (${receipt.recognition_method}). Проверьте и удалите лишнюю карточку вручную.`}
+                            style={{ flexShrink: 0, background: '#fdeaea', color: '#c0392b', fontSize: 10, fontWeight: 700, padding: '3px 7px', borderRadius: 10, border: '1px solid #e74c3c' }}
+                          >⚠ дубль</span>
+                        )}
                         {/* Значок статуса оплаты в правом верхнем углу карточки: 🟢 оплачено / 🟠 к оплате / 🔴 недоплачено */}
                         {receipt.payment_status && PAYMENT_STATUS_META[receipt.payment_status] && (
                           <span
