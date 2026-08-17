@@ -1153,3 +1153,17 @@ crm_tasks(id bigserial PK, owner_id text, title text NOT NULL, description text,
 - Кнопка под «Распознать и сохранить»: «🖥 Локально (Mac OCR, бесплатно)» → recognizeViaMacOcr.
 - Метка сборки: «сборка 2026-08-17 · v53.1 · Mac OCR: туннель/прямой 127.0.0.1:8787 ⚙» (⚙ → configureMacOcr).
 Проверки: esbuild OK; eslint 0 errors / 3 pre-existing warnings. Бэкенд не менялся (v53).
+
+## v53.2 — 2026-08-17 — Mac OCR: зависание на «Загрузка… 8%»
+Симптом: локальный OCR отработал (все 5 стр. в терминале mac-ocr-server), но фронт завис на «Загрузка… 8%» — это upload страниц на бэкенд (uploadWithProgress), встал на ~20% без watchdog и висел бесконечно (xhr.timeout=15 мин срабатывает только при полном молчании соединения).
+Исправлено в App.js:
+1. uploadWithProgress: сторож фазы загрузки — 2 мин без upload-прогресса → xhr.abort() + понятная ошибка (сеть/VPN/прокси, повторите). Сторож отключается на xhr.upload.onload (тело ушло — ответ сервер может готовить долго, это норма).
+2. Mac OCR-путь: страницы для бэкенда жмутся ПРИНУДИТЕЛЬНО (compressImageFile(f,1600,2400,0.72,force=true)) — OCR идёт по оригиналам локально, на сервер уходят лёгкие копии для хранения/показа. compressImageFile получил 5-й параметр force.
+3. pages в FormData теперь добавляются после ветки OCR (pagesToUpload).
+4. Метка сборки: v53.2.
+Проверки: esbuild OK; eslint 0 errors / 3 pre-existing warnings. Бэкенд не менялся (v53).
+
+## v53.3 — 2026-08-17 — Mac OCR: товары распознаются, но не попадают в карточку (Товары 0)
+Причина: Mac OCR (ветка ocr_texts в upload-document-pages) структурируется ДОКУМЕНТНЫМ промптом buildDocumentSummaryPrompt, где items жёстко «[]» — позиции чека не извлекались (чек Леруа Мерлен: товары в raw_text есть, items пуст).
+Исправлено в index.js: buildDocumentSummaryPrompt — поле items теперь инструкция: для receipt/invoice извлекать КАЖДЫЙ товар (name/name_ru/quantity/price/total), строки RAEE/«взнос за отходы» — отдельными позициями, EAN-штрихкод ≠ цена; для bill — строки начислений; прочие типы — []. Маркер сборки: v53.3-2026-08-17. node --check OK.
+Действие пользователя: запушить index.js + redeploy householder-api. Фронтенд не менялся (v53.2).
