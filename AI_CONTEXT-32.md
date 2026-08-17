@@ -1091,3 +1091,65 @@ crm_tasks(id bigserial PK, owner_id text, title text NOT NULL, description text,
 - **Backend**: в upload-document-pages ветка `req.body.ocr_texts` (перед проверкой genAI) — vision пропускается, `finalizeDocumentFromPageTexts(pageTexts)`, страницы в Storage (page_urls), method `local mac-ocr Np (async)`, job-режим как обычно. Build `v52-2026-08-16`.
 - **Frontend**: `LOCAL_MAC_MODEL` ('local-mac-ocr', '🖥 Mac OCR (локально, Vision)') добавлен в начало списка моделей (`modelsAll`); в recognizeDocumentPages при этой модели — локальный OCR с прогрессом, ошибка с инструкцией запуска. `LOCAL_OCR_URL = http://127.0.0.1:8787/ocr`.
 - Деливерабл: mac-ocr-server.py. Линт: 0 ошибок, 3 прежних warning.
+
+## v52.1 — Защита локального OCR от пустых сохранений
+
+- Причина «не распознаётся локально»: старый бэкенд игнорировал ocr_texts → чек сохранялся пустым (мусор «0000…» в переводе).
+- Фронт: перед локальным OCR проверяет `/api/health` build ≥ v52 (иначе ошибка с инструкцией redeploy); после OCR валидирует текст (≥10 симв./страница).
+- ВНИМАНИЕ: в проекте уже был свой локальный OCR — Unlimited-OCR/llama-server (`LOCAL_OCR_FALLBACK_URLS` 8081→8080, кнопка «🖥 Локально», cloudflared-туннель, см. шапку App.js и ~стр.2930). Это ОТДЕЛЬНЫЙ механизм от local-mac-ocr (8787).
+
+## v52.2 — 2026-08-17 — Mac OCR: Safari блокирует 127.0.0.1 (mixed content)
+Симптом: mac-ocr-server.py запущен и слушает 127.0.0.1:8787, но браузер: «Локальный Mac OCR недоступен». Причина: страница приложения открыта по https, fetch на http://127.0.0.1 блокируется Safari/Chrome (mixed content / Private Network Access).
+Исправлено:
+1. mac-ocr-server.py `_cors()`: добавлен заголовок `Access-Control-Allow-Private-Network: true` (Chrome PNA-preflight). **Пользователь должен перекопировать файл на Mac и перезапустить сервер.**
+2. App.js: константа `LOCAL_OCR_URL` → `LOCAL_MAC_OCR_DEFAULT = 'http://127.0.0.1:8787'`; новое состояние `macOcrUrl` (localStorage 'mac_ocr_url_v1') + `configureMacOcr()` (prompt, как configureLocalOcr для Unlimited-OCR). Fetch идёт на `${macOcrUrl || LOCAL_MAC_OCR_DEFAULT}/ocr?name=…`.
+3. Кнопка ⚙ рядом с бейджем активной модели (видна только при selectedModel === 'local-mac-ocr').
+4. Текст ошибки при недоступности теперь объясняет mixed content и даёт рецепт: `brew install cloudflared` → `cloudflared tunnel --url http://127.0.0.1:8787` → вставить https://….trycloudflare.com через ⚙. Если задан свой URL и он недоступен — отдельное сообщение.
+Проверки: esbuild OK; eslint 0 errors / 3 pre-existing warnings. Бэкенд index.js не менялся (нужен уже задеплоенный build v52+).
+
+## v52.3 — 2026-08-17 — Mac OCR: диагностика связи через туннель
+Симптом: URL туннеля задан (https://….trycloudflare.com), но распознавание падает на 1-й странице: «Mac OCR недоступен по адресу …». Причины-кандидаты: туннель/cloudflared остановлен, сервер не запущен, или URL устарел (cloudflared при КАЖДОМ перезапуске выдаёт НОВЫЙ адрес).
+Исправлено (только App.js):
+1. `macOcrBase()` и `testMacOcr(base)` — GET `${base}/` с таймаутом 8 с (AbortController), ожидает {"status":"ok"}; возвращает {ok, detail} (HTTP-код / таймаут / message сети).
+2. `configureMacOcr()`: после ввода URL сразу проверяет связь и показывает alert ✅/❌ с причиной и чек-листом.
+3. recognizeDocumentPages: ветка local-mac-ocr перед постраничным циклом делает probe — понятная ошибка ДО начала работы, разные тексты для «свой URL» и «прямой 127.0.0.1».
+4. Постраничный catch теперь показывает номер страницы и техническое message ошибки.
+Проверки: esbuild OK; eslint 0 errors / 3 pre-existing warnings. Сервер mac-ocr-server.py не менялся (уже с PNA-заголовком из v52.2).
+
+## v52.4 — 2026-08-17 — Mac OCR: ocrmac не установлен (PEP 668)
+Скриншоты пользователя: cloudflared пишет «Unable to reach the origin service… 127.0.0.1:8787 connection refused», а запуск mac-ocr-server.py падает с «Нужен пакет ocrmac» — выше в терминале pip отказал из-за PEP 668 (externally-managed-environment, Homebrew-Python на новых macOS). Т.е. сервер НИКОГДА не слушал порт в этой сессии.
+Исправлено: mac-ocr-server.py — docstring и сообщение при ImportError теперь ведут через venv:
+  python3 -m venv venv && ./venv/bin/pip install ocrmac
+  запуск: ./venv/bin/python mac-ocr-server.py
+(альтернатива: pip3 install --user ocrmac). Код сервера не менялся. App.js не менялся (остаётся v52.3).
+
+## v52.5 — 2026-08-17 — Mac OCR: порядок строк → мусорная структура (4.75 AED)
+Симптом: через local mac-ocr чек сохраняется «Другое», Итого 4.75 AED, без даты, 0 товаров; после перераспознавания (Gemini vision) — всё верно (1171.27 EUR). Причина: Apple Vision возвращает блоки в произвольном порядке, у двухколоночной фактуры строки колонок перемешаны → LLM при финализации теряет связи метка→сумма. Бэкенд НЕ при чём: ветка ocr_texts использует ту же finalizeDocumentFromPageTexts, что и vision-пайплайн.
+Исправлено в mac-ocr-server.py: sort_annotations() — группировка блоков в строки по y (порог 0.6×медианной высоты; Vision-координаты снизу-вверх → сортировка по -y), внутри строки по x, части строки склеиваются тремя пробелами (колонки сохраняют разделение). Проверено на синтетике: «TOTAL IMPORTE FACTURA:   1.171,27 €» в одной строке.
+Действие пользователя: перекопировать .py на Mac и перезапустить (./venv/bin/python mac-ocr-server.py). App.js/index.js не менялись (остаются v52.3/v52).
+
+## v52.6 — 2026-08-17 — Mac OCR: «пустой/короткий текст» после v52.5
+Причина: ocrmac возвращает блоки как (text, confidence, (x, y, w, h)) — рамка ВЛОЖЕННЫМ кортежем, а sort_annotations v52.5 распаковывал плоский (a[2],a[3],a[5]) → все блоки отбрасывались → пустой текст → фронт бросал «пустой/короткий текст по странице».
+Исправлено в mac-ocr-server.py: sort_annotations поддерживает оба формата (плоский len>=6 и вложенный box=a[2]); плюс страховка в do_POST — если после сортировки текст пуст, но блоки есть, используется простая склейка a[0]. Проверено на вложенном формате: строки собираются верно.
+Действие пользователя: перекопировать .py и перезапустить (./venv/bin/python mac-ocr-server.py). App.js/index.js не менялись.
+
+## v53 — 2026-08-17 — Пост-контроль валюты/итога/даты после LLM-структурирования
+Симптом (local mac-ocr, ID 715): Итого 1.17 AED, даты нет — LLM обрезал «1.171,27» и выдумал валюту.
+Требования пользователя: 1) испанская фактура → EUR; 2) контрольная сумма итога по строчкам.
+Исправлено в index.js: enforceCurrencyAndTotal(data, rawText) — вызывается в finalizeDocumentFromPageTexts и finalizeReceiptFromPageTexts перед выставлением document_type.
+- Валюта: признаки Испании (€, CIF/NIF, IGIC/IVA, FACTURA, TENERIFE и др.) → принудительно EUR.
+- Итог: regex-кандидаты у слов TOTAL/IMPORTE/ИТОГО (европейский формат 1.171,27), best=max; замена, если: Σ items ≈ best (контрольная сумма, 2%), масштаб 1:1000, или итог < 1% от best. Если итога нет — Σ items.
+- Дата-фолбэк: «9 de febrero de 2024» (исп. месяцы) и «Fecha… 09/02/2024».
+- Маркер сборки /api/health: v53-2026-08-17.
+Юнит-тесты (node): case1 (AED 1.17) → EUR 1171.27 + дата; case2 (нет итога, Σ строк 1171.27) → 1171.27; case3 (корректный результат) — не портится. node --check OK.
+Действие пользователя: запушить index.js + redeploy householder-api; фронтенд не менялся (v52.3).
+
+## v53.1 — 2026-08-17 — Кнопка «Локально» теперь = Mac OCR (Unlimited-OCR удалён)
+Требование пользователя: «Замени локальную версию на Mac OCR».
+Исправлено в App.js:
+- Удалены: LOCAL_OCR_FALLBACK_URLS, localOcrUrl/configureLocalOcr, fileToDataUrl, ocrPageLocal, recognizeLocal (llama-server :8080/8081, uocr-proxy).
+- Новая recognizeViaMacOcr(): Word-файлы → обычный путь; иначе setSelectedModel('local-mac-ocr') + recognizeDocumentPages(selectedFiles, 'local-mac-ocr').
+- recognizeDocumentPages(files, modelOverride=null): effModel = modelOverride || selectedModel (ветка local-mac-ocr и formData 'model' через effModel).
+- Кнопка под «Распознать и сохранить»: «🖥 Локально (Mac OCR, бесплатно)» → recognizeViaMacOcr.
+- Метка сборки: «сборка 2026-08-17 · v53.1 · Mac OCR: туннель/прямой 127.0.0.1:8787 ⚙» (⚙ → configureMacOcr).
+Проверки: esbuild OK; eslint 0 errors / 3 pre-existing warnings. Бэкенд не менялся (v53).

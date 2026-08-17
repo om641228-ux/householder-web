@@ -7,13 +7,6 @@ const API_URL = 'https://householder-api-production.up.railway.app';
 // Локальный OCR (Unlimited-OCR на llama-server пользователя): браузер обращается к нему
 // НАПРЯМУЮ — сервер и браузер на одном ноутбуке. localhost для браузера — доверенный
 // контекст, поэтому запросы с HTTPS-сайта на http://127.0.0.1 разрешены.
-// Порядок: 8081 = uocr-proxy.py (добавляет CORS/Private-Network-Access заголовки,
-// которых нет у llama-server — без них Chrome/Safari блокируют fetch), 8080 = напрямую.
-// Если браузер режет и это (Safari/Chrome блокируют HTTP с HTTPS-страницы даже на
-// 127.0.0.1) — пользователь поднимает HTTPS-туннель (cloudflared → прокси :8081) и
-// вставляет его URL через ⚙ рядом с кнопкой (хранится в localStorage 'localOcrUrl')
-const LOCAL_OCR_FALLBACK_URLS = ['http://127.0.0.1:8081', 'http://127.0.0.1:8080'];
-
 // Запасной список объектов на случай недоступности API (основной источник — GET /api/objects)
 const DEFAULT_OBJECTS = ['other', 'Duqe', 'Maria', 'Kit', 'Dubai', 'Tich', 'Иссера', 'Игорь', 'Лиза', 'Алехандро'];
 // Подтипы услуг/документов (счета, страховки, договоры)
@@ -2438,20 +2431,6 @@ function App() {
   const [scanResultOpen, setScanResultOpen] = useState(false);
   // По умолчанию — Kimi K3 (бывший дефолт Groq Llama 4 Scout снят Groq с поддержки)
   const [selectedModel, setSelectedModel] = useState('kimi-kimi-k3');
-  // Свой URL локального OCR (HTTPS-туннель cloudflared); пусто = авто 8081→8080
-  const [localOcrUrl, setLocalOcrUrl] = useState(() => {
-    try { return localStorage.getItem('localOcrUrl') || ''; } catch { return ''; }
-  });
-  const configureLocalOcr = () => {
-    const url = window.prompt(
-      'Адрес локального OCR-сервера.\n\nПусто = авто (прокси 127.0.0.1:8081 → llama-server :8080).\nЕсли браузер блокирует http://127.0.0.1 — поднимите HTTPS-туннель:\nbrew install cloudflared\ncloudflared tunnel --url http://127.0.0.1:8081\nи вставьте сюда выданный https://….trycloudflare.com',
-      localOcrUrl
-    );
-    if (url === null) return;
-    const v = url.trim().replace(/\/+$/, '');
-    try { v ? localStorage.setItem('localOcrUrl', v) : localStorage.removeItem('localOcrUrl'); } catch { /* приватный режим */ }
-    setLocalOcrUrl(v);
-  };
   // Свой URL Mac OCR (v52.2): Safari/Chrome блокируют fetch с https-страницы на http://127.0.0.1 (mixed content).
   // Решение — HTTPS-туннель cloudflared на порт 8787; URL хранится в localStorage 'mac_ocr_url_v1'
   const [macOcrUrl, setMacOcrUrl] = useState(() => {
@@ -2852,7 +2831,8 @@ function App() {
 
   // Несколько выбранных файлов = страницы ОДНОГО документа (договор, эскритура, отчёт):
   // отправляем все в /api/upload-document-pages, бэкенд собирает их в один документ
-  const recognizeDocumentPages = async (files) => {
+  const recognizeDocumentPages = async (files, modelOverride = null) => {
+    const effModel = modelOverride || selectedModel;
     setRecognizing(true);
     setLastSavedReceipt(null);
     try {
@@ -2867,7 +2847,7 @@ function App() {
         formData.append('pages', fileToUpload);
       }
       // Локальный Mac OCR (v52): каждая страница → текст на этом Mac (127.0.0.1:8787), дальше сервер структурирует
-      if (selectedModel === 'local-mac-ocr') {
+      if (effModel === 'local-mac-ocr') {
         // Проверка, что бэкенд умеет принимать готовые тексты (v52+), иначе чек сохранится пустым
         try {
           const h = await fetch(`${API_URL}/api/health`).then(r => r.json());
@@ -2902,7 +2882,7 @@ function App() {
         }
         formData.append('ocr_texts', JSON.stringify(ocrTexts));
       }
-      formData.append('model', selectedModel);
+      formData.append('model', effModel);
       formData.append('currency', currency);
       formData.append('docType', docType);
       formData.append('subtype', subtype);
@@ -2985,182 +2965,17 @@ function App() {
   // бесплатно и без облака), затем текст + изображения уходят на бэкенд Railway —
   // он структурирует карточку и сохраняет в базу. Несколько выбранных файлов =
   // страницы ОДНОГО документа (как «Распознать N стр.» до v27).
-  const fileToDataUrl = (file) => new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result);
-    r.onerror = () => reject(new Error('Не удалось прочитать файл'));
-    r.readAsDataURL(file);
-  });
-
-  const ocrPageLocal = async (file, baseUrl) => {
-    const dataUrl = await fileToDataUrl(file);
-    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        temperature: 0, // рецепт модели: temp 0 + промпт с <|grounding|> — иначе пустой вывод
-        max_tokens: 8192,
-        // Анти-зацикливание: в vLLM-рецепте это n-gram logits processor (ngram 35/128),
-        // в llama.cpp его нет — ближайший аналог DRY: штрафует повторы длинных фрагментов,
-        // короткие легальные повторы чека (цены, «EUR») не страдают
-        repeat_penalty: 1.05,
-        dry_multiplier: 0.8,
-        dry_base: 1.75,
-        dry_allowed_length: 4,
-        dry_sequence_breakers: ['\n', ':', '"', ' '],
-        messages: [{ role: 'user', content: [
-          { type: 'text', text: '<|grounding|>Convert the document to markdown.' },
-          { type: 'image_url', image_url: { url: dataUrl } }
-        ]}]
-      })
-    });
-    if (!res.ok) throw new Error(`локальный сервер ответил HTTP ${res.status}`);
-    const data = await res.json();
-    const text = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
-    if (!text.trim()) throw new Error('локальная модель вернула пустой текст');
-    return text;
-  };
-
-  const recognizeLocal = async () => {
+  // Локальное распознавание = Mac OCR (v53.1, Apple Vision на этом Mac, mac-ocr-server :8787).
+  // Unlimited-OCR (llama-server :8080/8081) убран — вместо него везде Mac OCR.
+  const recognizeViaMacOcr = () => {
     if (!selectedFiles.length || recognizing) return;
-    // Word/текст не нуждается в OCR — текст извлекается на бэкенде, идём обычным путём (v32.3)
+    // Word/текст не нуждается в OCR — текст извлекается на бэкенде, идём обычным путём
     if (selectedFiles.some(isWordFile)) {
       alert('📝 Файл Word/текста не требует OCR — распознавание выполнится из текста файла на сервере (обычная кнопка «Распознать»).');
       return recognizeAndSave();
     }
-    setRecognizing(true);
-    setLastSavedReceipt(null);
-    setFolderResults([]);
-    let creepTimer = null;
-    try {
-      // -1. Сессия на бэкенде жива? (токены в памяти — перезапуск Railway их стирает;
-      // без проверки мы бы зря гоняли локальный OCR по минуте, а сохранение упало бы с 401)
-      try {
-        const me = await fetch(`${API_URL}/api/me?token=${token}`);
-        if (me.status === 401) {
-          alert('🖥 Локальный OCR: сессия на сервере истекла (backend перезапускался — сессии хранятся в памяти).\n\nНажмите «Выйти» и войдите заново, затем повторите.');
-          setRecognizing(false);
-          return;
-        }
-      } catch { /* сеть мигнула — продолжаем, сохранение само покажет ошибку */ }
-      // 0. Ищем живой локальный сервер: свой URL (туннель) → прокси (8081) → напрямую (8080)
-      const candidates = [...new Set([localOcrUrl, ...LOCAL_OCR_FALLBACK_URLS].filter(Boolean))];
-      let localBase = null;
-      for (const url of candidates) {
-        try {
-          const ctrl = new AbortController();
-          const t = setTimeout(() => ctrl.abort(), 4000);
-          await fetch(`${url}/health`, { signal: ctrl.signal });
-          clearTimeout(t);
-          localBase = url;
-          break;
-        } catch { /* пробуем следующий адрес */ }
-      }
-      if (!localBase) {
-        throw new Error(`не отвечает (${candidates.join(', ')}).\n\n1) Запустите llama-server:\n./build/bin/llama-server -m ./uocr/Unlimited-OCR-Q4_K_M.gguf --mmproj ./uocr/mmproj-Unlimited-OCR-F16.gguf -c 8192 --host 127.0.0.1 --port 8080\n\n2) Во втором окне — прокси:\npython3 uocr-proxy.py\n\n3) Оба запущены, а ошибка остаётся (браузер режет http с HTTPS-страницы)? Поднимите HTTPS-туннель:\nbrew install cloudflared\ncloudflared tunnel --url http://127.0.0.1:8081\nи вставьте выданный https://….trycloudflare.com через ⚙ под кнопкой «Локально»`);
-      }
-      // Режим «по страницам» (v29.1): каждая страница — ОТДЕЛЬНАЯ карточка
-      if (multiPageMode === 'separate' && selectedFiles.length > 1) {
-        const results = [];
-        for (let i = 0; i < selectedFiles.length; i++) {
-          let f = selectedFiles[i];
-          setProgressStage('local');
-          setUploadProgress(Math.round((i / selectedFiles.length) * 100));
-          try {
-            if (f.size > MAX_FILE_SIZE_MB * 1024 * 1024) f = await compressImageFile(f);
-            const ocrText = await ocrPageLocal(f, localBase);
-            const fd = new FormData();
-            fd.append('pages', f);
-            fd.append('ocr_texts', JSON.stringify([ocrText]));
-            fd.append('currency', currency);
-            fd.append('docType', docType);
-            fd.append('subtype', subtype);
-            fd.append('payment_status', paymentStatus);
-            fd.append('object', object);
-            fd.append('token', token);
-            setProgressStage('recognize');
-            const res = await fetch(`${API_URL}/api/upload-ocr-text?token=${token}`, { method: 'POST', body: fd });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok || (!data.success && !data.id)) throw new Error(data.error || `Ошибка сервера: ${res.status}`);
-            const rd = data.data || data;
-            if (rd.image_url) rd.image_url = fixImageUrl(rd.image_url);
-            results.push({ file: f.name, status: 'success', receipt: rd });
-          } catch (err) {
-            results.push({ file: f.name, status: 'error', error: err.message });
-          }
-          setFolderResults([...results]);
-        }
-        const okCount = results.filter(r => r.status === 'success').length;
-        const errCount = results.filter(r => r.status === 'error').length;
-        const lastOk = [...results].reverse().find(r => r.status === 'success');
-        if (lastOk) setLastSavedReceipt(lastOk.receipt);
-        loadReceipts();
-        alert(`🖥 Локальный OCR — режим «по страницам»:\n\n✅ Сохранено карточек: ${okCount}` + (errCount ? `\n❌ Ошибок: ${errCount} (детали — в списке ниже)` : ''));
-        setRecognizing(false);
-        setProgressStage(null);
-        setUploadProgress(0);
-        return;
-      }
-      // 1. OCR каждой страницы — локально (0–70% прогресса)
-      const texts = [];
-      const uploadFiles = [];
-      for (let i = 0; i < selectedFiles.length; i++) {
-        setProgressStage('local');
-        setUploadProgress(Math.round((i / selectedFiles.length) * 70));
-        let f = selectedFiles[i];
-        if (f.size > MAX_FILE_SIZE_MB * 1024 * 1024) f = await compressImageFile(f);
-        texts.push(await ocrPageLocal(f, localBase));
-        uploadFiles.push(f);
-      }
-      setUploadProgress(70);
-      // 2. Текст + изображения на бэкенд: структурирование карточки и сохранение (70–100%)
-      const formData = new FormData();
-      for (const f of uploadFiles) formData.append('pages', f);
-      formData.append('ocr_texts', JSON.stringify(texts));
-      formData.append('currency', currency);
-      formData.append('docType', docType);
-      formData.append('subtype', subtype);
-      formData.append('payment_status', paymentStatus);
-      formData.append('object', object);
-      formData.append('token', token);
-      setProgressStage('recognize');
-      const res = await uploadWithProgress(`${API_URL}/api/upload-ocr-text?token=${token}`, formData, (ratio) => {
-        setUploadProgress(70 + Math.round(ratio * 15));
-        if (ratio >= 1 && !creepTimer) {
-          let p = 85;
-          creepTimer = setInterval(() => {
-            p = Math.min(95, p + Math.max(0.4, (95 - p) * 0.05));
-            setUploadProgress(Math.round(p));
-          }, 500);
-        }
-      });
-      if (creepTimer) clearInterval(creepTimer);
-      setUploadProgress(100);
-      const text = res.text;
-      let data;
-      try { data = JSON.parse(text); } catch { throw new Error(`Сервер вернул ${res.status}: ${text.slice(0, 200)}`); }
-      if (!res.ok) {
-        if (res.status === 401) {
-          alert('🖥 Локальный OCR: сессия на сервере истекла (backend перезапускался).\n\nНажмите «Выйти», войдите заново и повторите — локальный OCR уже отработал, осталось сохранить.');
-          setRecognizing(false);
-          setProgressStage(null);
-          setUploadProgress(0);
-          return;
-        }
-        throw new Error(data.error || `Ошибка сервера: ${res.status}`);
-      }
-      if (!data.success && !data.id) throw new Error(data.error || 'Сохранение не удалось');
-      const receiptData = data.data || data;
-      if (receiptData.image_url) receiptData.image_url = fixImageUrl(receiptData.image_url);
-      setLastSavedReceipt(receiptData);
-      loadReceipts();
-    } catch (e) {
-      console.error('Локальный OCR:', e);
-      alert('🖥 Локальный OCR: ' + e.message);
-    }
-    setRecognizing(false);
-    setProgressStage(null);
-    setUploadProgress(0);
+    setSelectedModel('local-mac-ocr');
+    return recognizeDocumentPages(selectedFiles, 'local-mac-ocr');
   };
 
   const recognizeAndSave = async (fileArg) => {
@@ -5819,9 +5634,9 @@ ${bodyHtml}
               ) : 'Распознать и сохранить'}
             </button>
             <button
-              onClick={recognizeLocal}
+              onClick={recognizeViaMacOcr}
               disabled={!selectedFiles.length || recognizing}
-              title="Бесплатный OCR на вашем Mac (Unlimited-OCR, llama-server 127.0.0.1:8080). Текст распознаётся локально, карточку собирает и сохраняет сервер. Несколько выбранных страниц = один документ"
+              title="Бесплатный OCR на вашем Mac (Apple Vision, mac-ocr-server 127.0.0.1:8787). Текст распознаётся локально, карточку собирает и сохраняет сервер. Несколько выбранных страниц = один документ"
               style={{
                 marginTop: 8, width: '100%', padding: '12px', fontSize: 15, fontWeight: 600,
                 borderRadius: 10, border: '1.5px solid #27ae60', background: '#f0faf4', color: '#1e8449',
@@ -5829,14 +5644,14 @@ ${bodyHtml}
                 opacity: (!selectedFiles.length || recognizing) ? 0.55 : 1
               }}
             >
-              🖥 Локально (Unlimited-OCR, бесплатно)
+              🖥 Локально (Mac OCR, бесплатно)
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-10 · v35 · локальный OCR: {localOcrUrl ? 'туннель (свой URL)' : 'авто 8081→8080'}
+              сборка 2026-08-17 · v53.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
-                onClick={configureLocalOcr}
-                title="Задать адрес локального OCR (HTTPS-туннель cloudflared)"
+                onClick={configureMacOcr}
+                title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
                 style={{ marginLeft: 6, border: 'none', background: 'none', cursor: 'pointer', fontSize: 13, padding: 0 }}
               >⚙</button>
             </div>
