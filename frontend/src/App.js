@@ -2844,7 +2844,7 @@ function App() {
 
   // Несколько выбранных файлов = страницы ОДНОГО документа (договор, эскритура, отчёт):
   // отправляем все в /api/upload-document-pages, бэкенд собирает их в один документ
-  const recognizeDocumentPages = async (files, modelOverride = null) => {
+  const recognizeDocumentPages = async (files, modelOverride = null, allowDuplicate = false) => {
     const effModel = modelOverride || selectedModel;
     setRecognizing(true);
     setLastSavedReceipt(null);
@@ -2900,6 +2900,7 @@ function App() {
         ? await Promise.all(prepared.map(f => (isPdfFile(f) ? f : compressImageFile(f, 1600, 2400, 0.72, true).catch(() => f))))
         : prepared;
       for (const f of pagesToUpload) formData.append('pages', f);
+      if (allowDuplicate) formData.append('allow_duplicate', '1');
       formData.append('model', effModel);
       formData.append('currency', currency);
       formData.append('docType', docType);
@@ -2945,6 +2946,10 @@ function App() {
       loadReceipts();
     } catch (e) {
       console.error('Ошибка:', e);
+      // v54: сервер нашёл дубликат — даём осознанно сохранить повторно
+      if (!allowDuplicate && /дубликат/i.test(e.message || '') && window.confirm('⚠️ ' + e.message + '\n\nСохранить всё равно?')) {
+        return recognizeDocumentPages(files, modelOverride, true);
+      }
       alert('Ошибка: ' + e.message);
     }
     setRecognizing(false);
@@ -2996,7 +3001,7 @@ function App() {
     return recognizeDocumentPages(selectedFiles, 'local-mac-ocr');
   };
 
-  const recognizeAndSave = async (fileArg) => {
+  const recognizeAndSave = async (fileArg, allowDuplicate = false) => {
     // Без явного файла и при выбранных нескольких — смотрим РЕЖИМ (v29.1):
     // auto — умный разбор (AI решает сам); separate — каждая в свою карточку;
     // single — все страницы в один документ (договор)
@@ -3032,6 +3037,7 @@ function App() {
       }
       const formData = new FormData();
       formData.append('image', fileToUpload);
+      if (allowDuplicate) formData.append('allow_duplicate', '1');
       formData.append('model', selectedModel);
       formData.append('currency', currency);
       formData.append('docType', docType);
@@ -3079,6 +3085,10 @@ function App() {
       }
     } catch (e) {
       console.error('Ошибка:', e);
+      // v54: сервер нашёл дубликат — даём осознанно сохранить повторно
+      if (!allowDuplicate && /дубликат/i.test(e.message || '') && window.confirm('⚠️ ' + e.message + '\n\nСохранить всё равно?')) {
+        return recognizeAndSave(fileArg, true);
+      }
       alert('Ошибка: ' + e.message);
     }
     setRecognizing(false);
@@ -5666,7 +5676,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-17 · v53.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-17 · v54 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

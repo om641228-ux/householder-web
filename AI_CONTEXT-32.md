@@ -1167,3 +1167,10 @@ crm_tasks(id bigserial PK, owner_id text, title text NOT NULL, description text,
 Причина: Mac OCR (ветка ocr_texts в upload-document-pages) структурируется ДОКУМЕНТНЫМ промптом buildDocumentSummaryPrompt, где items жёстко «[]» — позиции чека не извлекались (чек Леруа Мерлен: товары в raw_text есть, items пуст).
 Исправлено в index.js: buildDocumentSummaryPrompt — поле items теперь инструкция: для receipt/invoice извлекать КАЖДЫЙ товар (name/name_ru/quantity/price/total), строки RAEE/«взнос за отходы» — отдельными позициями, EAN-штрихкод ≠ цена; для bill — строки начислений; прочие типы — []. Маркер сборки: v53.3-2026-08-17. node --check OK.
 Действие пользователя: запушить index.js + redeploy householder-api. Фронтенд не менялся (v53.2).
+
+## v54 — 2026-08-17 — Антидубликаты при сохранении чеков
+Симптом: один чек Леруа Мерлен сохранён дважды (117.75 EUR, 16 товаров; даты 12.07 и 02.07 — OCR перепутал день).
+Бэкенд index.js: в saveReceiptToDB перед insert — поиск кандидатов: owner_id, total_amount ±0.02, receipt_date ±40 дней; магазин сверяется по нормализованному префиксу (8 симв.). Совпадение → throw err.code='DUPLICATE' с описанием существующей карточки (#id, дата, сумма). Обход: receiptData.allowDuplicate — выставляется во всех 7 точках сохранения из formData allow_duplicate='1'. Маркер: v54-2026-08-17.
+Фронт App.js: recognizeDocumentPages и recognizeAndSave получили параметр allowDuplicate; на ошибке /дубликат/i — window.confirm «Сохранить всё равно?» → повтор с allow_duplicate=1. Работает и для async job (текст дубликата приходит через job.error). Метка: v54.
+Проверки: node --check OK; esbuild OK; eslint 0 errors / 3 pre-existing warnings.
+Действие пользователя: запушить index.js + App.js, redeploy ОБОИХ сервисов; существующий дубль (02.07.2025) удалить вручную.

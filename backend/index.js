@@ -125,7 +125,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v53.3-2026-08-17', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v54-2026-08-17', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -2106,6 +2106,42 @@ async function saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod) {
     owner_name: user?.name || null
   };
   
+  // v54: антидубликат — тот же магазин (префикс названия), та же сумма (±0.02) и дата ±40 дней
+  // (OCR может перепутать день: 12.07 → 02.07). Обход: receiptData.allowDuplicate (подтверждение на фронте).
+  if (!receiptData.allowDuplicate && record.total_amount != null && record.receipt_date && record.store_name) {
+    try {
+      const d0 = new Date(record.receipt_date);
+      if (!isNaN(d0)) {
+        const dayMs = 86400000;
+        const from = new Date(d0.getTime() - 40 * dayMs).toISOString().slice(0, 10);
+        const to = new Date(d0.getTime() + 40 * dayMs).toISOString().slice(0, 10);
+        let q = supabaseAdmin.from('receipts')
+          .select('id, store_name, receipt_date, total_amount, currency')
+          .gte('receipt_date', from).lte('receipt_date', to)
+          .gte('total_amount', record.total_amount - 0.02).lte('total_amount', record.total_amount + 0.02)
+          .limit(10);
+        if (record.owner_id) q = q.eq('owner_id', record.owner_id);
+        const { data: cands } = await q;
+        const norm = (v) => String(v || '').toLowerCase().replace(/[^a-zа-яёáéíóúñ0-9]/gi, '');
+        const mine = norm(record.store_name);
+        const dup = (cands || []).find(c => {
+          const theirs = norm(c.store_name);
+          if (!theirs) return false;
+          const a = mine.slice(0, 10), b = theirs.slice(0, 10);
+          return a.startsWith(b.slice(0, 8)) || b.startsWith(a.slice(0, 8));
+        });
+        if (dup) {
+          const err = new Error(`Похоже на дубликат чека #${dup.id}: «${dup.store_name || '—'}», ${dup.receipt_date || '—'}, ${dup.total_amount} ${dup.currency || ''}. Если это действительно ДРУГОЙ чек — подтвердите сохранение на фронте (или удалите старую карточку).`);
+          err.code = 'DUPLICATE';
+          throw err;
+        }
+      }
+    } catch (e) {
+      if (e.code === 'DUPLICATE') throw e;
+      console.warn('Антидубликат: проверка не удалась (не блокируем):', e.message);
+    }
+  }
+
   const filteredRecord = filterRecordByColumns(record, columns);
   
   const { data, error } = await supabaseAdmin
@@ -2285,6 +2321,7 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
       if (subtypeOverride) rd.subtype = subtypeOverride;
       if (paymentStatusOverride) rd.payment_status = paymentStatusOverride;
       const fileUrl = await uploadToStorage(req.file.buffer, fname, user.id, req.file.mimetype || 'application/octet-stream');
+      if (req.body.allow_duplicate === '1') rd.allowDuplicate = true;
       const savedW = await saveReceiptToDB(rd, fileUrl, user, `word/text import (${pageTexts.length} стр.)`);
       return res.json({
         success: true, id: savedW.id, ...savedW, image_url: fileUrl,
@@ -2316,6 +2353,7 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
               rd.object = (object && object !== 'other') ? object : (rd.object || 'other');
               if (subtypeOverride) rd.subtype = subtypeOverride;
               if (paymentStatusOverride) rd.payment_status = paymentStatusOverride;
+              if (req.body.allow_duplicate === '1') rd.allowDuplicate = true;
               const saved = await saveReceiptToDB(rd, cropUrl, user, `multi-check ${i + 1}/${multi.boxes.length} (${auto.model})`);
               savedDocs.push({ id: saved.id, ...saved, image_url: cropUrl });
             } catch (e) {
@@ -2426,6 +2464,7 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     if (subtypeOverride) receiptData.subtype = subtypeOverride;
     // Статус оплаты — только ручной выбор на форме загрузки (AI его не определяет)
     if (paymentStatusOverride) receiptData.payment_status = paymentStatusOverride;
+    if (req.body.allow_duplicate === '1') receiptData.allowDuplicate = true;
 
     const saved = await saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod);
     
@@ -2679,6 +2718,7 @@ app.post('/api/upload-ocr-text', upload.array('pages', 60), async (req, res) => 
 
     const methodLabel = `local-uocr (unlimited-ocr, ${pageTexts.length} стр.` +
       (badPages.length ? `, пропущено: ${badPages.join(',')}` : '') + ')';
+    if (req.body.allow_duplicate === '1') receiptData.allowDuplicate = true;
     const saved = await saveReceiptToDB(receiptData, imageUrl, user, methodLabel);
     res.json({ success: true, id: saved.id, ...saved, image_url: imageUrl, skipped_pages: badPages });
   } catch (e) {
@@ -2750,6 +2790,7 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
         if (subtypeOverride) receiptData.subtype = subtypeOverride;
         if (paymentStatusOverride) receiptData.payment_status = paymentStatusOverride;
         const fileUrl = await uploadToStorage(files[0].buffer, files[0].originalname, user.id, files[0].mimetype || 'application/octet-stream');
+        if (req.body.allow_duplicate === '1') receiptData.allowDuplicate = true;
         const saved = await saveReceiptToDB(receiptData, fileUrl, user, `word/text import (${pageTexts.length} стр., async)`);
         jobW.status = 'done';
         jobW.result = { success: true, id: saved.id, ...saved, image_url: fileUrl };
@@ -2789,6 +2830,7 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
         if (paymentStatusOverride) receiptData.payment_status = paymentStatusOverride;
         receiptData.page_urls = await uploadPagesToStorage(pageBuffersL, mimeTypesL, user.id);
         const imageUrl = receiptData.page_urls[0] || await uploadToStorage(pageBuffersL[0], files[0].originalname, user.id, mimeTypesL[0]);
+        if (req.body.allow_duplicate === '1') receiptData.allowDuplicate = true;
         const saved = await saveReceiptToDB(receiptData, imageUrl, user, `local mac-ocr ${pageTexts.length}p (async)`);
         jobL.status = 'done';
         jobL.result = { success: true, id: saved.id, ...saved, image_url: imageUrl };
@@ -2835,6 +2877,7 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
       const pageUrls = Array.isArray(receiptData.page_urls) ? receiptData.page_urls : [];
       const imageUrl = pageUrls[0] || await uploadToStorage(pageBuffers[0], files[0].originalname, user.id, mimeTypes[0]);
 
+      if (req.body.allow_duplicate === '1') receiptData.allowDuplicate = true;
       const saved = await saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod);
       job.status = 'done';
       job.result = { success: true, id: saved.id, ...saved, image_url: imageUrl };
