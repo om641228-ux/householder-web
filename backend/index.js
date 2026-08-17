@@ -125,7 +125,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v52-2026-08-16', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v53-2026-08-17', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -1239,6 +1239,64 @@ function shouldUseDocumentPipeline(pageTexts) {
 }
 
 // Сборка документа из готовых текстов страниц: перевод по страницам + модули + JSON-сводка
+// ========== v53: пост-контроль валюты и итога по тексту документа ==========
+// 1) Испанская фактура/адрес (€, CIF/NIF, IGIC/IVA, FACTURA, испанские города) → валюта EUR.
+// 2) Контроль итога: LLM иногда обрезает тысячи («1.171,27 €» → 1.17) или путает валюту.
+//    Ищем суммы у слов TOTAL/IMPORTE/ИТОГО прямо в тексте (европейский формат) и сверяем
+//    контрольной суммой по строчкам (Σ items): сошлась с текстовым кандидатом → доверяем ему.
+//    Также чиним масштаб 1:1000 и сильное занижение (итог < 1% от максимальной суммы документа).
+// 3) Фолбэк даты: «9 de febrero de 2024» (исп. месяцы) и «Fecha … 09/02/2024».
+function enforceCurrencyAndTotal(data, rawText) {
+  if (!data || typeof data !== 'object') return data;
+  const text = String(rawText || '');
+  const looksSpanish = /€|\bCIF\b|\bNIF\b|\bIGIC\b|\bIVA\b|FACTURA|ESPAÑA|ESPANA|TENERIFE|SANTA CRUZ|ADEJE|MADRID|BARCELONA/i.test(text);
+  if (looksSpanish && data.currency !== 'EUR') {
+    if (data.currency) console.log(`v53: валюта ${data.currency} → EUR (признаки Испании в тексте)`);
+    data.currency = 'EUR';
+  }
+
+  // Кандидаты итога из текста: «TOTAL A PAGAR 1.171,27 €», «Итого: …»
+  const candidates = [];
+  const re = /(?:total\s*a\s*pagar|total\s*importe\s*factura|importe\s*total|total\s*factura|итого|всего\s+к\s+оплате|total)\D{0,30}?(\d{1,3}(?:[. ]\d{3})+,\d{2}|\d+,\d{2}|\d+\.\d{2})/gi;
+  let m;
+  while ((m = re.exec(text)) !== null && candidates.length < 40) {
+    const n = parseAmountLike(m[1]);
+    if (n != null && n > 0 && n < 1e9) candidates.push(n);
+  }
+  const best = candidates.length ? Math.max(...candidates) : null; // итог фактуры — обычно самая крупная сумма
+  const itemsSum = Array.isArray(data.items)
+    ? data.items.reduce((sum, it) => sum + (Number(it && it.total) || 0), 0)
+    : 0;
+  const total = data.total_amount != null ? Number(data.total_amount) : null;
+  const close = (a, b, pct) => a != null && b != null && b !== 0 && Math.abs(a - b) / b <= pct;
+
+  if (best != null) {
+    const itemsBackBest = itemsSum > 0 && close(itemsSum, best, 0.02); // контрольная сумма по строкам сошлась
+    const scaleBug = total != null && (close(total * 1000, best, 0.02) || close(total, best * 1000, 0.02));
+    const mismatch = total == null || (!close(total, best, 0.005) && (itemsBackBest || scaleBug || total < best / 100));
+    if (mismatch) {
+      console.log(`v53: итог ${total} → ${best} (${itemsBackBest ? 'контрольная сумма по строкам сошлась' : scaleBug ? 'масштаб 1:1000' : 'итог занижен в разы'})`);
+      data.total_amount = best;
+    }
+  }
+  if (data.total_amount == null && itemsSum > 0) {
+    data.total_amount = Math.round(itemsSum * 100) / 100;
+    console.log(`v53: итог восстановлен как сумма строк = ${data.total_amount}`);
+  }
+
+  // Дата-фолбэк
+  if (!data.receipt_date) {
+    const ES_MONTHS = { enero: 1, febrero: 2, marzo: 3, abril: 4, mayo: 5, junio: 6, julio: 7, agosto: 8, septiembre: 9, octubre: 10, noviembre: 11, diciembre: 12 };
+    const pad = (v) => String(v).padStart(2, '0');
+    const m1 = text.match(/(\d{1,2})\s+de\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\s+de\s+(\d{4})/i);
+    const m2 = !m1 && text.match(/fecha[^0-9]{0,30}(\d{1,2})[./-](\d{1,2})[./-](\d{4})/i);
+    if (m1) data.receipt_date = `${m1[3]}-${pad(ES_MONTHS[m1[2].toLowerCase()])}-${pad(m1[1])}`;
+    else if (m2) data.receipt_date = `${m2[3]}-${pad(m2[2])}-${pad(m2[1])}`;
+    if (data.receipt_date) console.log(`v53: дата восстановлена из текста: ${data.receipt_date}`);
+  }
+  return data;
+}
+
 async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
   const pageCount = pageTexts.length;
 
@@ -1323,6 +1381,7 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
       if (n != null && n > 0 && n < 1e9) data.total_amount = n;
     }
   }
+  enforceCurrencyAndTotal(data, raw_text);
   if (docType && docType !== 'auto') data.document_type = docType;
   else if (!data.store_name && !data.receipt_date) data.document_type = 'other';
   data._pagesRaw = pageTexts; // v33: исходные тексты vision/OCR (до табличной конвертации) → document_pages
@@ -1447,6 +1506,7 @@ async function finalizeReceiptFromPageTexts(pageTexts, currency, docType) {
       if (n != null && n > 0 && n < 1e9) data.total_amount = n;
     }
   }
+  enforceCurrencyAndTotal(data, raw_text);
   if (docType && docType !== 'auto') data.document_type = docType;
   else if (!data.document_type) data.document_type = 'receipt';
   return data;
