@@ -11,6 +11,8 @@ const XLSX = require('xlsx');
 const fs = require('fs');
 const path = require('path');
 const ws = require('ws');
+const { spawn } = require('child_process');
+const os = require('os');
 require('dotenv').config();
 
 const app = express();
@@ -125,7 +127,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v55.1-2026-08-18', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v56.2-2026-08-18', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -684,7 +686,7 @@ function buildDocumentSummaryPrompt(textSample) {
   "store_name_ru": "перевод store_name на русский",
   "receipt_date": "YYYY-MM-DD — главная дата документа (для счёта — fecha de emisión/factura; для договора — подписание)",
   "receipt_time": null,
-  "total_amount": главная сумма ЧИСЛОМ (для счёта — Total factura / importe total; для сделки — precio de compraventa; для полиса — сумма полиса) или null,
+  "total_amount": главная сумма ЧИСЛОМ (для счёта — Total factura / importe total; для сделки — precio de compraventa; для полиса — сумма полиса). ВАЖНО: если в документе НЕСКОЛЬКО фактур/накладных (на разных страницах разные номера и итоги — напр. стр.1 factura SF 11267 = 12,20, стр.2 factura SF 11253 = 218,87) — это СУММА итогов всех фактур (231,07), а не только первой, или null,
   "subtotal": null, "tax_amount": null, "tax_rate": null,
   "currency": "EUR",
   "payment_method": null, "country": null,
@@ -692,16 +694,16 @@ function buildDocumentSummaryPrompt(textSample) {
   "subtype": одно из [electricity, water, gas, internet, phone, comunidad, rent, waste, insurance_home, insurance_car, insurance_health, tax, other] или null,
   "provider": "нотариус / банк / компания-эмитент или null",
   "valid_from": "YYYY-MM-DD или null", "valid_to": "YYYY-MM-DD или null",
-  "invoice_number": "номер документа/протокола (número de protocolo) или null",
+  "invoice_number": "номер документа/протокола (número de protocolo); если фактур в документе НЕСКОЛЬКО — ВСЕ их номера через запятую; или null",
   "contract_number": "номер договора или null",
   "supply_address": "ПОЛНЫЙ адрес недвижимости/объекта как напечатан (ищи внимательно: Dirección, Finca, sitio, Calle) или null",
   "cups": null, "meter_number": null, "consumption": null, "consumption_unit": null,
   "object": "Duqe — если адрес содержит Reykjavik; Maria — если Callao; Kit — если Alcojora; иначе null",
-  "party_a": "первая сторона/выдавший НА ЯЗЫКЕ ОРИГИНАЛА: для contract/municipality/bank/tax — arrendador, vendedor, banco, Ayuntamiento de..., empresa; для invoice/bill — emisor/proveedor (кто выставил); иначе null",
-  "party_b": "вторая сторона/получатель НА ЯЗЫКЕ ОРИГИНАЛА: для contract/municipality/bank/tax — arrendatario, comprador, contribuyente; для invoice/bill — cliente/titular (покупатель, кому выставлен); иначе null",
+  "party_a": "ВЫДАВШИЙ/первая сторона ПОЛНОСТЬЮ одной строкой НА ЯЗЫКЕ ОРИГИНАЛА — название + NIF/CIF + адрес (напр. 'Ilmo. Ayto. de la Villa de Adeje, Servicio Municipal de Suministro de Agua, CALLE HERMANO PEDRO N° 15, 38670 Adeje'): для contract/municipality/bank/tax — arrendador, vendedor, banco, Ayuntamiento; для invoice/bill — emisor/proveedor (кто выставил документ); иначе null",
+  "party_b": "ПОЛУЧАТЕЛЬ/вторая сторона ПОЛНОСТЬЮ одной строкой НА ЯЗЫКЕ ОРИГИНАЛА — название + NIF/CIF + адрес (напр. 'RONESIA LIMITED, CL REYKJAVIK 7, FINCA LA QUINTA, 38660 Adeje'): для contract/municipality/bank/tax — arrendatario, comprador, contribuyente; для invoice/bill — cliente/titular (кому выставлен); если в документе нет — null",
   "doc_kind": "для официальных документов: contract (договор), certificate (справка/certificado), power_of_attorney (доверенность/poder), bank_correspondence (письма/выписки банка), gov_correspondence (переписка с госорганами: AEAT, Ayuntamiento, Seguridad Social) — иначе null",
   "summary": "1-2 предложения: о чём документ (предмет договора, сумма, сроки) НА ИСПАНСКОМ — или null",
-  "items": [ПОЗИЦИИ ДОКУМЕНТА. Для receipt/invoice (чек, упрощённая/торговая фактура — ticket, factura simplificada) — КАЖДЫЙ товар из списка покупок, без пропусков: {"name":"название как напечатано","name_ru":"перевод на русский","quantity":1,"price":цена за единицу ЧИСЛОМ,"total":сумма строки ЧИСЛОМ}. Строки «Взнос за управление отходами»/RAEE/ecotasa — тоже отдельными позициями со своей суммой. Штрихкод/EAN (13 цифр) рядом с товаром — НЕ цена. Для bill — строки начислений (ENERGÍA, CARGOS, IGIC...). Для contract/bank/municipality/tax/proposal/other — пустой массив []],
+  "items": [ПОЗИЦИИ ДОКУМЕНТА. Для receipt/invoice (чек, упрощённая/торговая фактура — ticket, factura simplificada) — КАЖДЫЙ товар из списка покупок СО ВСЕХ СТРАНИЦ, без пропусков (если документ содержит несколько фактур — позиции бери из КАЖДОЙ фактуры, не только с первой страницы!): {"name":"название как напечатано","name_ru":"перевод на русский","quantity":1,"price":цена за единицу ЧИСЛОМ,"total":сумма строки ЧИСЛОМ}. Строки «Взнос за управление отходами»/RAEE/ecotasa — тоже отдельными позициями со своей суммой. Штрихкод/EAN (13 цифр) рядом с товаром — НЕ цена. Для bill — строки начислений (ENERGÍA, CARGOS, IGIC...). Для contract/bank/municipality/tax/proposal/other — пустой массив []],
   "raw_text": null, "raw_text_ru": null
 }
 
@@ -1261,6 +1263,8 @@ function extractItemsFallback(rawText) {
       if (price == null || price <= 0 || price >= 1e6) continue;
       if (name.length < 3) name = namePart.length >= 3 ? namePart : null;
       if (!name || name.length < 3) continue;
+      // v56.2: строка итогов «11,40 7,00 0,80 → 12,20» — не товар: в названии должна быть буква
+      if (!/[a-zа-яёáéíóúñü]/i.test(name)) continue;
       if (notName.test(name) && name.length < 12) continue;
       items.push({ name: name.slice(0, 120), name_ru: null, quantity: 1, price, total: price });
     } else if (notName.test(line) || !/[a-zа-яёáéíóúñü]/i.test(line) || line.length < 4) {
@@ -1458,6 +1462,51 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
     }
   }
   enforceCurrencyAndTotal(data, raw_text);
+
+  // v56.2: документ содержит НЕСКОЛЬКО фактур (по одной на страницу) — LLM часто берёт только первую
+  // (симптом: на 2-й странице своя фактура, а в карточке её позиций и итога нет).
+  // 1) Итог = СУММА итогов разных фактур (постраничный максимум, дубликаты-итоги склеиваем).
+  // 2) Позиции добираем фолбэк-парсером по ПОЛНОМУ тексту, если сумма строк далека от итога.
+  // Блок СТРОГО ПОСЛЕ enforceCurrencyAndTotal: иначе его контрольная сумма откатит склеенный итог.
+  {
+    const chunks = String(raw_text).split(/═{2,}\s*СТРАНИЦА\s+\d+\s+из\s+\d+\s*═{2,}/);
+    const chunkMax = chunks.map(ch => {
+      // Все денежные суммы страницы (12,20 / 1.171,27 / 218.87); итог фактуры — самая крупная
+      // (ключевые слова ненадёжны: в табличной шапке «TOTAL IMP. … TOTAL FRA» слово оторвано от цифры)
+      const cand = [];
+      const reT = /(\d{1,3}(?:[. ]\d{3})+,\d{2}|\d+,\d{2}|\d+\.\d{2})/g;
+      let mm;
+      while ((mm = reT.exec(ch)) !== null && cand.length < 60) {
+        const n = parseAmountLike(mm[1]);
+        if (n != null && n > 0 && n < 1e9) cand.push(n);
+      }
+      return cand.length ? Math.max(...cand) : null;
+    }).filter(n => n != null && n > 0);
+    const nearN = (a, b) => Math.abs(a - b) <= Math.max(0.03, b * 0.01);
+    const uniq = [];
+    chunkMax.forEach(n => { if (!uniq.some(u => nearN(u, n))) uniq.push(n); });
+    const cur = Number(data.total_amount) || 0;
+    const sumAll = Math.round(uniq.reduce((a, b) => a + b, 0) * 100) / 100;
+    if (uniq.length >= 2 && cur > 0 && !nearN(cur, sumAll) && uniq.some(u => nearN(u, cur))) {
+      console.log(`v56.2: в документе ${uniq.length} разных фактур (${uniq.join(' + ')}) — итог ${cur} → ${sumAll}`);
+      data.total_amount = sumAll;
+    }
+    const itemsSum = (Array.isArray(data.items) ? data.items : []).reduce((sum, it) => sum + (Number(it && it.total) || 0), 0);
+    if (Number(data.total_amount) > 0 && itemsSum > 0 && itemsSum < Number(data.total_amount) * 0.6) {
+      const fb2 = extractItemsFallback(raw_text);
+      const fb2Sum = fb2.reduce((sum, it) => sum + (Number(it.total) || 0), 0);
+      if (fb2.length > data.items.length && fb2Sum > itemsSum) {
+        console.log(`v56.2: позиции добраны со всех страниц: было ${data.items.length} (Σ${itemsSum.toFixed(2)}) → стало ${fb2.length} (Σ${fb2Sum.toFixed(2)})`);
+        data.items = fb2;
+        if (data.subtotal == null && fb2Sum > 0) {
+          data.subtotal = Math.round(fb2Sum * 100) / 100;
+          const tax = Math.round((Number(data.total_amount) - fb2Sum) * 100) / 100;
+          if (tax > 0 && data.tax_amount == null) data.tax_amount = tax;
+        }
+        await translateItemNames(data.items);
+      }
+    }
+  }
   if (docType && docType !== 'auto') data.document_type = docType;
   else if (!data.store_name && !data.receipt_date) data.document_type = 'other';
   data._pagesRaw = pageTexts; // v33: исходные тексты vision/OCR (до табличной конвертации) → document_pages
@@ -2850,13 +2899,60 @@ app.get('/api/doc-job/:id', (req, res) => {
   res.json(job);
 });
 
+// ========== PDF → MARKDOWN через MarkItDown (v56) ==========
+// Цифровые PDF (фактуры/счета с текстовым слоем) идут в распознавание по ТЕКСТУ,
+// без vision/OCR — точнее (таблицы, реквизиты, оба контрагента) и бесплатно.
+// Нужен CLI: pip install "markitdown[pdf]" (на Railway — python3 + пакет в образе).
+// CLI нет — возвращаем null, вызывающий код уходит в обычный vision-конвейер.
+let markitdownMissing = false;
+
+function runMarkitdownCli(tmpPath) {
+  return new Promise((resolve) => {
+    if (markitdownMissing) return resolve(null);
+    const attempt = (cmd, args, isFallback) => {
+      let proc;
+      try { proc = spawn(cmd, args, { timeout: 120000 }); } catch (_) { return resolve(null); }
+      let out = ''; let killed = false;
+      proc.stdout.on('data', d => {
+        out += d.toString();
+        if (out.length > 3000000 && !killed) { killed = true; try { proc.kill(); } catch (_) {} }
+      });
+      proc.stderr.on('data', () => {});
+      proc.on('error', (e) => {
+        if (e.code === 'ENOENT' && !isFallback) return attempt('python3', ['-m', 'markitdown', tmpPath], true);
+        if (e.code === 'ENOENT') {
+          markitdownMissing = true;
+          console.warn('markitdown не найден (pip install "markitdown[pdf]") — PDF идут через vision');
+        }
+        resolve(null);
+      });
+      proc.on('close', (code) => resolve(code === 0 && out.trim().length >= 40 ? out.trim() : null));
+    };
+    attempt('markitdown', [tmpPath], false);
+  });
+}
+
+async function pdfToMarkdown(buffer, filename) {
+  try {
+    const tmp = path.join(os.tmpdir(), `markitdown-${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`);
+    fs.writeFileSync(tmp, buffer);
+    const md = await runMarkitdownCli(tmp);
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    if (md) console.log(`MarkItDown: «${filename}» → ${md.length} симв. markdown`);
+    return md;
+  } catch (e) {
+    console.warn('pdfToMarkdown:', e.message);
+    return null;
+  }
+}
+
 app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, res) => {
   try {
     const token = req.query.token || req.body.token;
     const user = tokens.get(token);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
-    const files = req.files || [];
+    let files = req.files || [];
     if (!files.length) return res.status(400).json({ error: 'No page files provided' });
 
     const currency = req.body.currency || 'auto';
@@ -2896,6 +2992,60 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
         jobW.error = e.message;
       }
       return;
+    }
+
+    // PDF → MARKDOWN (v56): фронт приложил исходные PDF (их имена — в pdf_source_names).
+    // Пробуем MarkItDown; если КАЖДЫЙ PDF дал markdown — vision не нужен, идём по тексту.
+    let pdfSourceNames = [];
+    try { pdfSourceNames = JSON.parse(req.body.pdf_source_names || '[]'); } catch (_) { pdfSourceNames = []; }
+    if (pdfSourceNames.length) {
+      const srcSet = new Set(pdfSourceNames);
+      const pdfSrcs = files.filter(f => srcSet.has(f.originalname));
+      const pageImgs = files.filter(f => !srcSet.has(f.originalname));
+      const mdTexts = [];
+      let allOk = pdfSrcs.length > 0;
+      for (const f of pdfSrcs) {
+        const md = await pdfToMarkdown(f.buffer, f.originalname);
+        if (md && md.trim().length >= 40) mdTexts.push(md); else { allOk = false; break; }
+      }
+      if (allOk && mdTexts.length) {
+        console.log(`MarkItDown-импорт: ${pdfSrcs.map(f => f.originalname).join(', ')} → ${mdTexts.length} док. (vision пропущен)`);
+        const jobIdM = createDocJob(mdTexts.length);
+        res.json({ success: true, jobId: jobIdM, async: true });
+        const jobM = docJobs.get(jobIdM);
+        const t0m = Date.now();
+        try {
+          const receiptData = await finalizeDocumentFromPageTexts(mdTexts, currency, docType, () => { jobM.stage = 'translate'; jobM.translateDone++; });
+          receiptData.docType = docType === 'auto' ? (receiptData.document_type || 'other') : docType;
+          receiptData.object = (object && object !== 'other') ? object : (receiptData.object || 'other');
+          if (subtypeOverride) receiptData.subtype = subtypeOverride;
+          if (paymentStatusOverride) receiptData.payment_status = paymentStatusOverride;
+          // Страницы для просмотра: JPEG-страницы, если есть; иначе сам PDF
+          const storeFiles = pageImgs.length ? pageImgs : pdfSrcs;
+          const bufs = []; const mimes = [];
+          for (const f of storeFiles) {
+            const isPdf = f.mimetype === 'application/pdf' || /\.pdf$/i.test(f.originalname || '');
+            bufs.push(isPdf ? f.buffer : await processImage(f.buffer));
+            mimes.push(isPdf ? 'application/pdf' : 'image/jpeg');
+          }
+          receiptData.page_urls = await uploadPagesToStorage(bufs, mimes, user.id);
+          const imageUrl = receiptData.page_urls[0] || null;
+          if (req.body.allow_duplicate === '1') receiptData.allowDuplicate = true;
+          const saved = await saveReceiptToDB(receiptData, imageUrl, user, `pdf markdown (markitdown, ${mdTexts.length} док., async)`);
+          jobM.status = 'done';
+          jobM.result = { success: true, id: saved.id, ...saved, image_url: imageUrl };
+          console.log(`Задача ${jobIdM}: markitdown ${mdTexts.length} док. готов за ${Math.round((Date.now() - t0m) / 1000)}с`);
+        } catch (e) {
+          console.error(`Задача ${jobIdM} (markitdown) упала:`, e);
+          jobM.status = 'error';
+          jobM.error = e.message;
+        }
+        return;
+      }
+      // MarkItDown недоступен/не справился — PDF-источники убираем, страницы-картинки идут в vision как обычно
+      console.log('MarkItDown не сработал (нет CLI или скан без текстового слоя) — обычный vision-конвейер');
+      files = pageImgs;
+      if (!files.length) files = pdfSrcs; // крайний случай: только PDF без картинок — отдаём PDF в vision
     }
 
     // ЛОКАЛЬНЫЙ MAC OCR (v52): фронт прислал готовые тексты страниц (ocr_texts, JSON-массив) — vision не нужен,

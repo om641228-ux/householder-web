@@ -1238,3 +1238,72 @@ if not exists party_a/party_b/summary text. Без неё всё работае�
 - bill: «Титулар» (party_b). Чек (receipt) — без изменений.
 Проверки: node --check OK; esbuild OK; eslint 0 ошибок / 3 прежних warning.
 Деплой: оба сервиса; миграцию v29 выполнить в Supabase.
+
+## v56 (2026-08-18) — оба контрагента полностью + MarkItDown (PDF → Markdown) перед распознаванием
+Запрос: «добавь в карту распознавания договора и фактур — обоих контрагентов; добавь MarkItDown
+перевод PDF в Markdown перед распознаванием» (скрин: фактура воды Adeje, emisor + RONESIA LIMITED).
+**Контрагенты (index.js):** промпт party_a/party_b усилен — ПОЛНОСТЬЮ одной строкой на языке
+оригинала: название + NIF/CIF + адрес. party_a = выдавший (contract/municipality/bank/tax:
+arrendador/vendedor/banco/Ayuntamiento; invoice/bill: emisor/proveedor), party_b = получатель
+(arrendatario/comprador/contribuyente; invoice/bill: cliente/titular). Вывод в карточках — уже из v55.1.
+**MarkItDown — backend (index.js, build v56-2026-08-18):**
+- pdfToMarkdown(buffer, filename): temp-файл → CLI `markitdown` (fallback `python3 -m markitdown`),
+  таймаут 120с, ≥40 симв.; ENOENT → markitdownMissing, тихо уходим в vision. Requires: child_process, os.
+- upload-document-pages: новая ветка ПОСЛЕ Word и ДО ocr_texts/vision — фронт прикладывает исходные
+  PDF полем pages + `pdf_source_names` (JSON имён). Все PDF конвертированы → pageTexts=markdown,
+  финализация без vision (метод `pdf markdown (markitdown, N док., async)`); хранение: JPEG-страницы,
+  иначе сам PDF. Не вышло → PDF-источники отбрасываются, картинки идут в vision как раньше.
+  `const files` → `let files`.
+- Railway: нужен python3 + `pip install "markitdown[pdf]"` в образе; без него — обычный vision.
+**MarkItDown — frontend (App.js, метка v56):**
+- pdfSourcesRef (useRef([])) — исходные PDF; заполняется в обеих точках выбора файлов и в
+  processFolderFiles (защита от устаревших). Страж: вся пачка — страницы PDF (/_p\d+\.jpg$/).
+- local-mac-ocr: перед Vision-циклом — POST исходного PDF на `${macBase}/pdf-md`; все PDF дали
+  текст ≥40 симв. → ocrTexts = markdown, Vision пропущен; иначе обычный /ocr по страницам.
+- прочие модели: исходные PDF прикладываются в formData (pages + pdf_source_names).
+**MarkItDown — mac-ocr-server.py:** мягкий импорт markitdown (_md), эндпоинт POST /pdf-md?name=
+(200 {text}, 503 нет пакета, 422 нет текстового слоя → фронт уходит в Vision), GET / отдаёт
+"markitdown": true/false; docstring: `./venv/bin/pip install ocrmac "markitdown[pdf]"`.
+Проверки: node --check OK; esbuild OK; eslint 0 ошибок / 3 прежних warning; python ast.parse OK.
+Деплой: index.js + App.js + mac-ocr-server.py (на Mac доустановить markitdown); миграций БД нет.
+
+## v56.1 (2026-08-18) — проверка MarkItDown + цветные и информативные прогрессбары
+Запрос: «markitdown[pdf] — сделай проверку работает это или нет; при загрузке и распознавании
+чтобы прогрессбар показывал проценты другим цветом; при пакетной обработке — информативный прогресс бар».
+**Проверка MarkItDown (в песочнице, pip install "markitdown[pdf]"):**
+- CLI `markitdown file.pdf` → markdown на stdout, exit 0 — все данные тестовой фактуры (оба
+  контрагента, дата, сумма) извлечены чисто; `python3 -m markitdown` — идентичный вывод (резервный
+  вызов бэкенда работает); PDF без текстового слоя → 0 симв. → срабатывает страж ≥40 → fallback
+  в vision/OCR. ВЫВОД: интеграция рабочая, команды вызываются именно так, как написано в коде.
+**Frontend (App.js, метка v56.1):**
+- Главный прогресс: процент янтарным (#ffd54f, жирный, тень) — и при загрузке, и при AI/локальном
+  распознавании; цвет полосы по этапу: загрузка — синяя (rgba(66,165,245,.55)), распознавание —
+  зелёная (rgba(102,187,106,.55)). Скан-оверлей: полоса синяя на загрузке/зелёная на распознавании,
+  процент янтарным #ffd54f 16px 800.
+- Пакетная обработка: блок folder-progress переписан на IIFE — общий % ВНУТРИ полосы (полоса 20px,
+  градиент синий→зелёный; фаза конвертации — синий градиент), заголовок «Распознавание файлов —
+  N из M», этап текущего файла цветом (⬆️ загрузка X% / 🤖 распознаётся AI… / ✅ готово / примечание
+  о повторе), счётчики ✅/❌/🔁 и ETA: folderStartRef (старт фазы recognizing) → «⏱ прошло Nс,
+  осталось ~Mм Sс» по среднему времени на файл.
+Backend не менялся (остаётся v56-2026-08-18).
+Проверки: esbuild OK; eslint 0 ошибок / 3 прежних warning.
+Деплой: только фронтенд (App.js).
+
+## v56.2 (2026-08-18) — многостраничный PDF с НЕСКОЛЬКИМИ фактурами: страница 2 попадала в raw_text, но не в карточку
+Запрос: «исправь — распознавание работает только на первую страницу, вторую не распознает, в таблице её нет»
+(скрин: чек #811, local mac-ocr 2p — стр.1 factura SF 11267 = 12,20 (2 позиции), стр.2 SF 11253 = 218,87
+(5 позиций); карточка взяла только первую: итог 12,20, ПОЗИЦИИ (2)).
+**Backend (index.js, build v56.2-2026-08-18):**
+- Промпт buildDocumentSummaryPrompt: total_amount при нескольких фактурах = СУММА всех итогов;
+  invoice_number — все номера через запятую; items — позиции СО ВСЕХ СТРАНИЦ/фактур, не только первой.
+- Детерминированная страховка в finalizeDocumentFromPageTexts СТРОГО ПОСЛЕ enforceCurrencyAndTotal
+  (иначе его контрольная сумма откатит склеенный итог к 218,87 — Σбаз 215,95 ≈ 218,87 в пределах 2%!):
+  1) постраничный максимум ВСЕХ денежных сумм (ключевые слова ненадёжны: шапка «TOTAL IMP.…TOTAL FRA»
+     оторвана от значений — проверено тестом); ≥2 разных итога и текущий total ≈ одному из них →
+     total = сумме (12,20+218,87=231,07); 2) если Σitems < total*0.6 → позиции добираются
+     extractItemsFallback по полному тексту, subtotal=Σбаз и tax_amount=разница (IGIC) восстанавливаются,
+     translateItemNames для name_ru.
+- extractItemsFallback: + отсев строк-итогов без букв («11,40 7,00 0,80 → 12,20» больше не товар).
+Тесты (node): кейс пользователя 12,20→231,07 срабатывает; регрессы — одна фактура на 2 стр. и
+LLM-вернул-верную-сумму — не трогаются; фолбэк-парсер даёт 7 позиций Σ215,95.
+Frontend не менялся (остаётся v56.1). Деплой: только index.js.
