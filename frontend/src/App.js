@@ -2406,6 +2406,8 @@ function App() {
 
   const [selectedFiles, setSelectedFiles] = useState([]);
   const pdfExpandedRef = useRef(false); // файлы — JPEG-страницы из PDF (v32.4): распознаём как ОДИН документ
+  const pdfSourcesRef = useRef([]); // v56: исходные PDF — для MarkItDown (текстовый слой вместо OCR/vision)
+  const folderStartRef = useRef(0); // v56.1: старт пакетной обработки — для оценки оставшегося времени
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
   const [previewUrls, setPreviewUrls] = useState([]);
   const [previewUrl, setPreviewUrl] = useState(null);
@@ -2791,6 +2793,7 @@ function App() {
     const picked = Array.from(e.target.files).filter(f => f.type.startsWith('image/') || isPdfFile(f) || isWordFile(f));
     if (picked.length > 0) {
       pdfExpandedRef.current = picked.some(isPdfFile); // v32.4: PDF → JPEG → один документ
+      pdfSourcesRef.current = picked.filter(isPdfFile); // v56: исходники для MarkItDown
       setPreparingPdf(picked.some(isPdfFile));
       const files = await expandFilesWithPdf(picked);
       setPreparingPdf(false);
@@ -2811,6 +2814,7 @@ function App() {
     const picked = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/') || isPdfFile(f) || isWordFile(f));
     if (picked.length > 0) {
       pdfExpandedRef.current = picked.some(isPdfFile); // v32.4: PDF → JPEG → один документ
+      pdfSourcesRef.current = picked.filter(isPdfFile); // v56: исходники для MarkItDown
       setPreparingPdf(picked.some(isPdfFile));
       const files = await expandFilesWithPdf(picked);
       setPreparingPdf(false);
@@ -2876,7 +2880,29 @@ function App() {
             : `Mac OCR не отвечает (${macBase}): ${probe.detail}.\nЗапустите python3 mac-ocr-server.py. Если сервер запущен, а ошибка остаётся — браузер блокирует http://127.0.0.1 с https-страницы: поднимите туннель «cloudflared tunnel --url http://127.0.0.1:8787» и задайте его URL через ⚙.`);
         }
         const ocrTexts = [];
-        for (let i = 0; i < prepared.length; i++) {
+        // v56: вся пачка — страницы из PDF → пробуем MarkItDown на Mac (текстовый слой цифрового PDF),
+        // Vision не нужен; не вышло (скан без текстового слоя / нет пакета markitdown) — обычный OCR
+        const pdfSrcsL = (pdfSourcesRef.current || []).filter(isPdfFile);
+        const allFromPdfL = pdfSrcsL.length > 0 && prepared.length > 0 && prepared.every(f => /_p\d+\.jpg$/i.test(f.name || ''));
+        let pdfMdOk = false;
+        if (allFromPdfL) {
+          const mdTexts = [];
+          for (const f of pdfSrcsL) {
+            let r = null;
+            try {
+              r = await fetch(`${macOcrBase()}/pdf-md?name=${encodeURIComponent(f.name || 'doc.pdf')}`, { method: 'POST', body: f });
+            } catch (_) { r = null; }
+            const j = r ? await r.json().catch(() => ({})) : {};
+            if (!r || !r.ok || !j.text || j.text.trim().length < 40) break;
+            mdTexts.push(j.text);
+          }
+          if (mdTexts.length && mdTexts.length === pdfSrcsL.length) {
+            ocrTexts.push(...mdTexts);
+            pdfMdOk = true;
+            console.log('MarkItDown (Mac): текстовый слой PDF получен, Vision OCR пропущен');
+          }
+        }
+        if (!pdfMdOk) for (let i = 0; i < prepared.length; i++) {
           setProgressStage('upload');
           setUploadProgress(Math.round(((i + 1) / prepared.length) * 30));
           let r;
@@ -2900,6 +2926,13 @@ function App() {
         ? await Promise.all(prepared.map(f => (isPdfFile(f) ? f : compressImageFile(f, 1600, 2400, 0.72, true).catch(() => f))))
         : prepared;
       for (const f of pagesToUpload) formData.append('pages', f);
+      // v56: вся пачка — из PDF → прикладываем исходники; бэкенд попробует MarkItDown (PDF→Markdown) ДО vision
+      const pdfSrcsUp = (pdfSourcesRef.current || []).filter(isPdfFile);
+      const allFromPdfUp = pdfSrcsUp.length > 0 && pagesToUpload.length > 0 && pagesToUpload.every(f => /_p\d+\.jpg$/i.test(f.name || ''));
+      if (effModel !== 'local-mac-ocr' && allFromPdfUp) {
+        for (const f of pdfSrcsUp) formData.append('pages', f);
+        formData.append('pdf_source_names', JSON.stringify(pdfSrcsUp.map(f => f.name || 'document.pdf')));
+      }
       if (allowDuplicate) formData.append('allow_duplicate', '1');
       formData.append('model', effModel);
       formData.append('currency', currency);
@@ -3221,6 +3254,7 @@ function App() {
   // прогресс — в folderProgress, итог — folderResults
   const recognizeFilesSequentially = async (allFiles) => {
     setFolderProgress(prev => ({ ...prev, phase: 'recognizing', current: 0, total: allFiles.length, fileRatio: 0 }));
+    folderStartRef.current = Date.now();
     setRecognizing(true);
     const results = [];
     // v54.4: пакетный Mac OCR — проверяем, что бэкенд принимает готовые тексты (v52+)
@@ -3353,6 +3387,7 @@ function App() {
     // Фаза 1 — конвертация PDF в изображения страниц: показываем в UI (раньше шла «вслепую», только console.log)
     setFolderProgress({ active: true, phase: 'converting', convertFile: '', convertPage: 0, convertTotal: 0, current: 0, total: 0, success: 0, errors: 0, retries: 0, currentFile: '', fileRatio: 0 });
     setFolderResults([]);
+    pdfSourcesRef.current = picked.filter(isPdfFile); // v56: исходники для MarkItDown
     const allFiles = await expandFilesWithPdf(picked, (name, page, total) => {
       setFolderProgress(prev => ({ ...prev, phase: 'converting', convertFile: name, convertPage: page, convertTotal: total }));
     });
@@ -5788,17 +5823,18 @@ ${bodyHtml}
                   <span style={{
                     position: 'absolute', left: 0, top: 0, bottom: 0,
                     width: `${uploadProgress}%`,
-                    background: 'rgba(255,255,255,0.28)',
+                    // v56.1: цвет полосы по этапу — загрузка синяя, распознавание зелёное
+                    background: progressStage === 'upload' ? 'rgba(66,165,245,0.55)' : 'rgba(102,187,106,0.55)',
                     transition: 'width 0.4s ease'
                   }} />
                   <span style={{ position: 'relative', zIndex: 1 }}>
                     {progressStage === 'upload'
-                      ? `⬆️ Загрузка… ${uploadProgress}%`
+                      ? <>⬆️ Загрузка… <span style={{ color: '#ffd54f', fontWeight: 800, textShadow: '0 1px 2px rgba(0,0,0,0.35)' }}>{uploadProgress}%</span></>
                       : progressStage === 'analyze'
                         ? '🔍 Анализирую страницы…'
                         : progressStage === 'local'
-                          ? `🖥 Локальный OCR… ${uploadProgress}%`
-                          : `🤖 Распознавание AI… ${uploadProgress}%`}
+                          ? <>🖥 Локальный OCR… <span style={{ color: '#ffd54f', fontWeight: 800, textShadow: '0 1px 2px rgba(0,0,0,0.35)' }}>{uploadProgress}%</span></>
+                          : <>🤖 Распознавание AI… <span style={{ color: '#ffd54f', fontWeight: 800, textShadow: '0 1px 2px rgba(0,0,0,0.35)' }}>{uploadProgress}%</span></>}
                   </span>
                 </>
               ) : recognizing ? (
@@ -5822,7 +5858,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-17 · v55.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-17 · v56.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -5969,55 +6005,71 @@ ${bodyHtml}
             )}
           </div>
 
-          {folderProgress.active && (
+          {folderProgress.active && (() => {
+            // v56.1: информативный пакетный прогресс — общий % внутри полосы, этап текущего файла,
+            // счётчики успеха/ошибок и оценка оставшегося времени (по среднему на файл)
+            const fp = folderProgress;
+            const isConvert = fp.phase === 'converting';
+            const convPct = fp.convertTotal > 0 ? Math.round(fp.convertPage / fp.convertTotal * 100) : 5;
+            const overallPct = fp.total > 0 ? Math.min(100, Math.round(((fp.current - 1 + (fp.fileRatio || 0)) / fp.total) * 100)) : 0;
+            const pct = isConvert ? convPct : overallPct;
+            const barColor = isConvert ? 'linear-gradient(90deg,#42a5f5,#1e88e5)' : 'linear-gradient(90deg,#42a5f5,#66bb6a)';
+            const fr = fp.fileRatio || 0;
+            const filePhase = fp.retryNote ? fp.retryNote
+              : fr <= 0 ? ''
+              : fr < 0.5 ? ` — ⬆️ загрузка ${Math.round(fr * 200)}%`
+              : fr < 1 ? ' — 🤖 распознаётся AI…'
+              : ' — ✅ готово';
+            let etaText = '';
+            if (!isConvert && fp.current > 1 && fp.total > 0 && folderStartRef.current) {
+              const elapsed = (Date.now() - folderStartRef.current) / 1000;
+              const done = fp.current - 1 + fr;
+              if (done > 0) {
+                const remain = Math.max(0, fp.total - done) * (elapsed / done);
+                etaText = ` · ⏱ прошло ${Math.round(elapsed)}с, осталось ~${remain >= 60 ? `${Math.floor(remain / 60)}м ${Math.round(remain % 60)}с` : `${Math.round(remain)}с`}`;
+              }
+            }
+            return (
             <div className="folder-progress">
-              {folderProgress.phase === 'converting' ? (
-                <>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                    <strong>📄 Конвертация PDF в изображения...</strong>
-                    {folderProgress.convertTotal > 0 && <span>стр. {folderProgress.convertPage} / {folderProgress.convertTotal}</span>}
-                  </div>
-                  <div className="folder-progress-bar">
-                    <div style={{
-                      width: `${folderProgress.convertTotal > 0 ? (folderProgress.convertPage / folderProgress.convertTotal * 100) : 5}%`,
-                      transition: 'width 0.3s ease'
-                    }} />
-                  </div>
-                  <p style={{ fontSize: 12, color: '#555', marginTop: 6 }}>
-                    {folderProgress.convertFile || 'Подготовка…'}
-                    {folderProgress.convertTotal > 0 && ` — страница ${folderProgress.convertPage} из ${folderProgress.convertTotal}`}
-                  </p>
-                  <p style={{ fontSize: 12, color: '#7f8c8d', marginTop: 4 }}>
-                    Многостраничные PDF раскладываются по страницам — каждая станет отдельным документом. Дальше начнётся распознавание.
-                  </p>
-                </>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                <strong>{isConvert ? '📄 Конвертация PDF в изображения…' : ` Распознавание файлов — ${Math.min(fp.current, fp.total) || 1} из ${fp.total}`}</strong>
+                <span style={{ fontWeight: 800, color: isConvert ? '#1e88e5' : '#2e7d32' }}>{pct}%</span>
+              </div>
+              {/* Процент ВНУТРИ полосы — виден и на заполненной, и на пустой части */}
+              <div className="folder-progress-bar" style={{ position: 'relative', height: 20, borderRadius: 10, background: '#e0e0e0', overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%', borderRadius: 10,
+                  width: `${pct}%`,
+                  background: barColor,
+                  transition: 'width 0.4s ease'
+                }} />
+                <span style={{
+                  position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 12, fontWeight: 800, color: '#333', mixBlendMode: 'normal', pointerEvents: 'none'
+                }}>
+                  {isConvert ? `стр. ${fp.convertPage} / ${fp.convertTotal}` : `${pct}%`}
+                </span>
+              </div>
+              <p style={{ fontSize: 12, color: '#555', marginTop: 6 }}>
+                {isConvert
+                  ? (fp.convertFile || 'Подготовка…') + (fp.convertTotal > 0 ? ` — страница ${fp.convertPage} из ${fp.convertTotal}` : '')
+                  : <>{fp.currentFile}<span style={{ color: '#1e88e5', fontWeight: 600 }}>{filePhase}</span></>}
+              </p>
+              {isConvert ? (
+                <p style={{ fontSize: 12, color: '#7f8c8d', marginTop: 4 }}>
+                  Многостраничные PDF раскладываются по страницам — каждая станет отдельным документом. Дальше начнётся распознавание.
+                </p>
               ) : (
-                <>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                    <strong> Распознавание файлов...</strong>
-                    <span>{folderProgress.current} / {folderProgress.total} · {folderProgress.total > 0 ? Math.round(((folderProgress.current - 1 + (folderProgress.fileRatio || 0)) / folderProgress.total) * 100) : 0}%</span>
-                  </div>
-                  <div className="folder-progress-bar">
-                    <div style={{
-                      width: `${folderProgress.total > 0 ? ((folderProgress.current - 1 + (folderProgress.fileRatio || 0)) / folderProgress.total * 100) : 0}%`,
-                      transition: 'width 0.5s ease'
-                    }} />
-                  </div>
-                  <p style={{ fontSize: 12, color: '#555', marginTop: 6 }}>
-                    {folderProgress.currentFile}
-                    {folderProgress.retryNote || ''}
-                    {!folderProgress.retryNote && (folderProgress.fileRatio || 0) > 0 && (folderProgress.fileRatio || 0) < 0.5 && ` — загрузка ${Math.round((folderProgress.fileRatio || 0) * 200)}%`}
-                    {!folderProgress.retryNote && (folderProgress.fileRatio || 0) >= 0.5 && (folderProgress.fileRatio || 0) < 1 && ' — распознаётся AI…'}
-                  </p>
-                  <p style={{ fontSize: 13, color: '#27ae60', marginTop: 4 }}>
-                    Успешно: {folderProgress.success} &nbsp;|&nbsp;
-                    <span style={{ color: '#e74c3c' }}>❌ Ошибок: {folderProgress.errors}</span>
-                    {(folderProgress.retries || 0) > 0 && <span style={{ color: '#7f8c8d' }}> &nbsp;|&nbsp; 🔁 повторов после сбоев сети: {folderProgress.retries}</span>}
-                  </p>
-                </>
+                <p style={{ fontSize: 13, color: '#27ae60', marginTop: 4 }}>
+                  ✅ Успешно: {fp.success} &nbsp;|&nbsp;
+                  <span style={{ color: '#e74c3c' }}>❌ Ошибок: {fp.errors}</span>
+                  {(fp.retries || 0) > 0 && <span style={{ color: '#7f8c8d' }}> &nbsp;|&nbsp; 🔁 повторов: {fp.retries}</span>}
+                  <span style={{ color: '#7f8c8d' }}>{etaText}</span>
+                </p>
               )}
             </div>
-          )}
+            );
+          })()}
 
           {folderResults.length > 0 && !folderProgress.active && (
             <div style={{ marginTop: 15, padding: 15, background: '#e8f5e9', borderRadius: 8, maxHeight: 300, overflowY: 'auto' }}>
@@ -7287,9 +7339,9 @@ ${bodyHtml}
               <div style={{ textAlign: 'center', marginTop: 40, fontSize: 16, opacity: 0.9 }}>
                 {progressStage === 'upload' ? '⬆️ Загружаю файл…' : '🤖 Распознаю текст…'}
                 <div style={{ margin: '16px auto 0', maxWidth: 320, height: 10, borderRadius: 6, background: 'rgba(255,255,255,0.15)', overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${uploadProgress}%`, borderRadius: 6, background: '#4caf50', transition: 'width 0.4s ease' }} />
+                  <div style={{ height: '100%', width: `${uploadProgress}%`, borderRadius: 6, background: progressStage === 'upload' ? '#42a5f5' : '#4caf50', transition: 'width 0.4s ease' }} />
                 </div>
-                <div style={{ marginTop: 8, fontSize: 14, opacity: 0.8 }}>{uploadProgress}%</div>
+                <div style={{ marginTop: 8, fontSize: 16, fontWeight: 800, color: '#ffd54f' }}>{uploadProgress}%</div>
               </div>
             )}
             {!recognizing && lastSavedReceipt && (
