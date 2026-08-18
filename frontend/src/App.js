@@ -2568,21 +2568,23 @@ function App() {
 
   const [selectedReceiptIds, setSelectedReceiptIds] = useState(new Set());
   const [viewModal, setViewModal] = useState(null);
-  const [itemsPage, setItemsPage] = useState(1); // v56.5: страница таблицы позиций в карточке
-  const viewModalId = viewModal?.id ?? null;
-  useEffect(() => { setItemsPage(1); }, [viewModalId]);
   const [fullscreenImage, setFullscreenImage] = useState(null);
   const [fsZoom, setFsZoom] = useState(false); // второй клик по фото в полноэкранном режиме — натуральный размер
   const [modalPageIdx, setModalPageIdx] = useState(0); // выбранная страница в галерее документа (модалка)
+  // v56.6: ВСЕ листалки карточки синхронизированы — галерея страниц, текст документа и таблица
+  // позиций показывают одну и ту же страницу (перелистнул в одном меню → перелистнулись остальные)
+  const itemsPage = modalPageIdx + 1;
+  const setItemsPage = (p) => setModalPageIdx(Math.max(0, p - 1));
   const [editMode, setEditMode] = useState(false);     // ручное редактирование полей в карточке
   const [editForm, setEditForm] = useState({});
   const [savingEdit, setSavingEdit] = useState(false);
 
   // При открытии другого чека галерея начинается с первой страницы, режим редактирования сбрасывается
-  useEffect(() => { setModalPageIdx(0); setEditMode(false); setPageTextLang('ru'); setAnnualFormView(false); setDocTextPage(0); setDocTextMode('both'); }, [viewModal?.id]);
+  useEffect(() => { setModalPageIdx(0); setEditMode(false); setPageTextLang('ru'); setAnnualFormView(false); setDocTextMode('both'); }, [viewModal?.id]);
   const [annualFormView, setAnnualFormView] = useState(false); // годовая отчётность: таблица | вид официальной формы (v32.2)
   const [pageTextLang, setPageTextLang] = useState('ru'); // текст страницы рядом с галереей: перевод | оригинал | обе
-  const [docTextPage, setDocTextPage] = useState(0);     // двуязычный просмотр документа (v35): страница
+  const docTextPage = modalPageIdx;                      // v56.6: текст документа — та же страница, что в галерее
+  const setDocTextPage = setModalPageIdx;
   const [docTextMode, setDocTextMode] = useState('both'); // both (построчно/колонки) | ru | orig
   // Ширина окна — адаптивная раскладка карточки документа (<900px: изображение и перевод — вертикально, для мобильных)
   const [winWidth, setWinWidth] = useState(window.innerWidth);
@@ -5882,7 +5884,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-17 · v56.5 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-17 · v56.6 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
