@@ -2568,6 +2568,9 @@ function App() {
 
   const [selectedReceiptIds, setSelectedReceiptIds] = useState(new Set());
   const [viewModal, setViewModal] = useState(null);
+  const [itemsPage, setItemsPage] = useState(1); // v56.5: страница таблицы позиций в карточке
+  const viewModalId = viewModal?.id ?? null;
+  useEffect(() => { setItemsPage(1); }, [viewModalId]);
   const [fullscreenImage, setFullscreenImage] = useState(null);
   const [fsZoom, setFsZoom] = useState(false); // второй клик по фото в полноэкранном режиме — натуральный размер
   const [modalPageIdx, setModalPageIdx] = useState(0); // выбранная страница в галерее документа (модалка)
@@ -5656,13 +5659,33 @@ ${bodyHtml}
                 })()}
                 {['annual_accounts', 'tax_form'].includes(viewModal.document_type) ? (
                   renderAnnualAccountsCard(viewModal)
-                ) : (['contract', 'municipality', 'bank', 'tax'].includes(viewModal.document_type) && !(viewModal.items || []).length) ? null : (
+                ) : (['contract', 'municipality', 'bank', 'tax'].includes(viewModal.document_type) && !(viewModal.items || []).length) ? null : (() => {
+                  // v56.5: позиции знают свою страницу документа (item.page) — перед таблицей листалка
+                  // «Стр. N из M», в таблице — только позиции выбранной страницы. Номера строк сквозные.
+                  const allItems = viewModal.items || [];
+                  const maxPage = allItems.reduce((m, it) => Math.max(m, Number(it && it.page) || 1), 1);
+                  const paged = maxPage > 1;
+                  const cur = Math.min(Math.max(1, itemsPage), maxPage);
+                  const rowsIt = allItems.map((item, i) => ({ item, i })).filter(x => !paged || (Number(x.item && x.item.page) || 1) === cur);
+                  const pageBtn = {
+                    width: 30, height: 30, borderRadius: '50%', border: '1px solid #d0d7de',
+                    background: '#fff', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 0
+                  };
+                  return (
                 <div className="info-block">
-                  <h3>{['invoice', 'proposal', 'bill'].includes(viewModal.document_type) ? 'Позиции' : 'Товары'} ({viewModal.items?.length || 0})</h3>
+                  <h3>{['invoice', 'proposal', 'bill'].includes(viewModal.document_type) ? 'Позиции' : 'Товары'} ({allItems.length})</h3>
+                  {paged && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '2px 0 10px' }}>
+                      <button onClick={() => setItemsPage(cur - 1)} disabled={cur <= 1} style={{ ...pageBtn, opacity: cur <= 1 ? 0.35 : 1 }}>‹</button>
+                      <span style={{ fontWeight: 700 }}>Стр. {cur} из {maxPage}</span>
+                      <button onClick={() => setItemsPage(cur + 1)} disabled={cur >= maxPage} style={{ ...pageBtn, opacity: cur >= maxPage ? 0.35 : 1 }}>›</button>
+                      <span style={{ fontSize: 12, color: '#7f8c8d' }}>позиций на странице: {rowsIt.length} (всего {allItems.length})</span>
+                    </div>
+                  )}
                   <table className="items-table">
                     <thead><tr><th>№</th><th>Товар</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead>
                     <tbody>
-                      {(viewModal.items || []).map((item, i) => (
+                      {rowsIt.map(({ item, i }) => (
                         <tr key={i}>
                           <td>{i + 1}</td>
                           <td><HighlightText text={item.name_ru || item.name || '—'} query={searchQuery} /></td>
@@ -5674,7 +5697,8 @@ ${bodyHtml}
                     </tbody>
                   </table>
                 </div>
-                )}
+                  );
+                })()}
                 {/* Многостраничный документ (договор/форма/импорт из Word, v35) — двуязычный
                     постраничный просмотр; одностраничные чеки — как раньше, два блока */}
                 {(() => {
@@ -5858,7 +5882,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-17 · v56.4 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-17 · v56.5 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
