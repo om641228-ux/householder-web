@@ -5858,7 +5858,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-17 · v56.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-17 · v56.4 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -5917,7 +5917,7 @@ ${bodyHtml}
                           : multiPageMode === 'single'
                             ? 'СТРАНИЦЫ ОДНОГО документа (одна карточка)'
                             : pdfExpandedRef.current
-                              ? '📄 PDF → JPEG: будет распознан как ОДИН документ (лучший режим)'
+                              ? '📄 PDF → Markdown (MarkItDown; скан — OCR): ОДИН документ (лучший режим)'
                               : 'AI сам решит: отдельные документы или страницы одного'}
                       </p>
                     )}
@@ -6032,7 +6032,7 @@ ${bodyHtml}
             return (
             <div className="folder-progress">
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                <strong>{isConvert ? '📄 Конвертация PDF в изображения…' : ` Распознавание файлов — ${Math.min(fp.current, fp.total) || 1} из ${fp.total}`}</strong>
+                <strong>{isConvert ? '📄 Подготовка PDF (текст → Markdown, скан → страницы)…' : ` Распознавание файлов — ${Math.min(fp.current, fp.total) || 1} из ${fp.total}`}</strong>
                 <span style={{ fontWeight: 800, color: isConvert ? '#1e88e5' : '#2e7d32' }}>{pct}%</span>
               </div>
               {/* Процент ВНУТРИ полосы — виден и на заполненной, и на пустой части */}

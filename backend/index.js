@@ -127,7 +127,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v56.3-2026-08-18', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v56.4-2026-08-18', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -711,7 +711,7 @@ function buildDocumentSummaryPrompt(textSample) {
   "party_b": "ПОЛУЧАТЕЛЬ/вторая сторона ПОЛНОСТЬЮ одной строкой НА ЯЗЫКЕ ОРИГИНАЛА — название + NIF/CIF + адрес (напр. 'RONESIA LIMITED, CL REYKJAVIK 7, FINCA LA QUINTA, 38660 Adeje'): для contract/municipality/bank/tax — arrendatario, comprador, contribuyente; для invoice/bill — cliente/titular (кому выставлен); если в документе нет — null",
   "doc_kind": "для официальных документов: contract (договор), certificate (справка/certificado), power_of_attorney (доверенность/poder), bank_correspondence (письма/выписки банка), gov_correspondence (переписка с госорганами: AEAT, Ayuntamiento, Seguridad Social) — иначе null",
   "summary": "1-2 предложения: о чём документ (предмет договора, сумма, сроки) НА РУССКОМ (названия компаний не переводи) — или null",
-  "items": [ПОЗИЦИИ ДОКУМЕНТА. Для receipt/invoice (чек, упрощённая/торговая фактура — ticket, factura simplificada) — КАЖДЫЙ товар из списка покупок СО ВСЕХ СТРАНИЦ, без пропусков (если документ содержит несколько фактур — позиции бери из КАЖДОЙ фактуры, не только с первой страницы!): {"name":"название как напечатано","name_ru":"перевод на русский","quantity":1,"price":цена за единицу ЧИСЛОМ,"total":сумма строки ЧИСЛОМ}. Строки «Взнос за управление отходами»/RAEE/ecotasa — тоже отдельными позициями со своей суммой. Штрихкод/EAN (13 цифр) рядом с товаром — НЕ цена. Для bill — строки начислений (ENERGÍA, CARGOS, IGIC...). Для contract/bank/municipality/tax/proposal/other — пустой массив []],
+  "items": [ПОЗИЦИИ ДОКУМЕНТА. Для receipt/invoice (чек, упрощённая/торговая фактура — ticket, factura simplificada) — КАЖДЫЙ товар из списка покупок СО ВСЕХ СТРАНИЦ, без пропусков (если документ содержит несколько фактур — позиции бери из КАЖДОЙ фактуры, не только с первой страницы!): {"name":"название как напечатано","name_ru":"перевод на русский","quantity":1,"price":цена за единицу ЧИСЛОМ,"total":сумма строки ЧИСЛОМ}. Строки «Взнос за управление отходами»/RAEE/ecotasa — тоже отдельными позициями со своей суммой. УСЛУГИ — тоже позиции (нотариус: diligencia, certificación, folios, заверения — каждая со своей ценой). Штрихкод/EAN (13 цифр) рядом с товаром — НЕ цена. ЗАПРЕЩЕНО включать в items: строки ИТОГОВ и сводок (SUMA DE BASES, BASE IMPONIBLE, RETENCIÓN, IVA/IGIC, TOTAL A PAGAR, «Общая сумма…») — это не товары; и ЗАПРЕЩЕНЫ позиции-заглушки вида «(Пропущено, не товар)» — не товар просто пропусти, без записи. Поле name_ru ОБЯЗАТЕЛЬНО для каждой позиции (перевод названия на русский). Для bill — строки начислений (ENERGÍA, CARGOS, IGIC...). Для contract/bank/municipality/tax/proposal/other — пустой массив []],
   "raw_text": null, "raw_text_ru": null
 }
 
@@ -1521,6 +1521,11 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
       }
     }
   }
+  // v56.4: доперевод названий позиций — модель иногда возвращает name_ru не для всех строк
+  // (в таблице микс: часть по-русски, часть на испанском)
+  if (Array.isArray(data.items) && data.items.some(it => it && it.name && !it.section && /[a-záéíóúñü]/i.test(String(it.name)) && !/[а-яё]/i.test(String(it.name_ru || '')))) {
+    await translateItemNames(data.items);
+  }
   if (docType && docType !== 'auto') data.document_type = docType;
   else if (!data.store_name && !data.receipt_date) data.document_type = 'other';
   data._pagesRaw = pageTexts; // v33: исходные тексты vision/OCR (до табличной конвертации) → document_pages
@@ -2051,7 +2056,22 @@ function parseAmount(val) {
 
 function normalizeItems(items) {
   if (!Array.isArray(items)) return [];
-  return items.map(item => ({
+  // v56.4: выкидываем мусорные «позиции»: заглушки модели («(Пропущено, не товар)») и строки
+  // ИТОГОВ документа (suma de bases, retención, IVA/IGIC), ошибочно попавшие в таблицу.
+  // Касилии налоговых форм/годовой отчётности (section/casilla) НЕ трогаем — там такие названия легальны.
+  const junkRe = /пропущено|не\s*товар|skipped|omitid|placeholder/i;
+  const summaryRe = /^(общая\s+сумма|suma(\s+de)?\s+(bases?|total)|suma\s+y\s+sigue|total\s+(a\s+pagar|factura|importe|fra)|importe\s+total|base\s+(imponible|total)|удержани|retenci[oó]n|iva\b|igic\b|налог|cuota\s+(iva|igic))/i;
+  const cleaned = items.filter(item => {
+    if (!item || typeof item !== 'object') return false;
+    if (item.section || item.casilla) return true; // касильи форм — не трогаем
+    const nm = String(item.name || item.description || item.product || '').trim();
+    if (junkRe.test(nm) || summaryRe.test(nm)) {
+      console.log(`v56.4: «позиция» отброшена (не товар/услуга): «${nm.slice(0, 60)}»`);
+      return false;
+    }
+    return true;
+  });
+  return cleaned.map(item => ({
     // Доп. поля (section/casilla/prev_total/text_value — годовая отчётность v32) сохраняем как есть
     ...item,
     name: item.name || item.description || item.product || item.title || 'Unknown item',
