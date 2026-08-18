@@ -127,7 +127,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v56.2-2026-08-18', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v56.3-2026-08-18', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -451,6 +451,14 @@ function buildTranslatePrompt(rawText) {
 ${rawText}`;
 }
 
+// v56.3: проверка, что ответ провайдера действительно ПЕРЕВОД, а не эхо оригинала.
+// Иначе карточка «прыгает»: одна страница на русском, следующая — испанский оригинал.
+function looksUntranslated(src, out) {
+  const cyr = (String(out || '').match(/[а-яё]/gi) || []).length;
+  const latSrc = (String(src || '').match(/[a-záéíóúñü]/gi) || []).length;
+  return latSrc > 40 && cyr < 5;
+}
+
 async function translateRawText(rawText) {
   const prompt = buildTranslatePrompt(rawText);
   const errors = [];
@@ -464,7 +472,7 @@ async function translateRawText(rawText) {
       });
       const r = await m.generateContent(prompt);
       const t = r.response.text();
-      if (t && t.trim().length > 10) return t.trim();
+      if (t && t.trim().length > 10 && !looksUntranslated(rawText, t)) return t.trim();
     } catch (e) { errors.push(`gemini: ${e.message}`); }
   }
 
@@ -478,7 +486,7 @@ async function translateRawText(rawText) {
         temperature: 0.1
       });
       const t = r.choices[0].message.content;
-      if (t && t.trim().length > 10) return t.trim();
+      if (t && t.trim().length > 10 && !looksUntranslated(rawText, t)) return t.trim();
     } catch (e) { errors.push(`groq: ${e.message}`); }
   }
 
@@ -508,7 +516,7 @@ async function translateRawText(rawText) {
         timeout: 180000 // перевод длинного текста (100+ строк)
       });
       const t = r.data.choices?.[0]?.message?.content;
-      if (t && t.trim().length > 10) return t.trim();
+      if (t && t.trim().length > 10 && !looksUntranslated(rawText, t)) return t.trim();
     } catch (e) { errors.push(`${key}: ${e.message}`); }
   }
 
@@ -702,7 +710,7 @@ function buildDocumentSummaryPrompt(textSample) {
   "party_a": "ВЫДАВШИЙ/первая сторона ПОЛНОСТЬЮ одной строкой НА ЯЗЫКЕ ОРИГИНАЛА — название + NIF/CIF + адрес (напр. 'Ilmo. Ayto. de la Villa de Adeje, Servicio Municipal de Suministro de Agua, CALLE HERMANO PEDRO N° 15, 38670 Adeje'): для contract/municipality/bank/tax — arrendador, vendedor, banco, Ayuntamiento; для invoice/bill — emisor/proveedor (кто выставил документ); иначе null",
   "party_b": "ПОЛУЧАТЕЛЬ/вторая сторона ПОЛНОСТЬЮ одной строкой НА ЯЗЫКЕ ОРИГИНАЛА — название + NIF/CIF + адрес (напр. 'RONESIA LIMITED, CL REYKJAVIK 7, FINCA LA QUINTA, 38660 Adeje'): для contract/municipality/bank/tax — arrendatario, comprador, contribuyente; для invoice/bill — cliente/titular (кому выставлен); если в документе нет — null",
   "doc_kind": "для официальных документов: contract (договор), certificate (справка/certificado), power_of_attorney (доверенность/poder), bank_correspondence (письма/выписки банка), gov_correspondence (переписка с госорганами: AEAT, Ayuntamiento, Seguridad Social) — иначе null",
-  "summary": "1-2 предложения: о чём документ (предмет договора, сумма, сроки) НА ИСПАНСКОМ — или null",
+  "summary": "1-2 предложения: о чём документ (предмет договора, сумма, сроки) НА РУССКОМ (названия компаний не переводи) — или null",
   "items": [ПОЗИЦИИ ДОКУМЕНТА. Для receipt/invoice (чек, упрощённая/торговая фактура — ticket, factura simplificada) — КАЖДЫЙ товар из списка покупок СО ВСЕХ СТРАНИЦ, без пропусков (если документ содержит несколько фактур — позиции бери из КАЖДОЙ фактуры, не только с первой страницы!): {"name":"название как напечатано","name_ru":"перевод на русский","quantity":1,"price":цена за единицу ЧИСЛОМ,"total":сумма строки ЧИСЛОМ}. Строки «Взнос за управление отходами»/RAEE/ecotasa — тоже отдельными позициями со своей суммой. Штрихкод/EAN (13 цифр) рядом с товаром — НЕ цена. Для bill — строки начислений (ENERGÍA, CARGOS, IGIC...). Для contract/bank/municipality/tax/proposal/other — пустой массив []],
   "raw_text": null, "raw_text_ru": null
 }
@@ -1398,10 +1406,16 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
   // Перевод каждой страницы — текстовая цепочка (3 параллельно)
   const ruTexts = await runWithConcurrency(effTexts, async (t) => {
     if (/^\((ошибка|страница без текста|страница не распознана)/.test(t)) return t;
-    const ru = await translateRawText(t);
+    // v56.3: «перевод»-эхо (без кириллицы) не принимаем; при сбое — одна повторная попытка
+    // через 1.5с, и только потом — оригинал (иначе вывод «прыгает»: русский → испанский)
+    let ru = await translateRawText(t);
+    if (!ru || looksUntranslated(t, ru) || (looksLikeEmptySkeleton(ru) && !looksLikeEmptySkeleton(t))) {
+      await new Promise(r => setTimeout(r, 1500));
+      ru = await translateRawText(t);
+    }
     // Перевод недоступен или похож на пустую сетку при содержательном оригинале —
     // показываем сам оригинал: содержимое важнее языка
-    if (!ru || (looksLikeEmptySkeleton(ru) && !looksLikeEmptySkeleton(t))) return t;
+    if (!ru || looksUntranslated(t, ru) || (looksLikeEmptySkeleton(ru) && !looksLikeEmptySkeleton(t))) return t;
     return ru;
   }, 3);
   const raw_text_ru = ruTexts.map((t, i) => `══════ СТРАНИЦА ${i + 1} из ${pageCount} ══════\n${t}`).join('\n\n');
@@ -1597,8 +1611,13 @@ async function finalizeReceiptFromPageTexts(pageTexts, currency, docType) {
     : pageTexts[0];
 
   const ruTexts = await runWithConcurrency(pageTexts, async (t) => {
-    const ru = await translateRawText(t);
-    if (!ru || (looksLikeEmptySkeleton(ru) && !looksLikeEmptySkeleton(t))) return t;
+    // v56.3: «перевод»-эхо (без кириллицы) не принимаем; при сбое — одна повторная попытка
+    let ru = await translateRawText(t);
+    if (!ru || looksUntranslated(t, ru) || (looksLikeEmptySkeleton(ru) && !looksLikeEmptySkeleton(t))) {
+      await new Promise(r => setTimeout(r, 1500));
+      ru = await translateRawText(t);
+    }
+    if (!ru || looksUntranslated(t, ru) || (looksLikeEmptySkeleton(ru) && !looksLikeEmptySkeleton(t))) return t;
     return ru;
   }, 3);
   const raw_text_ru = pageCount > 1
