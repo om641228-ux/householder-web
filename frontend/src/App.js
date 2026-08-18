@@ -5467,77 +5467,163 @@ ${bodyHtml}
                     <p style={{ fontSize: 12, color: '#95a5a6', margin: '8px 0 0' }}>Пустое поле = очистить значение. Текст документа, страницы и товары не меняются.</p>
                   </div>
                 )}
-                {!editMode && (
-                <div className="info-block">
-                  <h3>Основная информация</h3>
-                  <p><strong>{['annual_accounts', 'tax_form'].includes(viewModal.document_type) ? 'Документ' : 'Магазин'}:</strong> <HighlightText text={viewModal.store_name || viewModal.store_name_ru || '—'} query={searchQuery} /></p>
-                  {viewModal.store_name_ru && viewModal.store_name && viewModal.store_name_ru !== viewModal.store_name && (
-                    <p style={{ marginTop: -6 }}><strong>Название (рус):</strong> <HighlightText text={viewModal.store_name_ru} query={searchQuery} /></p>
-                  )}
-                  <p><strong>Дата:</strong> {formatDate(viewModal.receipt_date)} {viewModal.receipt_time}</p>
-                  <p><strong>{viewModal.document_type === 'annual_accounts' ? 'Resultado — Результат года' : viewModal.document_type === 'tax_form' ? 'Resultado — Результат декларации' : 'Итого'}:</strong> {formatAmount(viewModal.total_amount, viewModal.currency)}</p>
-                  <p><strong>Тип:</strong> {DOC_TYPE_LABELS[viewModal.document_type] || viewModal.document_type || '🧾 Чек'}</p>
-                  <p><strong>Объект:</strong> <HighlightText text={viewModal.object || '—'} query={searchQuery} /></p>
-                  {viewModal.subtype && <p><strong>Подтип:</strong> {SUBTYPE_LABELS[viewModal.subtype] || viewModal.subtype}</p>}
-                  <p><strong>Оплата:</strong>{' '}
-                    {/* Менюшка быстрой смены статуса прямо в карточке — сохраняется сразу, без режима редактирования */}
-                    <select
-                      value={viewModal.payment_status || ''}
-                      onChange={e => quickSavePaymentStatus(e.target.value)}
-                      title="Сменить статус оплаты"
-                      style={{
-                        padding: '3px 8px', borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: 'pointer',
-                        border: `1px solid ${(PAYMENT_STATUS_META[viewModal.payment_status] || {}).color || '#ddd'}`,
-                        color: (PAYMENT_STATUS_META[viewModal.payment_status] || {}).color || '#666',
-                        background: (PAYMENT_STATUS_META[viewModal.payment_status] || {}).bg || '#fff'
-                      }}
-                    >
-                      <option value="">— не указан —</option>
-                      {Object.entries(PAYMENT_STATUS_META).map(([v, m]) => <option key={v} value={v}>{m.label}</option>)}
-                    </select>
-                  </p>
-                  {viewModal.paid_date && (
-                    <p><strong>Дата оплаты:</strong> {formatDate(viewModal.paid_date)}
-                      {viewModal.bank_movement_id && <span title="Привязано к движению по банковской выписке" style={{ marginLeft: 6, color: '#27ae60' }}>🏦 по выписке</span>}
+                {!editMode && (() => {
+                  // v55: макет карточки зависит от типа документа:
+                  // receipt — как было; invoice — продавец/№/суммы/адрес; proposal — поставщик/срок КП;
+                  // contract/municipality (договор/справка) — стороны/№/подписание/действие
+                  const r = viewModal;
+                  const dt = r.document_type || 'receipt';
+                  const nameNode = (label) => (
+                    <React.Fragment key="name">
+                      <p><strong>{label}:</strong> <HighlightText text={r.store_name || r.store_name_ru || '—'} query={searchQuery} /></p>
+                      {r.store_name_ru && r.store_name && r.store_name_ru !== r.store_name && (
+                        <p style={{ marginTop: -6 }}><strong>Название (рус):</strong> <HighlightText text={r.store_name_ru} query={searchQuery} /></p>
+                      )}
+                    </React.Fragment>
+                  );
+                  const payNode = (
+                    <p key="pay"><strong>Оплата:</strong>{' '}
+                      {/* Менюшка быстрой смены статуса прямо в карточке — сохраняется сразу, без режима редактирования */}
+                      <select
+                        value={r.payment_status || ''}
+                        onChange={e => quickSavePaymentStatus(e.target.value)}
+                        title="Сменить статус оплаты"
+                        style={{
+                          padding: '3px 8px', borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: 'pointer',
+                          border: `1px solid ${(PAYMENT_STATUS_META[r.payment_status] || {}).color || '#ddd'}`,
+                          color: (PAYMENT_STATUS_META[r.payment_status] || {}).color || '#666',
+                          background: (PAYMENT_STATUS_META[r.payment_status] || {}).bg || '#fff'
+                        }}
+                      >
+                        <option value="">— не указан —</option>
+                        {Object.entries(PAYMENT_STATUS_META).map(([v, m]) => <option key={v} value={v}>{m.label}</option>)}
+                      </select>
                     </p>
-                  )}
-                  {viewModal.provider && <p><strong>Поставщик:</strong> <HighlightText text={viewModal.provider} query={searchQuery} /></p>}
-                  {viewModal.supply_address && <p><strong>Адрес поставки:</strong> <HighlightText text={viewModal.supply_address} query={searchQuery} /></p>}
-                  {viewModal.invoice_number && <p><strong>№ фактуры:</strong> {viewModal.invoice_number}</p>}
-                  {viewModal.contract_number && <p><strong>№ договора:</strong> {viewModal.contract_number}</p>}
-                  {viewModal.cups && <p><strong>CUPS:</strong> {viewModal.cups}</p>}
-                  {viewModal.meter_number && <p><strong>№ счётчика:</strong> {viewModal.meter_number}</p>}
-                  {viewModal.consumption != null && <p><strong>Потребление:</strong> {viewModal.consumption} {viewModal.consumption_unit || ''}</p>}
-                  {(viewModal.valid_from || viewModal.valid_to) && (
-                    <p><strong>{['bill', 'bank'].includes(viewModal.document_type) ? 'Период' : 'Действует'}:</strong> {viewModal.valid_from ? formatDate(viewModal.valid_from) : '—'} → {viewModal.valid_to ? formatDate(viewModal.valid_to) : '—'}
-                      {expiryInfo(viewModal) && <span style={{ marginLeft: 8, color: expiryInfo(viewModal).color, fontWeight: 600 }}>{expiryInfo(viewModal).text}</span>}
+                  );
+                  const paidNode = r.paid_date ? (
+                    <p key="paid"><strong>Дата оплаты:</strong> {formatDate(r.paid_date)}
+                      {r.bank_movement_id && <span title="Привязано к движению по банковской выписке" style={{ marginLeft: 6, color: '#27ae60' }}>🏦 по выписке</span>}
                     </p>
-                  )}
-                  <p><strong>Метод:</strong> {viewModal.recognition_method || '—'}</p>
-                  <p><strong>Добавил:</strong> <HighlightText text={formatOwnerName(viewModal)} query={searchQuery} /></p>
-                  {viewModal.subtotal && <p><strong>Подытог:</strong> {viewModal.subtotal}</p>}
-                  {viewModal.tax_amount && <p><strong>Налог:</strong> {viewModal.tax_amount} ({viewModal.tax_rate || ''})</p>}
-                  {['receipt', 'invoice', 'bill'].includes(viewModal.document_type || 'receipt') && (() => {
-                    const itemsTotal = calculateItemsTotal(viewModal.items);
-                    const total = parseFloat(viewModal.total_amount) || 0;
+                  ) : null;
+                  const deltaNode = ['receipt', 'invoice', 'bill'].includes(dt) ? (() => {
+                    const itemsTotal = calculateItemsTotal(r.items);
+                    const total = parseFloat(r.total_amount) || 0;
                     const diff = Math.abs(total - itemsTotal).toFixed(2);
                     if (diff > 0.01) {
                       return (
-                        <p style={{ color: '#e74c3c', fontWeight: 600 }}>
-                          Разница: {diff} {viewModal.currency || ''}
+                        <p key="delta" style={{ color: '#e74c3c', fontWeight: 600 }}>
+                          Разница: {diff} {r.currency || ''}
                           <br/><small>(Сумма строк: {itemsTotal.toFixed(2)} ≠ Итого: {total.toFixed(2)})</small>
                         </p>
                       );
                     }
-                    return <p style={{ color: '#27ae60' }}> Сумма строк совпадает</p>;
-                  })()}
-                </div>
-                )}
+                    return <p key="delta" style={{ color: '#27ae60' }}> Сумма строк совпадает</p>;
+                  })() : null;
+                  const methodNode = <p key="method"><strong>Метод:</strong> {r.recognition_method || '—'}</p>;
+                  const ownerNode = <p key="owner"><strong>Добавил:</strong> <HighlightText text={formatOwnerName(r)} query={searchQuery} /></p>;
+                  const row = (key, label, value) => (value == null || value === '') ? null : (
+                    <p key={key}><strong>{label}:</strong> {value}</p>
+                  );
+                  const periodNode = (label) => (r.valid_from || r.valid_to) ? (
+                    <p key="period"><strong>{label}:</strong> {r.valid_from ? formatDate(r.valid_from) : '—'} → {r.valid_to ? formatDate(r.valid_to) : '—'}
+                      {expiryInfo(r) && <span style={{ marginLeft: 8, color: expiryInfo(r).color, fontWeight: 600 }}>{expiryInfo(r).text}</span>}
+                    </p>
+                  ) : null;
+
+                  let rows;
+                  if (dt === 'invoice') {
+                    // ФАКТУРА: продавец и реквизиты — наверх, суммы и контроль — рядом
+                    rows = [
+                      nameNode('Продавец'),
+                      row('inv', '№ фактуры', r.invoice_number),
+                      row('date', 'Дата фактуры', `${formatDate(r.receipt_date)} ${r.receipt_time || ''}`.trim()),
+                      row('total', 'Итого к оплате', formatAmount(r.total_amount, r.currency)),
+                      row('subtotal', 'База (подытог)', r.subtotal ? formatAmount(parseFloat(r.subtotal), r.currency) : null),
+                      row('tax', 'Налог (IVA/IGIC)', r.tax_amount ? `${formatAmount(parseFloat(r.tax_amount), r.currency)}${r.tax_rate ? ` · ставка ${r.tax_rate}` : ''}` : null),
+                      row('object', 'Объект', r.object && r.object !== 'other' ? r.object : null),
+                      row('addr', 'Адрес поставки', r.supply_address),
+                      row('provider', 'Поставщик', r.provider),
+                      row('buyer', 'Покупатель', r.party_b),
+                      row('sum', 'Суть документа', r.summary),
+                      payNode, paidNode, deltaNode,
+                      row('contract', '№ договора', r.contract_number),
+                      periodNode('Период'),
+                      methodNode, ownerNode
+                    ];
+                  } else if (dt === 'proposal') {
+                    // КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ: поставщик, № и срок действия КП, сумма
+                    rows = [
+                      nameNode('Поставщик (КП)'),
+                      row('inv', '№ предложения', r.invoice_number || r.contract_number),
+                      row('date', 'Дата предложения', formatDate(r.receipt_date)),
+                      row('total', 'Сумма предложения', formatAmount(r.total_amount, r.currency)),
+                      r.valid_to ? (
+                        <p key="valid"><strong>Действительно до:</strong> {formatDate(r.valid_to)}
+                          {expiryInfo(r) && <span style={{ marginLeft: 8, color: expiryInfo(r).color, fontWeight: 600 }}>{expiryInfo(r).text}</span>}
+                        </p>
+                      ) : null,
+                      row('object', 'Объект', r.object && r.object !== 'other' ? r.object : null),
+                      row('addr', 'Адрес', r.supply_address),
+                      row('provider', 'Контакт поставщика', r.provider),
+                      row('sum', 'Примечания', r.summary),
+                      row('subtype', 'Подтип', r.subtype ? (SUBTYPE_LABELS[r.subtype] || r.subtype) : null),
+                      methodNode, ownerNode
+                    ];
+                  } else if (dt === 'contract' || dt === 'municipality') {
+                    // ДОГОВОР / СПРАВКА: документ, №, подписание, стороны, действие
+                    rows = [
+                      nameNode(dt === 'municipality' ? 'Документ / орган' : 'Документ'),
+                      row('contract', '№ договора / документа', r.contract_number || r.invoice_number),
+                      row('date', 'Дата подписания', formatDate(r.receipt_date)),
+                      row('partyA', 'Сторона А / эмитент', r.party_a || r.provider),
+                      row('partyB', 'Сторона Б', r.party_b),
+                      row('total', 'Сумма по документу', r.total_amount != null ? formatAmount(r.total_amount, r.currency) : null),
+                      row('sum', 'Суть документа', r.summary),
+                      periodNode('Действует'),
+                      row('object', 'Объект', r.object && r.object !== 'other' ? r.object : null),
+                      row('addr', 'Адрес объекта', r.supply_address),
+                      row('subtype', 'Подтип', r.subtype ? (SUBTYPE_LABELS[r.subtype] || r.subtype) : null),
+                      methodNode, ownerNode
+                    ];
+                  } else {
+                    // ЧЕК (и прочие типы) — как было
+                    rows = [
+                      nameNode(['annual_accounts', 'tax_form'].includes(dt) ? 'Документ' : 'Магазин'),
+                      row('date', 'Дата', `${formatDate(r.receipt_date)} ${r.receipt_time || ''}`.trim()),
+                      <p key="total"><strong>{dt === 'annual_accounts' ? 'Resultado — Результат года' : dt === 'tax_form' ? 'Resultado — Результат декларации' : 'Итого'}:</strong> {formatAmount(r.total_amount, r.currency)}</p>,
+                      row('type', 'Тип', DOC_TYPE_LABELS[r.document_type] || r.document_type || '🧾 Чек'),
+                      row('object', 'Объект', r.object || '—'),
+                      row('subtype', 'Подтип', r.subtype ? (SUBTYPE_LABELS[r.subtype] || r.subtype) : null),
+                      payNode, paidNode,
+                      row('provider', 'Поставщик', r.provider),
+                      row('partyA', 'Сторона А', ['bank', 'tax', 'tax_form', 'annual_accounts'].includes(dt) ? r.party_a : null),
+                      row('partyB', dt === 'bill' ? 'Титулар' : 'Сторона Б', ['bank', 'tax', 'tax_form', 'annual_accounts', 'bill'].includes(dt) ? r.party_b : null),
+                      row('sum', 'Суть документа', ['bank', 'tax', 'tax_form', 'annual_accounts'].includes(dt) ? r.summary : null),
+                      row('addr', 'Адрес поставки', r.supply_address),
+                      row('inv', '№ фактуры', r.invoice_number),
+                      row('contract', '№ договора', r.contract_number),
+                      row('cups', 'CUPS', r.cups),
+                      row('meter', '№ счётчика', r.meter_number),
+                      row('cons', 'Потребление', r.consumption != null ? `${r.consumption} ${r.consumption_unit || ''}` : null),
+                      periodNode(['bill', 'bank'].includes(dt) ? 'Период' : 'Действует'),
+                      methodNode, ownerNode,
+                      row('subtotal', 'Подытог', r.subtotal),
+                      row('tax', 'Налог', r.tax_amount ? `${r.tax_amount}${r.tax_rate ? ` (${r.tax_rate})` : ''}` : null),
+                      deltaNode
+                    ];
+                  }
+                  return (
+                    <div className="info-block">
+                      <h3>{dt === 'invoice' ? 'Фактура' : dt === 'proposal' ? 'Коммерческое предложение' : dt === 'contract' ? 'Договор' : dt === 'municipality' ? 'Справка / документ мэрии' : 'Основная информация'}</h3>
+                      {rows}
+                    </div>
+                  );
+                })()}
                 {['annual_accounts', 'tax_form'].includes(viewModal.document_type) ? (
                   renderAnnualAccountsCard(viewModal)
-                ) : (
+                ) : (['contract', 'municipality', 'bank', 'tax'].includes(viewModal.document_type) && !(viewModal.items || []).length) ? null : (
                 <div className="info-block">
-                  <h3>Товары ({viewModal.items?.length || 0})</h3>
+                  <h3>{['invoice', 'proposal', 'bill'].includes(viewModal.document_type) ? 'Позиции' : 'Товары'} ({viewModal.items?.length || 0})</h3>
                   <table className="items-table">
                     <thead><tr><th>№</th><th>Товар</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead>
                     <tbody>
@@ -5736,7 +5822,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-17 · v54.4 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-17 · v55.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

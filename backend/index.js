@@ -125,7 +125,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v54.3-2026-08-17', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v55.1-2026-08-18', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -697,8 +697,8 @@ function buildDocumentSummaryPrompt(textSample) {
   "supply_address": "ПОЛНЫЙ адрес недвижимости/объекта как напечатан (ищи внимательно: Dirección, Finca, sitio, Calle) или null",
   "cups": null, "meter_number": null, "consumption": null, "consumption_unit": null,
   "object": "Duqe — если адрес содержит Reykjavik; Maria — если Callao; Kit — если Alcojora; иначе null",
-  "party_a": "первая сторона договора/выдавший орган НА ЯЗЫКЕ ОРИГИНАЛА (arrendador, vendedor, banco, Ayuntamiento de..., empresa) — ТОЛЬКО для contract/municipality/bank/tax, иначе null",
-  "party_b": "вторая сторона/получатель НА ЯЗЫКЕ ОРИГИНАЛА (arrendatario, comprador, cliente, contribuyente) или null",
+  "party_a": "первая сторона/выдавший НА ЯЗЫКЕ ОРИГИНАЛА: для contract/municipality/bank/tax — arrendador, vendedor, banco, Ayuntamiento de..., empresa; для invoice/bill — emisor/proveedor (кто выставил); иначе null",
+  "party_b": "вторая сторона/получатель НА ЯЗЫКЕ ОРИГИНАЛА: для contract/municipality/bank/tax — arrendatario, comprador, contribuyente; для invoice/bill — cliente/titular (покупатель, кому выставлен); иначе null",
   "doc_kind": "для официальных документов: contract (договор), certificate (справка/certificado), power_of_attorney (доверенность/poder), bank_correspondence (письма/выписки банка), gov_correspondence (переписка с госорганами: AEAT, Ayuntamiento, Seguridad Social) — иначе null",
   "summary": "1-2 предложения: о чём документ (предмет договора, сумма, сроки) НА ИСПАНСКОМ — или null",
   "items": [ПОЗИЦИИ ДОКУМЕНТА. Для receipt/invoice (чек, упрощённая/торговая фактура — ticket, factura simplificada) — КАЖДЫЙ товар из списка покупок, без пропусков: {"name":"название как напечатано","name_ru":"перевод на русский","quantity":1,"price":цена за единицу ЧИСЛОМ,"total":сумма строки ЧИСЛОМ}. Строки «Взнос за управление отходами»/RAEE/ecotasa — тоже отдельными позициями со своей суммой. Штрихкод/EAN (13 цифр) рядом с товаром — НЕ цена. Для bill — строки начислений (ENERGÍA, CARGOS, IGIC...). Для contract/bank/municipality/tax/proposal/other — пустой массив []],
@@ -2130,6 +2130,10 @@ function filterRecordByColumns(record, columns) {
   if (record.raw_text_ru && !columns.includes('raw_text_ru')) {
     console.warn('ВНИМАНИЕ: колонка raw_text_ru отсутствует в таблице receipts — перевод НЕ сохранён! Выполните: alter table receipts add column if not exists raw_text_ru text;');
   }
+  // То же для сторон документа: без колонок party_a/party_b/summary (миграция v29) они молча отбрасываются
+  if ((record.party_a || record.party_b || record.summary) && !columns.includes('party_a')) {
+    console.warn('ВНИМАНИЕ: колонки party_a/party_b/summary отсутствуют в таблице receipts — стороны НЕ сохранены! Выполните supabase-migration-v29-receipt-parties.sql');
+  }
   // То же для статуса оплаты: без колонки payment_status (миграция v19) статус молча отбрасывается
   if (record.payment_status && !columns.includes('payment_status')) {
     console.warn('ВНИМАНИЕ: колонка payment_status отсутствует в таблице receipts — статус оплаты НЕ сохранён! Выполните: alter table receipts add column if not exists payment_status text;');
@@ -2175,6 +2179,10 @@ async function saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod) {
     subtype: receiptData.subtype || null,
     payment_status: receiptData.payment_status || null,
     provider: receiptData.provider || null,
+    // v55.1: стороны и краткая суть документа (миграция v29; без колонок фильтр отсечёт)
+    party_a: receiptData.party_a || null,
+    party_b: receiptData.party_b || null,
+    summary: receiptData.summary || null,
     valid_from: receiptData.valid_from || null,
     valid_to: receiptData.valid_to || null,
     invoice_number: receiptData.invoice_number || null,
@@ -3189,7 +3197,35 @@ app.get('/api/receipts', requireAuth, async (req, res) => {
     
     const { data, error } = await query;
     if (error) throw error;
-    res.json(data || []);
+    const rows = data || [];
+    // v55.1: стороны и summary договоров/фактур/КП исторически лежат в детальных таблицах
+    // (contract_documents/proposals) — подмешиваем в ответ для карточек. Best-effort:
+    // ошибки таблиц не роняют выдачу (миграция v23 могла не выполняться).
+    try {
+      const byId = {};
+      rows.forEach(r => { if (r && r.id != null) byId[r.id] = r; });
+      const ids = rows.filter(r => r && r.id != null && (!r.party_a || !r.party_b || !r.summary)).map(r => r.id);
+      if (ids.length) {
+        const { data: docs } = await supabaseAdmin.from('contract_documents')
+          .select('receipt_id, party_a, party_b, summary').in('receipt_id', ids);
+        (docs || []).forEach(d => {
+          const r = byId[d.receipt_id];
+          if (!r) return;
+          if (!r.party_a && d.party_a) r.party_a = d.party_a;
+          if (!r.party_b && d.party_b) r.party_b = d.party_b;
+          if (!r.summary && d.summary) r.summary = d.summary;
+        });
+        const { data: props } = await supabaseAdmin.from('proposals')
+          .select('receipt_id, vendor_name, notes').in('receipt_id', ids);
+        (props || []).forEach(p => {
+          const r = byId[p.receipt_id];
+          if (!r) return;
+          if (!r.party_a && p.vendor_name) r.party_a = p.vendor_name;
+          if (!r.summary && p.notes) r.summary = p.notes;
+        });
+      }
+    } catch (e) { console.warn('receipts details merge (не критично):', e.message); }
+    res.json(rows);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

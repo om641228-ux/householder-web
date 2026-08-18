@@ -1206,3 +1206,35 @@ crm_tasks(id bigserial PK, owner_id text, title text NOT NULL, description text,
 2. recognizeAndSave: при selectedModel='local-mac-ocr' (кроме режима separate) — всегда recognizeDocumentPages(files, 'local-mac-ocr'); separate уходит в mac-aware recognizeFilesSequentially.
 Метка: v54.4. esbuild/eslint чисто (3 pre-existing warnings). Бэкенд не менялся (v54.3).
 Действие пользователя: запушить App.js + redeploy фронтенда.
+
+## v55 — 2026-08-17 — Макеты карточки по типу документа
+Требование: разные поля для чека / фактуры / КП / договора-справки.
+App.js: блок «Основная информация» заменён на типизированный (IIFE, rows по dt):
+- receipt (и прочие) — как было (магазин, дата, итого, оплата, Δ и т.д.);
+- invoice — «Фактура»: Продавец, № фактуры, Дата фактуры, Итого к оплате, База, Налог (IVA/IGIC + ставка), Объект, Адрес поставки, Оплата/Дата оплаты, Δ-контроль, № договора, Период;
+- proposal — «Коммерческое предложение»: Поставщик, № предложения, Дата, Сумма, Действительно до (+бейдж срока), Объект, Контакт;
+- contract/municipality — «Договор»/«Справка»: Документ, № договора, Дата подписания, Эмитент (provider), Сумма, Действует с/по, Объект/Адрес.
+Таблица позиций: заголовок «Позиции» для invoice/proposal/bill, «Товары» для receipt; скрыта для contract/municipality/bank/tax когда пуста. Стороны (party_a/party_b) НЕ выведены — они хранятся только в detail-таблицах (contract_documents), в ответе receipts их нет (backend не трогали).
+Метка: v55. esbuild/eslint чисто. Действие: запушить App.js + redeploy фронтенда.
+
+## v55.1 (2026-08-18) — стороны и summary в карточках всех типов документов
+Запрос: «Если нужно выводить стороны — скажи, расширю API → в договоре, фактуре и других документах».
+**Backend (index.js, build v55.1-2026-08-18):**
+- Промпт buildDocumentSummaryPrompt: party_a/party_b теперь извлекаются и для invoice/bill
+  (party_a = emisor/proveedor, party_b = cliente/titular), не только contract/municipality/bank/tax.
+- saveReceiptToDB record: + party_a/party_b/summary (filterRecordByColumns отсечёт без колонок;
+  добавлено громкое предупреждение → supabase-migration-v29-receipt-parties.sql).
+- GET /api/receipts: после выборки подмешивает party_a/party_b/summary из детальных таблиц
+  contract_documents (party_a/party_b/summary) и proposals (vendor_name→party_a, notes→summary)
+  для записей, где поля пусты (старые документы). Best-effort, ошибки таблиц не роняют выдачу.
+**Миграция:** supabase-migration-v29-receipt-parties.sql — alter table receipts add column
+if not exists party_a/party_b/summary text. Без неё всё работает, но стороны новых документов
+не сохранятся в receipts (останутся в детальных таблицах и будут подмешаны в GET).
+**Frontend (App.js, метка v55.1):** новые строки карточек (viewModal):
+- invoice: «Покупатель» (party_b), «Суть документа» (summary);
+- proposal: «Примечания» (summary);
+- contract/municipality: «Сторона А / эмитент» (party_a || provider), «Сторона Б» (party_b), «Суть документа» (summary);
+- bank/tax/tax_form/annual_accounts: «Сторона А», «Сторона Б», «Суть документа»;
+- bill: «Титулар» (party_b). Чек (receipt) — без изменений.
+Проверки: node --check OK; esbuild OK; eslint 0 ошибок / 3 прежних warning.
+Деплой: оба сервиса; миграцию v29 выполнить в Supabase.
