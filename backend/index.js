@@ -127,7 +127,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v56.5-2026-08-19', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v57-2026-08-19', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -1378,6 +1378,80 @@ function enforceCurrencyAndTotal(data, rawText) {
   return data;
 }
 
+// v57: ПОСТРАНИЧНЫЙ ДЕТЕКТОР РАЗНЫХ ДОКУМЕНТОВ В ОДНОЙ ПАЧКЕ
+// (банковские выписки ADEUDO POR DOMICILIACIÓN и т.п.: 16 страниц = 16 РАЗНЫХ выписок —
+// у каждой свой эмитент, номер фактуры (Fra:), номер квитанции (NUMERO DE RECIBO), дата, итог).
+// Критерии перепроверки: номер документа/фактуры, дата, итог страницы.
+function pageDocSignature(text) {
+  const t = String(text || '');
+  const sig = { issuer: null, docNum: null, date: null, total: null };
+  // Номер фактуры: «Fra:e632511414536» (OCR может вставлять пробелы: «e6 32511414536»)
+  let m = t.match(/\bFra\s*[:;.]?\s*([A-Za-z]?\d[\d\s]{5,}\d)/i);
+  if (m) sig.docNum = m[1].replace(/\s+/g, '').toLowerCase();
+  // Номер квитанции: «NUMERO DE RECIBO» → значение рядом (00494950755BBQMDRB)
+  if (!sig.docNum) {
+    m = t.match(/RECIBO[\s\S]{0,60}?\b(\d{6,}[A-Z0-9]{4,})\b/i);
+    if (m) sig.docNum = 'rec' + m[1].toLowerCase();
+  }
+  // Дата документа: «Fecha:2025-11-30» или dd/mm/yyyy
+  m = t.match(/Fecha\s*[:;]?\s*(\d{4}-\d{1,2}-\d{1,2})/i) || t.match(/Fecha\s*[:;]?\s*(\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{4})/i);
+  if (m) sig.date = m[1];
+  // Итог страницы: самая крупная сумма с EUR/€ (выписка: «IMPORTE … 41,47 EUR»)
+  const reT = /(\d{1,3}(?:[.\s]\d{3})*,\d{2}|\d+,\d{2})\s*(?:EUR|€)/gi;
+  let mm; const cand = [];
+  while ((mm = reT.exec(t)) !== null && cand.length < 40) {
+    const n = parseAmountLike(mm[1].replace(/\s/g, ''));
+    if (n != null && n > 0 && n < 1e9) cand.push(n);
+  }
+  if (cand.length) sig.total = Math.max(...cand);
+  // Эмитент (ENTIDAD ORDENANTE — компания S.L./S.A./SLU)
+  m = t.match(/([A-ZÁÉÍÓÚÑ][\w&.'\- ]{2,45}?(?:SLU|S\.?\s?L\.?\s?U\.?|S\.?\s?L\.?|S\.?\s?A\.?))\b/i);
+  if (m) sig.issuer = m[1].trim().toLowerCase().replace(/\s+/g, ' ');
+  return sig;
+}
+
+// Разбиваем пачку страниц на РАЗНЫЕ документы по подписям: ≥2 страниц с РАЗНЫМИ
+// номерами документов/фактур → это не один документ. Подряд идущие страницы с той же
+// подписью (или без неё) — продолжение предыдущего документа. null = дробить не нужно.
+function splitPagesIntoDocuments(pageTexts) {
+  if (!Array.isArray(pageTexts) || pageTexts.length < 2) return null;
+  const sigs = pageTexts.map(pageDocSignature);
+  const distinctNums = new Set(sigs.map(sg => sg.docNum).filter(Boolean));
+  if (distinctNums.size < 2) return null;
+  const groups = [];
+  for (let i = 0; i < pageTexts.length; i++) {
+    const k = sigs[i].docNum;
+    const last = groups[groups.length - 1];
+    if (last && (k === last.key || !k)) { last.pages.push(i); continue; }
+    groups.push({ key: k, pages: [i], sig: sigs[i] });
+  }
+  return groups.length >= 2 ? groups : null;
+}
+
+// Перепроверка карточки по подписи страницы: итог/дата/номер сходятся с тем,
+// что реально напечатано на странице? Расхождение — исправляем по подписи.
+function verifyDocAgainstSignature(receiptData, sig, logTag) {
+  if (!sig) return;
+  const fixes = [];
+  const cur = Number(receiptData.total_amount) || 0;
+  if (sig.total && (!cur || Math.abs(cur - sig.total) > Math.max(0.03, sig.total * 0.01))) {
+    fixes.push(`итог ${cur || '—'} → ${sig.total}`);
+    receiptData.total_amount = sig.total;
+  }
+  if (sig.date && !receiptData.date) {
+    let d = sig.date;
+    const m = d.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})$/);
+    if (m) d = `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+    receiptData.date = d;
+    fixes.push(`дата → ${d}`);
+  }
+  if (sig.docNum && !receiptData.invoice_number) {
+    receiptData.invoice_number = sig.docNum;
+    fixes.push(`№ документа → ${sig.docNum}`);
+  }
+  if (fixes.length) console.log(`v57 перепроверка (${logTag}): ${fixes.join('; ')}`);
+}
+
 async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
   const pageCount = pageTexts.length;
 
@@ -1504,7 +1578,10 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
     chunkMax.forEach(n => { if (!uniq.some(u => nearN(u, n))) uniq.push(n); });
     const cur = Number(data.total_amount) || 0;
     const sumAll = Math.round(uniq.reduce((a, b) => a + b, 0) * 100) / 100;
-    if (uniq.length >= 2 && cur > 0 && !nearN(cur, sumAll) && uniq.some(u => nearN(u, cur))) {
+    const chunkDocNums = new Set(chunks.map(c => pageDocSignature(c).docNum).filter(Boolean));
+    if (chunkDocNums.size >= 2) {
+      console.log(`v57: на страницах ${chunkDocNums.size} РАЗНЫХ номеров документов/фактур — склейка итогов в нарастающую сумму ЗАПРЕЩЕНА`);
+    } else if (uniq.length >= 2 && cur > 0 && !nearN(cur, sumAll) && uniq.some(u => nearN(u, cur))) {
       console.log(`v56.2: в документе ${uniq.length} разных фактур (${uniq.join(' + ')}) — итог ${cur} → ${sumAll}`);
       data.total_amount = sumAll;
     }
@@ -3110,7 +3187,34 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
       const jobL = docJobs.get(jobIdL);
       const t0l = Date.now();
       try {
-        const receiptData = await finalizeDocumentFromPageTexts(pageTexts.map(String), currency, docType, () => { jobL.stage = 'translate'; jobL.translateDone++; });
+        const textsL = pageTexts.map(String);
+        // v57: в пачке могут быть РАЗНЫЕ документы (банковские выписки: у каждой страницы
+        // свой номер фактуры/квитанции, дата, итог) — разбиваем и сохраняем ОТДЕЛЬНЫМИ карточками
+        const docGroupsL = splitPagesIntoDocuments(textsL);
+        if (docGroupsL && docGroupsL.length > 1) {
+          console.log(`v57: пачка ${textsL.length} стр. — это ${docGroupsL.length} РАЗНЫХ документов (разные номера/даты/итоги страниц) — отдельные карточки`);
+          const results = [];
+          for (let gi = 0; gi < docGroupsL.length; gi++) {
+            const g = docGroupsL[gi];
+            jobL.stage = 'translate';
+            const rd = await finalizeDocumentFromPageTexts(g.pages.map(pi => textsL[pi]), currency, docType, () => { jobL.translateDone++; });
+            rd.docType = docType === 'auto' ? (rd.document_type || 'other') : docType;
+            rd.object = (object && object !== 'other') ? object : (rd.object || 'other');
+            if (subtypeOverride) rd.subtype = subtypeOverride;
+            if (paymentStatusOverride) rd.payment_status = paymentStatusOverride;
+            rd.page_urls = await uploadPagesToStorage(g.pages.map(pi => pageBuffersL[pi]), g.pages.map(pi => mimeTypesL[pi]), user.id);
+            const imgG = rd.page_urls[0] || await uploadToStorage(pageBuffersL[g.pages[0]], files[g.pages[0]].originalname, user.id, mimeTypesL[g.pages[0]]);
+            if (req.body.allow_duplicate === '1') rd.allowDuplicate = true;
+            verifyDocAgainstSignature(rd, g.sig, `док. ${gi + 1}/${docGroupsL.length}`);
+            const sv = await saveReceiptToDB(rd, imgG, user, `local mac-ocr multi-doc ${gi + 1}/${docGroupsL.length} (async)`);
+            results.push({ success: true, id: sv.id, ...sv, image_url: imgG });
+          }
+          jobL.status = 'done';
+          jobL.result = { success: true, multiple: true, count: results.length, results };
+          console.log(`Задача ${jobIdL}: multi-doc — ${results.length} карточек за ${Math.round((Date.now() - t0l) / 1000)}с`);
+          return;
+        }
+        const receiptData = await finalizeDocumentFromPageTexts(textsL, currency, docType, () => { jobL.stage = 'translate'; jobL.translateDone++; });
         receiptData.docType = docType === 'auto' ? (receiptData.document_type || 'other') : docType;
         receiptData.object = (object && object !== 'other') ? object : (receiptData.object || 'other');
         if (subtypeOverride) receiptData.subtype = subtypeOverride;

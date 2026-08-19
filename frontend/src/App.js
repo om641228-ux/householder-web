@@ -2979,8 +2979,17 @@ function App() {
         receiptData = data.data || data;
       }
       setUploadProgress(100);
-      if (receiptData.image_url) receiptData.image_url = fixImageUrl(receiptData.image_url);
-      setLastSavedReceipt(receiptData);
+      // v57: в пачке оказалось НЕСКОЛЬКО разных документов (банковские выписки и т.п.) —
+      // бэкенд сохранил каждый отдельной карточкой (проверка по № документа/дате/итогу страницы)
+      if (receiptData && receiptData.multiple && Array.isArray(receiptData.results) && receiptData.results.length) {
+        const docsR = receiptData.results;
+        docsR.forEach(d => { if (d.image_url) d.image_url = fixImageUrl(d.image_url); });
+        setLastSavedReceipt(docsR[docsR.length - 1]);
+        setTimeout(() => alert(`В файле обнаружено РАЗНЫХ документов: ${docsR.length}.\nКаждый сохранён ОТДЕЛЬНОЙ карточкой (перепроверка по номеру документа, дате и итогу страницы).`), 350);
+      } else {
+        if (receiptData.image_url) receiptData.image_url = fixImageUrl(receiptData.image_url);
+        setLastSavedReceipt(receiptData);
+      }
       loadReceipts();
     } catch (e) {
       console.error('Ошибка:', e);
@@ -3314,8 +3323,16 @@ function App() {
             try { data = JSON.parse(text); } catch { throw new Error(`Сервер вернул ${res.status}: ${text.slice(0, 200)}`); }
             if (!res.ok || (!data.success && !data.id && !data.jobId)) throw new Error(data.error || `Ошибка сервера: ${res.status}`);
             const rd = data.jobId ? await pollDocJob(data.jobId) : (data.data || data);
-            if (rd.image_url) rd.image_url = fixImageUrl(rd.image_url);
-            results.push({ file: file.name, status: 'success', receipt: rd });
+            if (rd && rd.multiple && Array.isArray(rd.results) && rd.results.length) {
+              // v57: внутри файла — несколько разных документов, каждый сохранён отдельно
+              rd.results.forEach(d => {
+                if (d.image_url) d.image_url = fixImageUrl(d.image_url);
+                results.push({ file: file.name, status: 'success', receipt: d });
+              });
+            } else {
+              if (rd.image_url) rd.image_url = fixImageUrl(rd.image_url);
+              results.push({ file: file.name, status: 'success', receipt: rd });
+            }
             setFolderProgress(prev => ({ ...prev, success: prev.success + 1, fileRatio: 1 }));
             done = true;
             continue;
@@ -5884,7 +5901,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-17 · v56.6 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-17 · v57 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

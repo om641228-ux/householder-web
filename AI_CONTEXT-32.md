@@ -1371,3 +1371,32 @@ itemsPage (таблица позиций, 1-based) → алиас `modalPageIdx 
 убран — иначе exhaustive-deps warning). Теперь перелистывание в любом меню переключает остальные.
 Backend не менялся (v56.5-2026-08-19).
 Проверки: esbuild OK; eslint 0 ошибок / 3 прежних warning. Деплой: только App.js.
+
+## v57 (2026-08-19) — разные документы в одном скане: детектор, разделение, перепроверка
+Кейс: «Скан 22.pdf» — 16 страниц РАЗНЫХ банковских выписок Santander «ADEUDO POR DOMICILIACIÓN»
+(разные эмитенты/номера Fra:/NUMERO DE RECIBO/даты/итоги) распознавались как ОДНА карточка #819
+с нарастающей суммой. Анализ: markitdown → 0 символов (скан без текстового слоя) → OCR;
+у каждой страницы своя подпись (Fra:e6325…, Fecha:…, IMPORTE … EUR).
+
+### Backend (index.js, build v57-2026-08-19)
+- `pageDocSignature(text)` → {issuer, docNum, date, total}: docNum из «Fra:e632511414536»
+  (OCR-пробелы вычищаются) или «NUMERO DE RECIBO»; date из «Fecha:yyyy-mm-dd|dd/mm/yyyy»;
+  total — максимум сумм «…,dd EUR/€» страницы; issuer — компания S.L./S.A./SLU.
+- `splitPagesIntoDocuments(pageTexts)`: ≥2 РАЗНЫХ docNum → группы страниц; подряд идущие
+  страницы с той же подписью/без подписи — продолжение предыдущего документа; иначе null.
+- `verifyDocAgainstSignature(receiptData, sig, tag)` — ПЕРЕПРОВЕРКА: итог карточки расходится
+  с напечатанным на странице (>1% или пустой) → исправление; пустые date/invoice_number
+  заполняются из подписи (дата конвертируется в yyyy-mm-dd).
+- ocr_texts-ветка /api/upload-document-pages (local mac-ocr): при docGroups.length > 1 —
+  отдельный finalize + uploadPagesToStorage + saveReceiptToDB на КАЖДУЮ группу, job.result =
+  { success:true, multiple:true, count, results[] }; метод «local mac-ocr multi-doc N/M (async)».
+- v56.2-блок склейки итогов: ЗАПРЕЩЁН, когда страницы содержат ≥2 разных docNum
+  (chunkDocNums.size >= 2 → пропуск, итог не склеивается в нарастающую сумму).
+### Frontend (App.js, метка v57)
+- Одиночный поток: receiptData.multiple → setLastSavedReceipt(последняя) + alert «обнаружено
+  РАЗНЫХ документов: N, каждый сохранён отдельной карточкой»; loadReceipts().
+- Пакетный (папка) поток: rd.multiple → каждая карточка отдельной строкой results.
+### Тесты (node, на реальном OCR всех 16 страниц)
+- 16/16 страниц подписаны, 16 групп; дубликат одной выписки ×2 → не дробим; текст без номеров → не дробим.
+- Склейка: две фактуры SF 11267+SF 11253 → 231.07 (работает); две выписки банка → blocked.
+- Перепроверка: итог 999.99 → 41.47, дата и № заполнены. node --check, esbuild, eslint (3 прежних warning) — чисто.
