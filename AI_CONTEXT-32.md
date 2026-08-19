@@ -1483,3 +1483,15 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - POST /api/docs/:category/files: чиним имя ДО сохранения (и в Storage-пути, и в записи).
 - GET /api/docs: старые записи с кракозяброй чинятся на лету при отдаче (без миграции БД).
 - build v57.5-2026-08-19; node --check OK; round-trip тест: mojibake → «Снимок экрана — …» ✓.
+
+## v57.6 (2026-08-19) — распознавание текста во вкладке «Документы»
+- Backend: POST /api/docs/recognize-text (requireAuth, crmMediaMulter('pages'), ≤30 стр.) —
+  страницы → extractPageTextWithGemini (vision, 3 параллельно) → translateRawText с retry/
+  looksUntranslated (v56.3) → { pages: [{original, russian}] }; НИЧЕГО не сохраняет в receipts.
+  Ошибка по странице → «(страница не распознана: …)», не роняет весь запрос. build v57.6.
+- Frontend (DocsTab, метка v57.6): синяя кнопка 📝 на миниатюрах фото/PDF → recognizeDoc:
+  файл скачивается с Storage, PDF раскрывается в JPEG-страницы (convertPdfToImages, pdf.js),
+  отправляется на /api/docs/recognize-text → карточка-модалка docsOcr: слева фото/страница,
+  справа текст с вкладками «🇷🇺 Перевод | Оригинал» и синхронным пагинатором «‹ Стр. N из M ›»
+  (картинка и текст листаются вместе). Состояние загрузки со спиннером.
+- eslint: 3 прежних warning; esbuild/node --check OK.

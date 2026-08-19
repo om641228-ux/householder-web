@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v57.5-2026-08-19', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v57.6-2026-08-19', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -4086,6 +4086,41 @@ app.post('/api/docs/:category/files', requireAuth, crmMediaMulter('files'), asyn
     res.json({ category: cat, attachments: Array.isArray(data.attachments) ? data.attachments : [] });
   } catch (e) {
     res.status(500).json({ error: e.message, hint: DOCS_MIGRATION_HINT });
+  }
+});
+
+// POST /api/docs/recognize-text (v57.6): распознавание текста файла из вкладки «Документы» —
+// страницы (поле pages: фото/JPEG или PDF) → vision OCR + перевод, БЕЗ сохранения в receipts.
+// Ответ: { pages: [{ original, russian }] }
+app.post('/api/docs/recognize-text', requireAuth, crmMediaMulter('pages'), async (req, res) => {
+  try {
+    if (!genAI) return res.status(500).json({ error: 'Распознавание текста требует GEMINI_API_KEY на бэкенде' });
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ error: 'Нет файлов: передайте поле pages (multipart/form-data)' });
+    if (files.length > 30) return res.status(400).json({ error: `Слишком много страниц (${files.length}) — максимум 30 за раз` });
+    const texts = await runWithConcurrency(files, async (f, i) => {
+      try {
+        const mt = f.mimetype || 'image/jpeg';
+        const buf = mt === 'application/pdf' ? f.buffer : await processImage(f.buffer);
+        return await extractPageTextWithGemini(buf, mt, i + 1, files.length);
+      } catch (e) {
+        console.error(`docs recognize-text: страница ${i + 1} не распознана:`, e.message);
+        return `(страница не распознана: ${e.message})`;
+      }
+    }, 3);
+    const rus = await runWithConcurrency(texts, async (t) => {
+      if (/^\((ошибка|страница без текста|страница не распознана)/.test(t)) return t;
+      let ru = await translateRawText(t);
+      if (!ru || looksUntranslated(t, ru)) {
+        await new Promise(r => setTimeout(r, 1500));
+        ru = await translateRawText(t);
+      }
+      return (!ru || looksUntranslated(t, ru)) ? t : ru;
+    }, 3);
+    res.json({ success: true, pages: texts.map((t, i) => ({ original: t, russian: rus[i] })) });
+  } catch (e) {
+    console.error('docs recognize-text error:', e);
+    res.status(500).json({ error: e.message });
   }
 });
 

@@ -796,6 +796,7 @@ function DocsTab({ user, token }) {
   const [docsError, setDocsError] = useState(null);
   const [docsBusy, setDocsBusy] = useState(false);
   const [docsViewer, setDocsViewer] = useState(null); // {url, kind, name}
+  const [docsOcr, setDocsOcr] = useState(null); // v57.6: {loading} | {name, url, pageUrls[], pages[{original,russian}], idx, tab}
   const [docsZoom, setDocsZoom] = useState(false);
   const [docsVErr, setDocsVErr] = useState(false);
 
@@ -851,6 +852,40 @@ function DocsTab({ user, token }) {
     } catch (e) { alert('Не удалилось на сервере: ' + e.message); }
   };
 
+  // v57.6: распознать текст файла (фото или PDF) — карточка: фото + текст по страницам (оригинал/перевод)
+  const recognizeDoc = async (entry) => {
+    const m = docMediaOf(entry);
+    if (docsOcr && docsOcr.loading) return;
+    setDocsOcr({ loading: true, name: m.name || 'Файл' });
+    try {
+      const resp = await fetch(m.url);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} при скачивании файла`);
+      const blob = await resp.blob();
+      const fileName = m.name || 'file';
+      let pageFiles;
+      if (/\.pdf(\?|$)/i.test(fileName) || /\.pdf(\?|$)/i.test(m.url || '')) {
+        // PDF → страницы JPEG (pdf.js), каждая распознаётся отдельно
+        pageFiles = await convertPdfToImages(new File([blob], fileName, { type: 'application/pdf' }));
+        if (!pageFiles.length) throw new Error('Не удалось разобрать PDF на страницы');
+      } else {
+        pageFiles = [new File([blob], fileName, { type: blob.type || 'image/jpeg' })];
+      }
+      const fd = new FormData();
+      pageFiles.forEach(f => fd.append('pages', f));
+      const r = await fetch(`${API_URL}/api/docs/recognize-text?token=${token}`, { method: 'POST', body: fd });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setDocsOcr({
+        loading: false, name: m.name || 'Файл', url: m.url, kind: m.kind,
+        pageUrls: pageFiles.map(f => URL.createObjectURL(f)),
+        pages: Array.isArray(j.pages) ? j.pages : [], idx: 0, tab: 'ru'
+      });
+    } catch (e) {
+      setDocsOcr(null);
+      alert('Распознавание не удалось: ' + e.message);
+    }
+  };
+
   const docThumb = (entry, key) => {
     const m = docMediaOf(entry);
     const openViewer = () => { setDocsViewer({ url: m.url, kind: m.kind, name: m.name || '' }); setDocsZoom(false); setDocsVErr(false); };
@@ -872,6 +907,9 @@ function DocsTab({ user, token }) {
           <img src={m.url} alt="" onClick={openViewer} style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 8, cursor: 'zoom-in', border: '1px solid #e0e0e0' }} />
         )}
         <button onClick={() => removeDoc(docSection, m.url)} title="Удалить файл" style={{ position: 'absolute', top: -6, right: -6, width: 18, height: 18, borderRadius: '50%', border: 'none', background: '#e74c3c', color: '#fff', fontSize: 10, cursor: 'pointer', lineHeight: '18px', padding: 0, zIndex: 1 }}>✕</button>
+        {(m.kind === 'photo' || m.kind === 'doc') && (
+          <button onClick={(e) => { e.stopPropagation(); recognizeDoc(entry); }} title="Распознать текст (фото → текст по страницам + перевод)" style={{ position: 'absolute', top: -6, left: -6, width: 18, height: 18, borderRadius: '50%', border: 'none', background: '#0071e3', color: '#fff', fontSize: 10, cursor: 'pointer', lineHeight: '18px', padding: 0, zIndex: 1 }}>📝</button>
+        )}
         {m.name ? <div style={{ position: 'absolute', bottom: -16, left: 0, right: 0, fontSize: 9, color: '#8e8e93', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 72 }}>{m.name}</div> : null}
       </span>
     );
@@ -907,6 +945,48 @@ function DocsTab({ user, token }) {
           {items.length === 0 && !docsBusy && <div style={{ fontSize: 13, color: '#8e8e93', alignSelf: 'center' }}>Файлов пока нет — нажмите 📎, чтобы загрузить.</div>}
         </div>
       </div>
+
+      {docsOcr && (
+        <div onClick={() => { if (!docsOcr.loading) setDocsOcr(null); }} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 210, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: 'min(1100px, 94vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid #eee' }}>
+              <div style={{ fontSize: 15, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📝 Распознавание текста — {docsOcr.name}</div>
+              <button onClick={() => !docsOcr.loading && setDocsOcr(null)} style={{ border: 'none', background: '#f0f0f2', borderRadius: '50%', width: 28, height: 28, cursor: docsOcr.loading ? 'not-allowed' : 'pointer', fontSize: 13 }}>✕</button>
+            </div>
+            {docsOcr.loading ? (
+              <div style={{ padding: 40, textAlign: 'center' }}>
+                <div className="spinner" style={{ margin: '0 auto 12px' }}></div>
+                <div style={{ fontSize: 14, color: '#555' }}>Распознаём текст (vision) и переводим…</div>
+                <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>Многостраничный PDF может занять 1–3 минуты</div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', gap: 0, minHeight: 0, flex: 1 }}>
+                <div style={{ flex: '0 0 46%', borderRight: '1px solid #eee', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fafafa', minHeight: 300, overflow: 'auto', padding: 8 }}>
+                  <img src={(docsOcr.pageUrls && docsOcr.pageUrls[docsOcr.idx]) || docsOcr.url} alt="" style={{ maxWidth: '100%', maxHeight: '74vh', borderRadius: 6 }} />
+                </div>
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderBottom: '1px solid #eee', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', borderRadius: 8, overflow: 'hidden', border: '1px solid #d0d0d5' }}>
+                      <button onClick={() => setDocsOcr({ ...docsOcr, tab: 'ru' })} style={{ padding: '5px 12px', fontSize: 12, border: 'none', cursor: 'pointer', background: docsOcr.tab === 'ru' ? '#0071e3' : '#fff', color: docsOcr.tab === 'ru' ? '#fff' : '#333', fontWeight: 600 }}>🇷🇺 Перевод</button>
+                      <button onClick={() => setDocsOcr({ ...docsOcr, tab: 'orig' })} style={{ padding: '5px 12px', fontSize: 12, border: 'none', cursor: 'pointer', background: docsOcr.tab === 'orig' ? '#0071e3' : '#fff', color: docsOcr.tab === 'orig' ? '#fff' : '#333', fontWeight: 600 }}>Оригинал</button>
+                    </div>
+                    {docsOcr.pages.length > 1 && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                        <button disabled={docsOcr.idx === 0} onClick={() => setDocsOcr({ ...docsOcr, idx: docsOcr.idx - 1 })} style={{ border: '1px solid #d0d0d5', background: '#fff', borderRadius: 6, width: 24, height: 24, cursor: 'pointer' }}>‹</button>
+                        <span style={{ color: '#555' }}>Стр. {docsOcr.idx + 1} из {docsOcr.pages.length}</span>
+                        <button disabled={docsOcr.idx >= docsOcr.pages.length - 1} onClick={() => setDocsOcr({ ...docsOcr, idx: docsOcr.idx + 1 })} style={{ border: '1px solid #d0d0d5', background: '#fff', borderRadius: 6, width: 24, height: 24, cursor: 'pointer' }}>›</button>
+                      </div>
+                    )}
+                  </div>
+                  <pre style={{ flex: 1, overflow: 'auto', margin: 0, padding: '10px 14px', fontSize: 12.5, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'inherit', color: '#1d1d1f' }}>
+                    {(docsOcr.pages[docsOcr.idx] && (docsOcr.tab === 'ru' ? docsOcr.pages[docsOcr.idx].russian : docsOcr.pages[docsOcr.idx].original)) || '(пусто)'}
+                  </pre>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {docsViewer && (
         <div onClick={() => setDocsViewer(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -6041,7 +6121,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-17 · v57.3 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-17 · v57.6 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
