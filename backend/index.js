@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v57.4-2026-08-19', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v57.5-2026-08-19', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -4020,6 +4020,17 @@ app.delete('/api/crm/contacts/:id/files', requireAuth, async (req, res) => {
   }
 });
 
+// v57.5: multer читает originalname как Latin-1 — русские имена превращаются в «Ð¡Ð½Ð¸Ð¼Ð¾Ðº».
+// Перекодируем обратно в UTF-8, если строка похожа на такую кракозябру.
+function fixUtf8Name(name) {
+  if (!name || typeof name !== 'string') return name;
+  if (!/[ÐÑÃâ]/.test(name)) return name;
+  try {
+    const fixed = Buffer.from(name, 'latin1').toString('utf8');
+    return /[\u0400-\u04FF]/.test(fixed) ? fixed : name;
+  } catch (_) { return name; }
+}
+
 // ========== ДОКУМЕНТЫ (v40): разделы home/auto/personal, файлы любых типов ==========
 const DOC_CATEGORIES = ['home', 'auto', 'personal'];
 const DOCS_MIGRATION_HINT = 'Если ошибка про отсутствие таблицы — выполни supabase-migration-v25-docs.sql в SQL Editor проекта householder (Supabase)';
@@ -4030,7 +4041,12 @@ app.get('/api/docs', requireAuth, async (req, res) => {
     const { data, error } = await supabaseAdmin.from('doc_sections').select('*');
     if (error) throw error;
     const sections = { home: [], auto: [], personal: [] };
-    (data || []).forEach(r => { if (sections[r.category]) sections[r.category] = Array.isArray(r.attachments) ? r.attachments : []; });
+    (data || []).forEach(r => {
+      if (!sections[r.category]) return;
+      const arr = Array.isArray(r.attachments) ? r.attachments : [];
+      // v57.5: старые записи с кракозяброй в name чиним на лету (без миграции данных)
+      sections[r.category] = arr.map(it => (it && typeof it === 'object' && it.name) ? { ...it, name: fixUtf8Name(it.name) } : it);
+    });
     res.json({ sections });
   } catch (e) {
     res.status(500).json({ error: e.message, hint: DOCS_MIGRATION_HINT });
@@ -4055,8 +4071,9 @@ app.post('/api/docs/:category/files', requireAuth, crmMediaMulter('files'), asyn
         let buf = f.buffer, ct = mt || 'application/octet-stream';
         if (mkind === 'photo') { buf = await processImage(f.buffer); ct = 'image/jpeg'; }
         if (mkind === 'video' && f.size > 48 * 1024 * 1024) { buf = await compressVideoBuffer(f.buffer); ct = 'video/mp4'; }
-        const url = await uploadToStorage(buf, f.originalname || 'file', `docs/${cat}`, ct);
-        items.push({ url, kind: mkind, name: f.originalname || '', ts: Date.now(), actor: userName });
+        const fixedName = fixUtf8Name(f.originalname || 'file');
+        const url = await uploadToStorage(buf, fixedName, `docs/${cat}`, ct);
+        items.push({ url, kind: mkind, name: fixedName, ts: Date.now(), actor: userName });
       } catch (e) { console.error('Docs file skip:', e.message); lastErr = e.message; }
     }
     if (!items.length) return res.status(400).json({ error: 'Не удалось загрузить ни одного файла' + (lastErr ? `. Причина: ${lastErr}` : '') });
