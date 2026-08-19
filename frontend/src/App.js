@@ -555,17 +555,38 @@ function pageDocSigClient(text) {
     m = t.match(/RECIBO[\s\S]{0,60}?\b(\d{6,}[A-Z0-9]{4,})\b/i);
     num = m ? 'rec' + m[1].toLowerCase() : null;
   }
-  return num;
+  // v57.3: альбаран/фактура/тикет — номер рядом с ключевым словом
+  if (!num) {
+    m = t.match(/(?:ALBAR[AÁ]N|FACTURA|ALBARAN|TICKET|FACT\.?)\s*(?:N[ºo°]?|N[ÚU]M(?:ERO)?)?\s*[:.]?\s*([A-Z]{0,4}[\s-]?\d[\d\s/-]{2,}\d)/i);
+    if (m) num = m[1].replace(/\s+/g, '').toLowerCase();
+  }
+  // v57.3: «номер + дата» на одной строке (шапка альбарана)
+  let date = null;
+  if (!num) {
+    m = t.match(/\b(\d{3,7}(?:\s*[/-]?\s*\d{1,2}){0,2})\s+(\d{1,2}\/\d{1,2}\/\d{4})\b/);
+    if (m) { num = m[1].replace(/\s+/g, '').toLowerCase(); date = m[2]; }
+  }
+  if (!date) {
+    m = t.slice(0, 1200).match(/\b(\d{1,2}\/\d{1,2}\/\d{4})\b/);
+    if (m) date = m[1];
+  }
+  return { num, date };
 }
 function splitPagesClientText(pageTexts) {
-  const nums = pageTexts.map(pageDocSigClient);
-  if (new Set(nums.filter(Boolean)).size < 2) return null;
+  const sigs = pageTexts.map(pageDocSigClient);
+  const distinctNums = new Set(sigs.map(x => x.num).filter(Boolean));
+  const distinctDates = new Set(sigs.map(x => x.date).filter(Boolean));
+  if (distinctNums.size < 2 && distinctDates.size < 2) return null;
   const groups = [];
+  let lastDate = null;
   for (let i = 0; i < pageTexts.length; i++) {
-    const k = nums[i];
+    const k = sigs[i].num;
+    const d = sigs[i].date;
     const last = groups[groups.length - 1];
-    if (last && (k === last.key || !k)) { last.pages.push(i); continue; }
+    if (last && k && k === last.key) { last.pages.push(i); if (d) lastDate = d; continue; }
+    if (last && !k && (!d || !lastDate || d === lastDate)) { last.pages.push(i); continue; }
     groups.push({ key: k, pages: [i] });
+    if (d) lastDate = d;
   }
   return groups.length >= 2 ? groups : null;
 }
@@ -6020,7 +6041,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-17 · v57.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-17 · v57.3 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

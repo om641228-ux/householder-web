@@ -127,7 +127,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v57.2-2026-08-19', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v57.3-2026-08-19', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -1393,9 +1393,27 @@ function pageDocSignature(text) {
     m = t.match(/RECIBO[\s\S]{0,60}?\b(\d{6,}[A-Z0-9]{4,})\b/i);
     if (m) sig.docNum = 'rec' + m[1].toLowerCase();
   }
+  // v57.3: альбаран/фактура/тикет — номер рядом с ключевым словом («FACTURA Nº A-1234», «ALBARÁN 9793/6»)
+  if (!sig.docNum) {
+    m = t.match(/(?:ALBAR[AÁ]N|FACTURA|ALBARAN|TICKET|FACT\.?)\s*(?:N[ºo°]?|N[ÚU]M(?:ERO)?)?\s*[:.]?\s*([A-Z]{0,4}[\s\-]?\d[\d\s\/\-]{2,}\d)/i);
+    if (m) sig.docNum = m[1].replace(/\s+/g, '').toLowerCase();
+  }
+  // v57.3: табличная шапка альбарана — «номер + дата» на одной строке («9793/ 6 17/07/2025 1»)
+  if (!sig.docNum) {
+    m = t.match(/\b(\d{3,7}(?:\s*[\/\-]?\s*\d{1,2}){0,2})\s+(\d{1,2}\/\d{1,2}\/\d{4})\b/);
+    if (m) {
+      sig.docNum = m[1].replace(/\s+/g, '').toLowerCase();
+      if (!sig.date) sig.date = m[2];
+    }
+  }
   // Дата документа: «Fecha:2025-11-30» или dd/mm/yyyy
   m = t.match(/Fecha\s*[:;]?\s*(\d{4}-\d{1,2}-\d{1,2})/i) || t.match(/Fecha\s*[:;]?\s*(\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{4})/i);
   if (m) sig.date = m[1];
+  // v57.3: дата страницы — первая dd/mm/yyyy в шапке (для безномерных страниц — критерий разделения)
+  if (!sig.date) {
+    m = t.slice(0, 1200).match(/\b(\d{1,2}\/\d{1,2}\/\d{4})\b/);
+    if (m) sig.date = m[1];
+  }
   // Итог страницы: самая крупная сумма с EUR/€ (выписка: «IMPORTE … 41,47 EUR»)
   const reT = /(\d{1,3}(?:[.\s]\d{3})*,\d{2}|\d+,\d{2})\s*(?:EUR|€)/gi;
   let mm; const cand = [];
@@ -1404,6 +1422,32 @@ function pageDocSignature(text) {
     if (n != null && n > 0 && n < 1e9) cand.push(n);
   }
   if (cand.length) sig.total = Math.max(...cand);
+  // v57.3: итог без символа валюты — блок после слова TOTAL (альбараны: «TOTAL → 766,21»)
+  if (!sig.total) {
+    // Все вхождения TOTAL (шапка таблицы + блок итога): максимум сумм в окне 300 символов
+    const reH = /TOTAL\b/gi;
+    let mh; const candS = [];
+    while ((mh = reH.exec(t)) !== null) {
+      const seg = t.slice(mh.index, mh.index + 300);
+      const reS = /(\d{1,3}(?:[.\s]\d{3})+,\d{2}|\d+,\d{2})/g;
+      let ms;
+      while ((ms = reS.exec(seg)) !== null && candS.length < 30) {
+        const n = parseAmountLike(ms[1].replace(/\s/g, ''));
+        if (n != null && n > 0 && n < 1e9) candS.push(n);
+      }
+    }
+    if (candS.length) sig.total = Math.max(...candS);
+  }
+  // v57.3: ни EUR-суффикса, ни слова TOTAL не нашлось (OCR потерял) — максимум сумм страницы
+  if (!sig.total) {
+    const reA = /(\d{1,3}(?:\.\d{3})+,\d{2}|\d+,\d{2})/g;
+    let ma; const candA = [];
+    while ((ma = reA.exec(t)) !== null && candA.length < 400) {
+      const n = parseAmountLike(ma[1].replace(/\s/g, ''));
+      if (n != null && n > 0 && n < 1e9) candA.push(n);
+    }
+    if (candA.length) sig.total = Math.max(...candA);
+  }
   // Эмитент (ENTIDAD ORDENANTE — компания S.L./S.A./SLU)
   m = t.match(/([A-ZÁÉÍÓÚÑ][\w&.'\- ]{2,45}?(?:SLU|S\.?\s?L\.?\s?U\.?|S\.?\s?L\.?|S\.?\s?A\.?))\b/i);
   if (m) sig.issuer = m[1].trim().toLowerCase().replace(/\s+/g, ' ');
@@ -1417,13 +1461,21 @@ function splitPagesIntoDocuments(pageTexts) {
   if (!Array.isArray(pageTexts) || pageTexts.length < 2) return null;
   const sigs = pageTexts.map(pageDocSignature);
   const distinctNums = new Set(sigs.map(sg => sg.docNum).filter(Boolean));
-  if (distinctNums.size < 2) return null;
+  const distinctDates = new Set(sigs.map(sg => sg.date).filter(Boolean));
+  // Нужно минимум 2 различия: по номерам документов ИЛИ по датам страниц
+  if (distinctNums.size < 2 && distinctDates.size < 2) return null;
   const groups = [];
+  let lastDate = null; // дата последней подписанной страницы
   for (let i = 0; i < pageTexts.length; i++) {
     const k = sigs[i].docNum;
+    const d = sigs[i].date;
     const last = groups[groups.length - 1];
-    if (last && (k === last.key || !k)) { last.pages.push(i); continue; }
+    if (last && k && k === last.key) { last.pages.push(i); if (d) lastDate = d; continue; }
+    // Страница без номера: продолжение предыдущего документа — НО только если даты нет
+    // или она СОВПАДАЕТ; другая дата = другой документ (v57.3: альбаран без распознанного номера)
+    if (last && !k && (!d || !lastDate || d === lastDate)) { last.pages.push(i); continue; }
     groups.push({ key: k, pages: [i], sig: sigs[i] });
+    if (d) lastDate = d;
   }
   return groups.length >= 2 ? groups : null;
 }
