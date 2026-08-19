@@ -786,6 +786,12 @@ const DOC_SECTIONS = [
   { key: 'auto', title: '🚗 Авто' },
   { key: 'personal', title: '👤 Личное' }
 ];
+// v57.7: подпапки разделов (хранятся в поле folder у файла); «All» — все файлы раздела
+const DOC_FOLDERS = {
+  home: ['Dude', 'Kit', 'Maria'],
+  auto: ['Mercedes', 'Porsche', 'Volvo'],
+  personal: []
+};
 const docKindOf = (f) => /^image\//.test(f.type || '') ? 'photo' : /^video\//.test(f.type || '') ? 'video' : /^audio\//.test(f.type || '') ? 'audio'
   : (f.type === 'application/pdf' || /^text\//.test(f.type || '') || /\.(pdf|txt|md|csv)$/i.test(f.name || '')) ? 'doc' : 'file';
 const docMediaOf = (entry) => (entry && typeof entry === 'object') ? entry : { url: entry, kind: 'photo', name: '' };
@@ -796,7 +802,8 @@ function DocsTab({ user, token }) {
   const [docsError, setDocsError] = useState(null);
   const [docsBusy, setDocsBusy] = useState(false);
   const [docsViewer, setDocsViewer] = useState(null); // {url, kind, name}
-  const [docsOcr, setDocsOcr] = useState(null); // v57.6: {loading} | {name, url, pageUrls[], pages[{original,russian}], idx, tab}
+  const [docsOcr, setDocsOcr] = useState(null); // v57.6: {loading} | {name, url, pageUrls[], pages[{original,russian}], idx, tab, saved}
+  const [docFolder, setDocFolder] = useState({ home: 'All', auto: 'All', personal: 'All' }); // v57.7: выбранная подпапка
   const [docsZoom, setDocsZoom] = useState(false);
   const [docsVErr, setDocsVErr] = useState(false);
 
@@ -826,6 +833,9 @@ function DocsTab({ user, token }) {
       }
       const fd = new FormData();
       prepared.forEach(f => fd.append('files', f));
+      const curFolder = docFolder[cat] || 'All';
+      if (curFolder !== 'All') fd.append('folder', curFolder); // v57.7: загрузка в выбранную подпапку
+      const beforeUrls = new Set((sections[cat] || []).map(it => docMediaOf(it).url));
       const res = await fetch(`${API_URL}/api/docs/${cat}/files?token=${token}`, { method: 'POST', body: fd });
       const rawText = await res.text().catch(() => '');
       let data = {};
@@ -833,11 +843,56 @@ function DocsTab({ user, token }) {
       if (!res.ok) throw new Error(data.error || (rawText && rawText.length < 300 ? rawText : `HTTP ${res.status}`));
       setSections(prev => ({ ...prev, [cat]: data.attachments || [] }));
       setDocsError(null);
+      // v57.7: АВТО-распознавание загруженных фото/PDF — оригинал+перевод сохраняются в карточке файла
+      const fresh = (data.attachments || []).filter(it => {
+        const mm = docMediaOf(it);
+        return !beforeUrls.has(mm.url) && (mm.kind === 'photo' || mm.kind === 'doc');
+      });
+      for (const it of fresh) {
+        try {
+          const mm = docMediaOf(it);
+          const pages = await recognizeFilePages(mm);
+          await saveDocOcr(cat, mm.url, pages);
+          console.log(`Документы: текст «${mm.name}» распознан и сохранён (${pages.length} стр.)`);
+        } catch (e2) { console.error('Авто-распознавание пропущено:', e2.message); }
+      }
     } catch (e) {
       alert('Не загрузился файл: ' + e.message);
     } finally {
       setDocsBusy(false);
     }
+  };
+
+  // v57.7: файл → страницы с текстом (оригинал+перевод); PDF раскрывается в страницы через pdf.js
+  const recognizeFilePages = async (m) => {
+    const resp = await fetch(m.url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} при скачивании файла`);
+    const blob = await resp.blob();
+    const fileName = m.name || 'file';
+    let pageFiles;
+    if (/\.pdf(\?|$)/i.test(fileName) || /\.pdf(\?|$)/i.test(m.url || '')) {
+      pageFiles = await convertPdfToImages(new File([blob], fileName, { type: 'application/pdf' }));
+      if (!pageFiles.length) throw new Error('Не удалось разобрать PDF на страницы');
+    } else {
+      pageFiles = [new File([blob], fileName, { type: blob.type || 'image/jpeg' })];
+    }
+    const fd = new FormData();
+    pageFiles.forEach(f => fd.append('pages', f));
+    const r = await fetch(`${API_URL}/api/docs/recognize-text?token=${token}`, { method: 'POST', body: fd });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    return { pages: Array.isArray(j.pages) ? j.pages : [], pageUrls: pageFiles.map(f => URL.createObjectURL(f)) };
+  };
+
+  // v57.7: сохранить распознанный текст в карточке файла (PATCH на сервер + локальный state)
+  const saveDocOcr = async (cat, url, pages) => {
+    const r = await fetch(`${API_URL}/api/docs/${cat}/files?token=${token}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, ocr: { pages } })
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    setSections(prev => ({ ...prev, [cat]: Array.isArray(j.attachments) ? j.attachments : prev[cat] }));
   };
 
   const removeDoc = async (cat, url) => {
@@ -852,33 +907,25 @@ function DocsTab({ user, token }) {
     } catch (e) { alert('Не удалилось на сервере: ' + e.message); }
   };
 
-  // v57.6: распознать текст файла (фото или PDF) — карточка: фото + текст по страницам (оригинал/перевод)
+  // v57.6/v57.7: карточка «фото + текст по страницам». Если текст уже распознан и сохранён —
+  // открываем мгновенно; иначе распознаём и СОХРАНЯЕМ в карточке файла (оригинал + перевод)
   const recognizeDoc = async (entry) => {
     const m = docMediaOf(entry);
     if (docsOcr && docsOcr.loading) return;
+    if (m.ocr && Array.isArray(m.ocr.pages) && m.ocr.pages.length) {
+      setDocsOcr({
+        loading: false, saved: true, name: m.name || 'Файл', url: m.url, kind: m.kind,
+        pageUrls: null, pages: m.ocr.pages, idx: 0, tab: 'ru'
+      });
+      return;
+    }
     setDocsOcr({ loading: true, name: m.name || 'Файл' });
     try {
-      const resp = await fetch(m.url);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status} при скачивании файла`);
-      const blob = await resp.blob();
-      const fileName = m.name || 'file';
-      let pageFiles;
-      if (/\.pdf(\?|$)/i.test(fileName) || /\.pdf(\?|$)/i.test(m.url || '')) {
-        // PDF → страницы JPEG (pdf.js), каждая распознаётся отдельно
-        pageFiles = await convertPdfToImages(new File([blob], fileName, { type: 'application/pdf' }));
-        if (!pageFiles.length) throw new Error('Не удалось разобрать PDF на страницы');
-      } else {
-        pageFiles = [new File([blob], fileName, { type: blob.type || 'image/jpeg' })];
-      }
-      const fd = new FormData();
-      pageFiles.forEach(f => fd.append('pages', f));
-      const r = await fetch(`${API_URL}/api/docs/recognize-text?token=${token}`, { method: 'POST', body: fd });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      const { pages, pageUrls } = await recognizeFilePages(m);
+      await saveDocOcr(docSection, m.url, pages); // сохранение в карточке (v57.7)
       setDocsOcr({
-        loading: false, name: m.name || 'Файл', url: m.url, kind: m.kind,
-        pageUrls: pageFiles.map(f => URL.createObjectURL(f)),
-        pages: Array.isArray(j.pages) ? j.pages : [], idx: 0, tab: 'ru'
+        loading: false, saved: true, name: m.name || 'Файл', url: m.url, kind: m.kind,
+        pageUrls, pages, idx: 0, tab: 'ru'
       });
     } catch (e) {
       setDocsOcr(null);
@@ -910,12 +957,17 @@ function DocsTab({ user, token }) {
         {(m.kind === 'photo' || m.kind === 'doc') && (
           <button onClick={(e) => { e.stopPropagation(); recognizeDoc(entry); }} title="Распознать текст (фото → текст по страницам + перевод)" style={{ position: 'absolute', top: -6, left: -6, width: 18, height: 18, borderRadius: '50%', border: 'none', background: '#0071e3', color: '#fff', fontSize: 10, cursor: 'pointer', lineHeight: '18px', padding: 0, zIndex: 1 }}>📝</button>
         )}
+        {m.ocr && Array.isArray(m.ocr.pages) && m.ocr.pages.length ? (
+          <span title="Текст распознан и сохранён — откроется карточка" style={{ position: 'absolute', bottom: -6, right: -6, width: 16, height: 16, borderRadius: '50%', background: '#34c759', color: '#fff', fontSize: 9, lineHeight: '16px', textAlign: 'center', zIndex: 1 }}>Т</span>
+        ) : null}
         {m.name ? <div style={{ position: 'absolute', bottom: -16, left: 0, right: 0, fontSize: 9, color: '#8e8e93', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 72 }}>{m.name}</div> : null}
       </span>
     );
   };
 
-  const items = sections[docSection] || [];
+  const curDocFolder = docFolder[docSection] || 'All';
+  const allItems = sections[docSection] || [];
+  const items = curDocFolder === 'All' ? allItems : allItems.filter(it => docMediaOf(it).folder === curDocFolder);
   return (
     <div style={{ padding: '12px 15px', maxWidth: 1100, margin: '0 auto' }}>
       <h2 style={{ margin: '4px 0 4px', fontSize: 20 }}>📁 Документы</h2>
@@ -935,6 +987,21 @@ function DocsTab({ user, token }) {
           </button>
         ))}
       </div>
+      {(DOC_FOLDERS[docSection] || []).length > 0 && (
+        <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ fontSize: 12, color: '#8e8e93', marginRight: 2 }}>Папка:</span>
+          {['All', ...DOC_FOLDERS[docSection]].map(fn => {
+            const cnt = fn === 'All' ? allItems.length : allItems.filter(it => docMediaOf(it).folder === fn).length;
+            const on = curDocFolder === fn;
+            return (
+              <button key={fn} onClick={() => setDocFolder(prev => ({ ...prev, [docSection]: fn }))}
+                style={{ padding: '5px 14px', borderRadius: 980, border: on ? 'none' : '1px solid #d0d0d5', background: on ? '#5856d6' : '#fff', color: on ? '#fff' : '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer' }}>
+                {fn === 'All' ? '🗂 Все' : `📁 ${fn}`} ({cnt})
+              </button>
+            );
+          })}
+        </div>
+      )}
       <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #e3e6ea', padding: 14 }}>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-start', paddingBottom: 18 }}>
           {items.map((entry, i) => docThumb(entry, i))}
@@ -950,7 +1017,7 @@ function DocsTab({ user, token }) {
         <div onClick={() => { if (!docsOcr.loading) setDocsOcr(null); }} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 210, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: 'min(1100px, 94vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid #eee' }}>
-              <div style={{ fontSize: 15, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📝 Распознавание текста — {docsOcr.name}</div>
+              <div style={{ fontSize: 15, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📝 Распознавание текста — {docsOcr.name}{docsOcr.saved ? ' · 💾 сохранено в карточке' : ''}</div>
               <button onClick={() => !docsOcr.loading && setDocsOcr(null)} style={{ border: 'none', background: '#f0f0f2', borderRadius: '50%', width: 28, height: 28, cursor: docsOcr.loading ? 'not-allowed' : 'pointer', fontSize: 13 }}>✕</button>
             </div>
             {docsOcr.loading ? (
@@ -6121,7 +6188,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-17 · v57.6 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-17 · v57.7 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v57.6-2026-08-19', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v57.7-2026-08-19', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -4073,7 +4073,10 @@ app.post('/api/docs/:category/files', requireAuth, crmMediaMulter('files'), asyn
         if (mkind === 'video' && f.size > 48 * 1024 * 1024) { buf = await compressVideoBuffer(f.buffer); ct = 'video/mp4'; }
         const fixedName = fixUtf8Name(f.originalname || 'file');
         const url = await uploadToStorage(buf, fixedName, `docs/${cat}`, ct);
-        items.push({ url, kind: mkind, name: fixedName, ts: Date.now(), actor: userName });
+        const folder = String(req.body.folder || '').trim().slice(0, 40);
+        const item = { url, kind: mkind, name: fixedName, ts: Date.now(), actor: userName };
+        if (folder) item.folder = folder; // v57.7: подпапка раздела (Дома: Dude/Kit/Maria; Авто: Mercedes/Porsche/Volvo)
+        items.push(item);
       } catch (e) { console.error('Docs file skip:', e.message); lastErr = e.message; }
     }
     if (!items.length) return res.status(400).json({ error: 'Не удалось загрузить ни одного файла' + (lastErr ? `. Причина: ${lastErr}` : '') });
@@ -4121,6 +4124,39 @@ app.post('/api/docs/recognize-text', requireAuth, crmMediaMulter('pages'), async
   } catch (e) {
     console.error('docs recognize-text error:', e);
     res.status(500).json({ error: e.message });
+  }
+});
+
+// PATCH /api/docs/:category/files (v57.7) — body {url, ocr:{pages:[{original,russian}]}}:
+// прикрепляет распознанный текст к файлу (показывается карточкой без повторного OCR)
+app.patch('/api/docs/:category/files', requireAuth, async (req, res) => {
+  try {
+    const cat = String(req.params.category || '');
+    if (!DOC_CATEGORIES.includes(cat)) return res.status(400).json({ error: 'Неизвестный раздел (нужен home, auto или personal)' });
+    const url = req.body && req.body.url;
+    const ocr = req.body && req.body.ocr;
+    if (!url) return res.status(400).json({ error: 'Передайте url файла' });
+    if (!ocr || !Array.isArray(ocr.pages) || !ocr.pages.length) return res.status(400).json({ error: 'Передайте ocr {pages:[…]}' });
+    const { data: row, error: e0 } = await supabaseAdmin.from('doc_sections').select('*').eq('category', cat).maybeSingle();
+    if (e0) throw e0;
+    const cur = row && Array.isArray(row.attachments) ? row.attachments : [];
+    let found = false;
+    const next = cur.map(it => {
+      const iu = typeof it === 'string' ? it : it && it.url;
+      if (iu === url && it && typeof it === 'object') {
+        found = true;
+        return { ...it, ocr: { pages: ocr.pages.slice(0, 60), ts: Date.now() } };
+      }
+      return it;
+    });
+    if (!found) return res.status(404).json({ error: 'Файл не найден в разделе' });
+    const { data, error } = await supabaseAdmin.from('doc_sections')
+      .upsert({ category: cat, attachments: next, updated_at: new Date().toISOString() }, { onConflict: 'category' })
+      .select().single();
+    if (error) throw error;
+    res.json({ category: cat, attachments: Array.isArray(data.attachments) ? data.attachments : [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message, hint: DOCS_MIGRATION_HINT });
   }
 });
 

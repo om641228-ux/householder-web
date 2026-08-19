@@ -1495,3 +1495,16 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
   справа текст с вкладками «🇷🇺 Перевод | Оригинал» и синхронным пагинатором «‹ Стр. N из M ›»
   (картинка и текст листаются вместе). Состояние загрузки со спиннером.
 - eslint: 3 прежних warning; esbuild/node --check OK.
+
+## v57.7 (2026-08-19) — Документы: авто-распознавание с сохранением + подпапки
+### Подпапки (поле folder у attachment, jsonb — миграция БД НЕ нужна)
+- DOC_FOLDERS: home → [Dude, Kit, Maria], auto → [Mercedes, Porsche, Volvo], personal → [].
+- Строка чипсов «Папка: 🗂 Все | 📁 Dude | …» (фиолетовая #5856d6) с счётчиками; «All» — все файлы.
+- Загрузка идёт в выбранную папку (FormData folder; backend кладёт item.folder, ≤40 симв.).
+### Авто-распознавание и сохранение текста в карточке
+- После addDocs все новые фото/PDF последовательно: recognizeFilePages (fetch файла из Storage,
+  PDF→JPEG-страницы pdf.js, POST /api/docs/recognize-text) → saveDocOcr (PATCH) → sections state.
+- Backend PATCH /api/docs/:category/files {url, ocr:{pages[]}} — пишет ocr в attachment (≤60 стр.).
+- 📝 на миниатюре: если ocr уже сохранён — карточка открывается МГНОВЕННО (без повторного OCR),
+  шапка «💾 сохранено в карточке»; зелёный бейдж «Т» на миниатюре = текст сохранён.
+- build backend v57.7-2026-08-19, метка фронта v57.7; eslint: 3 прежних warning.
