@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v57.7-2026-08-19', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v57.9-2026-08-19', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -4061,9 +4061,15 @@ app.post('/api/docs/:category/files', requireAuth, crmMediaMulter('files'), asyn
     const userName = req.user.name || req.user.id;
     const files = req.files || [];
     if (!files.length) return res.status(400).json({ error: 'Нет файлов: передайте поле files (multipart/form-data)' });
+    // v57.9: структура загружаемой папки — относительные пути файлов (JSON-массив в поле paths)
+    let pathsArr = [];
+    try { pathsArr = JSON.parse(req.body.paths || '[]'); } catch (_) { pathsArr = []; }
     const items = [];
     let lastErr = null;
+    let fIdx = 0;
     for (const f of files) {
+      const relPath = String(pathsArr[fIdx] || '').trim().slice(0, 200).replace(/^\/+|\/+$/g, '');
+      fIdx++;
       try {
         const mt = f.mimetype || '';
         const mkind = /^image\//.test(mt) ? 'photo' : /^video\//.test(mt) ? 'video' : /^audio\//.test(mt) ? 'audio'
@@ -4076,6 +4082,7 @@ app.post('/api/docs/:category/files', requireAuth, crmMediaMulter('files'), asyn
         const folder = String(req.body.folder || '').trim().slice(0, 40);
         const item = { url, kind: mkind, name: fixedName, ts: Date.now(), actor: userName };
         if (folder) item.folder = folder; // v57.7: подпапка раздела (Дома: Dude/Kit/Maria; Авто: Mercedes/Porsche/Volvo)
+        if (relPath) item.path = relPath; // v57.9: путь внутри загруженной папки (вложенные подпапки сохраняются)
         items.push(item);
       } catch (e) { console.error('Docs file skip:', e.message); lastErr = e.message; }
     }

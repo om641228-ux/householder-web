@@ -1514,3 +1514,17 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Фиксированная панель справа (pointer-events:none, ~520px, maxHeight 72vh): фото → img,
   видео → video (#t=0.1), PDF → iframe со встроенным просмотрщиком браузера; в шапке имя файла.
 - Метка фронта v57.8; eslint: 3 прежних warning; esbuild OK.
+
+## v57.9 (2026-08-19) — Загрузка папки со структурой в «Документы»
+**Запрос:** «организуй загрузку папки с внутренней структурой чтобы она сохранялась на Supabase» (пример: папка «Сайты» → «2» → фото).
+
+**Backend (index.js, build v57.9-2026-08-19):**
+- `POST /api/docs/:category/files` принимает поле `paths` (JSON-массив, выровнен по порядку `files`): каждый относительный путь (≤200 символов, слеши по краям обрезаны) сохраняется в карточке вложения как `item.path`.
+
+**Frontend (App.js, label · v57.9 ·):**
+- DocsTab: новый state `docPath {home,auto,personal}` — текущий путь навигации внутри структуры.
+- `addDocs`: для файлов с `webkitRelativePath` строит `pathsArr` (путь без имени корневой папки + префикс текущего `docPath`) и шлёт `fd.append('paths', JSON.stringify(pathsArr))`.
+- Навигация: хлебные крошки 🏠/сегменты + плитки 📁 подпапок (первый сегмент `item.path` с количеством файлов); файлы фильтруются по текущему пути (только прямые дети).
+- Новая кнопка загрузки **📂** (`<input webkitdirectory directory multiple>`) рядом с 📎 — выбор папки целиком, структура сохраняется в Supabase.
+- Проверки: esbuild OK; eslint — только 3 прежних exhaustive-deps warning (303, 3568, 3577).
+- Требуется redeploy: householder-api (build v57.9) + householder-web (v57.9).

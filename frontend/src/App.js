@@ -805,6 +805,7 @@ function DocsTab({ user, token }) {
   const [docsOcr, setDocsOcr] = useState(null); // v57.6: {loading} | {name, url, pageUrls[], pages[{original,russian}], idx, tab, saved}
   const [docFolder, setDocFolder] = useState({ home: 'All', auto: 'All', personal: 'All' }); // v57.7: выбранная подпапка
   const [docsHover, setDocsHover] = useState(null); // v57.8: увеличенный предпросмотр при наведении {url, kind, name}
+  const [docPath, setDocPath] = useState({ home: '', auto: '', personal: '' }); // v57.9: текущий путь внутри загруженной структуры папок
   const [docsZoom, setDocsZoom] = useState(false);
   const [docsVErr, setDocsVErr] = useState(false);
 
@@ -836,6 +837,15 @@ function DocsTab({ user, token }) {
       prepared.forEach(f => fd.append('files', f));
       const curFolder = docFolder[cat] || 'All';
       if (curFolder !== 'All') fd.append('folder', curFolder); // v57.7: загрузка в выбранную подпапку
+      // v57.9: относительные пути файлов (загрузка папки со структурой) — сохраняются в карточке как item.path
+      const basePath = (docPath[cat] || '').replace(/^\/+|\/+$/g, '');
+      const pathsArr = files.map(f => {
+        let rel = '';
+        if (f.webkitRelativePath) rel = f.webkitRelativePath.split('/').slice(1).join('/');
+        rel = String(rel || '').replace(/^\/+|\/+$/g, '').slice(0, 200);
+        return basePath ? (rel ? basePath + '/' + rel : basePath) : rel;
+      });
+      if (pathsArr.some(p => p)) fd.append('paths', JSON.stringify(pathsArr));
       const beforeUrls = new Set((sections[cat] || []).map(it => docMediaOf(it).url));
       const res = await fetch(`${API_URL}/api/docs/${cat}/files?token=${token}`, { method: 'POST', body: fd });
       const rawText = await res.text().catch(() => '');
@@ -972,7 +982,26 @@ function DocsTab({ user, token }) {
 
   const curDocFolder = docFolder[docSection] || 'All';
   const allItems = sections[docSection] || [];
-  const items = curDocFolder === 'All' ? allItems : allItems.filter(it => docMediaOf(it).folder === curDocFolder);
+  const folderItems = curDocFolder === 'All' ? allItems : allItems.filter(it => docMediaOf(it).folder === curDocFolder);
+  // v57.9: навигация по структуре загруженных папок (item.path)
+  const curDocPath = (docPath[docSection] || '').replace(/^\/+|\/+$/g, '');
+  const relPathOf = (it) => {
+    let p = String(docMediaOf(it).path || '').replace(/^\/+|\/+$/g, '');
+    if (curDocPath && p.startsWith(curDocPath + '/')) p = p.slice(curDocPath.length + 1);
+    else if (curDocPath) return null; // файл вне текущей ветки
+    return p;
+  };
+  const subFolders = [];
+  const seenSub = {};
+  const items = folderItems.filter(it => {
+    const p = relPathOf(it);
+    if (p === null) return false;
+    if (p.indexOf('/') === -1) return true; // файл прямо в текущей папке
+    const first = p.split('/')[0];
+    if (!seenSub[first]) { seenSub[first] = 0; subFolders.push(first); }
+    seenSub[first]++;
+    return false;
+  });
   return (
     <div style={{ padding: '12px 15px', maxWidth: 1100, margin: '0 auto' }}>
       <h2 style={{ margin: '4px 0 4px', fontSize: 20 }}>📁 Документы</h2>
@@ -1008,13 +1037,36 @@ function DocsTab({ user, token }) {
         </div>
       )}
       <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #e3e6ea', padding: 14 }}>
+        {(curDocPath || subFolders.length > 0) && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+            <button onClick={() => setDocPath(prev => ({ ...prev, [docSection]: '' }))} title="В корень"
+              style={{ padding: '4px 10px', borderRadius: 980, border: curDocPath ? '1px solid #d0d0d5' : 'none', background: curDocPath ? '#fff' : '#e8e8ed', color: '#1d1d1f', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>🏠</button>
+            {curDocPath && curDocPath.split('/').map((seg, si, arr) => (
+              <span key={si} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ color: '#c7c7cc', fontSize: 12 }}>/</span>
+                <button onClick={() => setDocPath(prev => ({ ...prev, [docSection]: arr.slice(0, si + 1).join('/') }))}
+                  style={{ padding: '4px 10px', borderRadius: 980, border: 'none', background: si === arr.length - 1 ? '#e8e8ed' : 'transparent', color: si === arr.length - 1 ? '#1d1d1f' : '#0071e3', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>{seg}</button>
+              </span>
+            ))}
+            {subFolders.map(fn => (
+              <button key={fn} onClick={() => setDocPath(prev => ({ ...prev, [docSection]: curDocPath ? curDocPath + '/' + fn : fn }))}
+                style={{ padding: '5px 12px', borderRadius: 10, border: '1px solid #d0d0d5', background: '#f5f5f7', color: '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer' }}>
+                📁 {fn} ({seenSub[fn]})
+              </button>
+            ))}
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-start', paddingBottom: 18 }}>
           {items.map((entry, i) => docThumb(entry, i))}
           <label title="Добавить файлы любого типа" style={{ width: 72, height: 72, borderRadius: 8, border: '1px dashed #c7c7cc', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: docsBusy ? 'wait' : 'pointer', fontSize: 24, color: '#8e8e93', background: '#f5f5f7' }}>
             {docsBusy ? '⏳' : '📎'}
             <input type="file" accept="*/*" multiple disabled={docsBusy} style={{ display: 'none' }} onChange={(e) => { addDocs(docSection, e.target.files); e.target.value = ''; }} />
           </label>
-          {items.length === 0 && !docsBusy && <div style={{ fontSize: 13, color: '#8e8e93', alignSelf: 'center' }}>Файлов пока нет — нажмите 📎, чтобы загрузить.</div>}
+          <label title="Загрузить папку целиком — внутренняя структура сохранится" style={{ width: 72, height: 72, borderRadius: 8, border: '1px dashed #c7c7cc', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: docsBusy ? 'wait' : 'pointer', fontSize: 24, color: '#8e8e93', background: '#f5f5f7' }}>
+            {docsBusy ? '⏳' : '📂'}
+            <input type="file" multiple disabled={docsBusy} style={{ display: 'none' }} {...{ webkitdirectory: '', directory: '' }} onChange={(e) => { addDocs(docSection, e.target.files); e.target.value = ''; }} />
+          </label>
+          {items.length === 0 && subFolders.length === 0 && !docsBusy && <div style={{ fontSize: 13, color: '#8e8e93', alignSelf: 'center' }}>Файлов пока нет — нажмите 📎 (файлы) или 📂 (папку со структурой), чтобы загрузить.</div>}
         </div>
       </div>
 
@@ -6206,7 +6258,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-17 · v57.8 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-19 · v57.9 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
