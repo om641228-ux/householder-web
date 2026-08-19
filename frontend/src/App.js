@@ -804,6 +804,7 @@ function DocsTab({ user, token }) {
   const [docsViewer, setDocsViewer] = useState(null); // {url, kind, name}
   const [docsOcr, setDocsOcr] = useState(null); // v57.6: {loading} | {name, url, pageUrls[], pages[{original,russian}], idx, tab, saved}
   const [docFolder, setDocFolder] = useState({ home: 'All', auto: 'All', personal: 'All' }); // v57.7: выбранная подпапка
+  const [docsHover, setDocsHover] = useState(null); // v57.8: увеличенный предпросмотр при наведении {url, kind, name}
   const [docsZoom, setDocsZoom] = useState(false);
   const [docsVErr, setDocsVErr] = useState(false);
 
@@ -937,8 +938,12 @@ function DocsTab({ user, token }) {
     const m = docMediaOf(entry);
     const openViewer = () => { setDocsViewer({ url: m.url, kind: m.kind, name: m.name || '' }); setDocsZoom(false); setDocsVErr(false); };
     const box = { width: 72, height: 72, borderRadius: 8, border: '1px solid #e0e0e0', background: '#f5f5f7', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: 26, overflow: 'hidden' };
+    const isPdfD = m.kind === 'doc' && (/\.pdf(\?|$)/i.test(m.name || '') || /\.pdf(\?|$)/i.test(m.url || ''));
+    const canPreview = m.kind === 'photo' || m.kind === 'video' || isPdfD;
     return (
-      <span key={key} style={{ position: 'relative', display: 'inline-block' }} title={m.name || 'Файл'}>
+      <span key={key} style={{ position: 'relative', display: 'inline-block' }} title={m.name || 'Файл'}
+        onMouseEnter={() => { if (canPreview) setDocsHover({ url: m.url, kind: isPdfD ? 'pdf' : m.kind, name: m.name || '' }); }}
+        onMouseLeave={() => setDocsHover(prev => (prev && prev.url === m.url ? null : prev))}>
         {m.kind === 'video' ? (
           <span onClick={openViewer} style={{ ...box, display: 'inline-block', position: 'relative', background: '#1d1d1f' }}>
             <video src={`${m.url}#t=0.1`} muted playsInline preload="auto" style={{ width: 72, height: 72, objectFit: 'cover', display: 'block', pointerEvents: 'none' }} />
@@ -1012,6 +1017,19 @@ function DocsTab({ user, token }) {
           {items.length === 0 && !docsBusy && <div style={{ fontSize: 13, color: '#8e8e93', alignSelf: 'center' }}>Файлов пока нет — нажмите 📎, чтобы загрузить.</div>}
         </div>
       </div>
+
+      {docsHover && (
+        <div style={{ position: 'fixed', right: 24, top: '50%', transform: 'translateY(-50%)', zIndex: 190, pointerEvents: 'none', background: '#fff', borderRadius: 14, boxShadow: '0 16px 48px rgba(0,0,0,0.35)', padding: 10, width: 'min(520px, 44vw)' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#1d1d1f', marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{docsHover.name || 'Документ'}</div>
+          {docsHover.kind === 'photo' ? (
+            <img src={docsHover.url} alt="" style={{ width: '100%', maxHeight: '72vh', objectFit: 'contain', borderRadius: 8, display: 'block' }} />
+          ) : docsHover.kind === 'video' ? (
+            <video src={`${docsHover.url}#t=0.1`} muted playsInline preload="auto" style={{ width: '100%', maxHeight: '72vh', borderRadius: 8, display: 'block', background: '#000' }} />
+          ) : (
+            <iframe src={docsHover.url} title="preview" style={{ width: '100%', height: '72vh', border: 'none', borderRadius: 8, background: '#f5f5f7' }} />
+          )}
+        </div>
+      )}
 
       {docsOcr && (
         <div onClick={() => { if (!docsOcr.loading) setDocsOcr(null); }} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 210, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -6188,7 +6206,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-17 · v57.7 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-17 · v57.8 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
