@@ -1461,3 +1461,16 @@ Backend не менялся (v56.5-2026-08-19).
 - Скан 18: 4 группы [1][2][3][4], итоги 641.15/38.46/766.21/144.56 ✓ (backend и client).
 - Скан 22: 16 выписок ✓. Одна фактура на 2 стр. / тот же номер ×2 → не дробим ✓.
 - node --check, esbuild OK; eslint — 3 прежних warning (экраны в regex почищены).
+
+## v57.4 (2026-08-19) — сессии переживают redeploy: stateless HMAC-токены (fix 401 на /api/docs)
+Проблема: «Сервер документов недоступен: Unauthorized» — токены жили только в in-memory Map,
+любой redeploy Railway обнулял сессии всех пользователей → 401 на всех эндпоинтах.
+- generateToken(userId): формат `s1.<base64url(userId.ts.rand)>.<HMAC-SHA256>`;
+  секрет AUTH_SECRET → SUPABASE_SERVICE_ROLE_KEY → встроенный фолбэк.
+- resolveToken(token): in-memory Map (старые токены) → проверка подписи (timingSafeEqual) →
+  USERS[userId]; валидный подписанный токен кэшируется в Map (logout работает в рамках процесса).
+- requireAuth, /api/login, /api/me и 5 мест с прямым tokens.get (2634, 2879, 2966, 3092, 3149)
+  переведены на resolveToken. node --check OK.
+- Рекомендация: задать AUTH_SECRET в Railway Variables (иначе секрет = supabase service key).
+- Вкладке «Документы» дополнительно нужна миграция supabase-migration-v25-docs.sql (таблица
+  doc_sections) — выполнить в Supabase SQL Editor, если не выполнена.

@@ -102,16 +102,43 @@ const USERS = {
 
 const tokens = new Map();
 
-function generateToken() {
-  return Math.random().toString(36).substring(2) + Date.now().toString(36);
+// v57.4: сессии переживают redeploy/рестарт Railway — токен ПОДПИСАН (HMAC), а не только в памяти.
+// Секрет: AUTH_SECRET (рекомендуется задать в Variables) → иначе SUPABASE_SERVICE_ROLE_KEY → встроенный.
+const cryptoAuth = require('crypto');
+const AUTH_SECRET = process.env.AUTH_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || 'householder-auth-secret-v1';
+const b64u = (buf) => Buffer.from(buf).toString('base64url');
+function signPayload(payloadB64) {
+  return cryptoAuth.createHmac('sha256', AUTH_SECRET).update(payloadB64).digest('base64url');
+}
+function generateToken(userId) {
+  const payload = b64u(`${userId}.${Date.now()}.${Math.random().toString(36).slice(2, 10)}`);
+  return `s1.${payload}.${signPayload(payload)}`;
+}
+// Проверка: сначала in-memory (старые токены до рестарта), затем — по подписи
+function resolveToken(token) {
+  if (!token) return null;
+  const mem = tokens.get(token);
+  if (mem) return mem;
+  const m = String(token).match(/^s1\.([A-Za-z0-9_\-]+)\.([A-Za-z0-9_\-]+)$/);
+  if (!m) return null;
+  const expected = signPayload(m[1]);
+  const got = m[2];
+  if (expected.length !== got.length || !cryptoAuth.timingSafeEqual(Buffer.from(expected), Buffer.from(got))) return null;
+  let userId = null;
+  try { userId = Buffer.from(m[1], 'base64url').toString('utf8').split('.')[0]; } catch (_) { return null; }
+  const user = USERS[userId];
+  if (!user) return null;
+  tokens.set(token, user); // кэшируем — logout продолжает работать в рамках процесса
+  return user;
 }
 
 function requireAuth(req, res, next) {
   const token = req.query.token || req.headers['x-token'] || req.body?.token;
-  if (!token || !tokens.has(token)) {
+  const user = resolveToken(token);
+  if (!user) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-  req.user = tokens.get(token);
+  req.user = user;
   next();
 }
 
@@ -127,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v57.3-2026-08-19', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v57.4-2026-08-19', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -135,14 +162,13 @@ app.post('/api/login', (req, res) => {
   const { password } = req.body;
   const user = USERS[password];
   if (!user) return res.status(401).json({ error: 'Неверный пароль' });
-  const token = generateToken();
+  const token = generateToken(user.id);
   tokens.set(token, user);
   res.json({ success: true, token, user });
 });
 
 app.get('/api/me', (req, res) => {
-  const token = req.query.token;
-  const user = tokens.get(token);
+  const user = resolveToken(req.query.token);
   if (!user) return res.status(401).json({ error: 'Invalid token' });
   res.json({ success: true, user });
 });
@@ -2605,7 +2631,7 @@ async function cropByNormalizedBox(imageBuffer, box) {
 app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
   try {
     const token = req.query.token || req.body.token;
-    const user = tokens.get(token);
+    const user = resolveToken(token);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
     
     if (!req.file) return res.status(400).json({ error: 'No image provided' });
@@ -2850,7 +2876,7 @@ async function classifyPagesWithGemini(pageBuffers, mimeTypes) {
 app.post('/api/classify-pages', upload.array('pages', 60), async (req, res) => {
   try {
     const token = req.query.token || req.body.token;
-    const user = tokens.get(token);
+    const user = resolveToken(token);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
     const files = req.files || [];
     if (!files.length) return res.status(400).json({ error: 'No page files provided' });
@@ -2937,7 +2963,7 @@ function isDegenerateOcrText(t) {
 app.post('/api/upload-ocr-text', upload.array('pages', 60), async (req, res) => {
   try {
     const token = req.query.token || req.body.token;
-    const user = tokens.get(token);
+    const user = resolveToken(token);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
     // Тексты страниц: ocr_texts (JSON-массив) или одиночный ocr_text
@@ -3063,7 +3089,7 @@ setInterval(() => {
 }, 600000).unref();
 
 app.get('/api/doc-job/:id', (req, res) => {
-  const user = tokens.get(req.query.token);
+  const user = resolveToken(req.query.token);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
   const job = docJobs.get(req.params.id);
   if (!job) return res.status(404).json({ status: 'error', error: 'Задача не найдена (сервер перезапускался) — загрузите документ заново' });
@@ -3120,7 +3146,7 @@ async function pdfToMarkdown(buffer, filename) {
 app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, res) => {
   try {
     const token = req.query.token || req.body.token;
-    const user = tokens.get(token);
+    const user = resolveToken(token);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
     let files = req.files || [];
