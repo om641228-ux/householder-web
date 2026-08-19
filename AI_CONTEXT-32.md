@@ -1400,3 +1400,30 @@ Backend не менялся (v56.5-2026-08-19).
 - 16/16 страниц подписаны, 16 групп; дубликат одной выписки ×2 → не дробим; текст без номеров → не дробим.
 - Склейка: две фактуры SF 11267+SF 11253 → 231.07 (работает); две выписки банка → blocked.
 - Перепроверка: итог 999.99 → 41.47, дата и № заполнены. node --check, esbuild, eslint (3 прежних warning) — чисто.
+
+## v57.1 (2026-08-19) — маршрутизация PDF по текстовому слою + разделение ДО распознавания
+Требование: «разделение перед распознанием PDF; есть текстовый слой → MarkItDown, нет → другой вариант».
+
+### Frontend (App.js, метка v57.1)
+- `getPdfPageTexts(pdfFile)` + `pdfPageTextsCache`: текст КАЖДОЙ страницы через pdf.js
+  getTextContent (кэш по File). hasText = pages.length>0 && total ≥ 40.
+- `pageDocSigClient` / `splitPagesClientText` — клиентский порт серверного детектора (Fra:/RECIBO).
+- Local mac-ocr flow: probe testMacOcr перенесён ПОСЛЕ проверки текстового слоя (цифровые PDF
+  обходятся без Mac-сервера). Маршрут: (а) ОДИН документ с текстовым слоем → /pdf-md MarkItDown
+  на Mac (качество таблиц), при сбое — постраничные тексты pdf.js; (б) МУЛЬТИ-документ
+  (splitPagesClientText > 1) → постраничные тексты, бэкенд делит и сохраняет раздельно (v57);
+  (в) страницы без текста (сканы/фото) → Mac OCR точечно (смешанные пачки: слой + OCR).
+  textLayerOnly → formData model='pdf-text-layer'.
+- Не-local flow: pdf_source_names прикладывается ТОЛЬКО если у ВСЕХ PDF есть текстовый слой
+  (иначе — сразу vision, без холостой попытки markitdown); + новое поле `pdf_page_texts`
+  (постраничные тексты, порядок = порядок JPEG-страниц) для серверного разделения.
+### Backend (index.js, build v57.1-2026-08-19)
+- MarkItDown-ветка /api/upload-document-pages: ДО вызова markitdown — разбор pdf_page_texts;
+  splitPagesIntoDocuments > 1 группы (и pageImgs.length совпал) → мульти-сохранение по группам
+  (finalize + verifyDocAgainstSignature + uploadPagesToStorage на группу), job.result =
+  { multiple:true, count, results[] }, метод «pdf text-layer multi-doc N/M (async)». Один
+  документ → прежний markitdown-путь (markdown-качество).
+- ocr_texts-ветка: srcTagL = 'pdf text-layer' при model='pdf-text-layer' (метод сохранения).
+### Проверки
+- node --check OK; esbuild OK; eslint — только 3 прежних exhaustive-deps warning.
+- Логика разделения/склейки протестирована в v57 на реальном OCR «Скан 22.pdf» (16/16 разделено).

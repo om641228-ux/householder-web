@@ -516,6 +516,58 @@ async function convertPdfToImages(pdfFile, onProgress) {
   return out;
 }
 
+// v57.1: ТЕКСТОВЫЙ СЛОЙ PDF читаем в браузере (pdf.js getTextContent) ДО распознавания.
+// Есть текстовый слой → текстовый конвейер (MarkItDown/текст), НЕТ (скан) → OCR/vision.
+const pdfPageTextsCache = new Map(); // File → Promise<{pages: string[], total: number}>
+function getPdfPageTexts(pdfFile) {
+  if (!pdfPageTextsCache.has(pdfFile)) {
+    pdfPageTextsCache.set(pdfFile, (async () => {
+      try {
+        const pdfjsLib = await loadPdfJs();
+        const data = await pdfFile.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data }).promise;
+        const pages = [];
+        const maxPages = Math.min(pdf.numPages, 60);
+        for (let p = 1; p <= maxPages; p++) {
+          const page = await pdf.getPage(p);
+          const tc = await page.getTextContent();
+          pages.push((tc.items || []).map(it => it.str).join(' ').replace(/\s+/g, ' ').trim());
+        }
+        return { pages, total: pages.reduce((a, t) => a + t.length, 0) };
+      } catch (e) {
+        console.error('PDF text-layer extract error:', e);
+        return { pages: [], total: 0 };
+      }
+    })());
+  }
+  return pdfPageTextsCache.get(pdfFile);
+}
+
+// v57.1: клиентский детектор РАЗНЫХ документов в пачке (порт серверного splitPagesIntoDocuments):
+// ≥2 страниц с РАЗНЫМИ номерами (Fra:/NUMERO DE RECIBO) → это разные документы, делим ДО распознавания
+function pageDocSigClient(text) {
+  const t = String(text || '');
+  let m = t.match(/\bFra\s*[:;.]?\s*([A-Za-z]?\d[\d\s]{5,}\d)/i);
+  let num = m ? m[1].replace(/\s+/g, '').toLowerCase() : null;
+  if (!num) {
+    m = t.match(/RECIBO[\s\S]{0,60}?\b(\d{6,}[A-Z0-9]{4,})\b/i);
+    num = m ? 'rec' + m[1].toLowerCase() : null;
+  }
+  return num;
+}
+function splitPagesClientText(pageTexts) {
+  const nums = pageTexts.map(pageDocSigClient);
+  if (new Set(nums.filter(Boolean)).size < 2) return null;
+  const groups = [];
+  for (let i = 0; i < pageTexts.length; i++) {
+    const k = nums[i];
+    const last = groups[groups.length - 1];
+    if (last && (k === last.key || !k)) { last.pages.push(i); continue; }
+    groups.push({ key: k, pages: [i] });
+  }
+  return groups.length >= 2 ? groups : null;
+}
+
 // PDF превращаем в изображения страниц — дальше работают ВСЕ модели распознавания
 async function expandFilesWithPdf(files, onPdfProgress) {
   const result = [];
@@ -2867,6 +2919,7 @@ function App() {
         }
         prepared.push(fileToUpload);
       }
+      let textLayerOnly = false; // v57.1: весь текст — из текстового слоя PDF, OCR не вызывался
       // Локальный Mac OCR (v52): каждая страница → текст на этом Mac (127.0.0.1:8787), дальше сервер структурирует
       if (effModel === 'local-mac-ocr') {
         // Проверка, что бэкенд умеет принимать готовые тексты (v52+), иначе чек сохранится пустым
@@ -2877,20 +2930,34 @@ function App() {
           throw new Error('Бэкенд householder-api устарел и не принимает локальный OCR. Запушьте новый index.js и сделайте redeploy (в /api/health должно быть build v52+).');
         }
         // v52.3: сначала проверяем, что сервер вообще отвечает — иначе падали бы на 1-й странице без диагностики
-        const macBase = macOcrBase();
-        const probe = await testMacOcr(macBase);
-        if (!probe.ok) {
-          throw new Error(macOcrUrl
-            ? `Mac OCR не отвечает (${macBase}): ${probe.detail}.\nПроверьте, что на Mac запущены И mac-ocr-server.py, И cloudflared-туннель, и что URL в ⚙ — из текущего окна туннеля (при перезапуске cloudflared адрес меняется!).`
-            : `Mac OCR не отвечает (${macBase}): ${probe.detail}.\nЗапустите python3 mac-ocr-server.py. Если сервер запущен, а ошибка остаётся — браузер блокирует http://127.0.0.1 с https-страницы: поднимите туннель «cloudflared tunnel --url http://127.0.0.1:8787» и задайте его URL через ⚙.`);
-        }
         const ocrTexts = [];
-        // v56: вся пачка — страницы из PDF → пробуем MarkItDown на Mac (текстовый слой цифрового PDF),
-        // Vision не нужен; не вышло (скан без текстового слоя / нет пакета markitdown) — обычный OCR
+        // v57.1: ТЕКСТОВОЙ СЛОЙ PDF читаем в браузере (pdf.js) ДО распознавания и решаем маршрут:
+        // есть текст → MarkItDown/текстовый конвейер (OCR не нужен); нет текста (скан) → Mac OCR.
         const pdfSrcsL = (pdfSourcesRef.current || []).filter(isPdfFile);
         const allFromPdfL = pdfSrcsL.length > 0 && prepared.length > 0 && prepared.every(f => /_p\d+\.jpg$/i.test(f.name || ''));
+        const pdfTextMapL = new Map(); // baseName(lower) → {pages, hasText}
+        for (const f of pdfSrcsL) {
+          const ti = await getPdfPageTexts(f);
+          pdfTextMapL.set((f.name || 'document').replace(/\.pdf$/i, '').toLowerCase(),
+            { pages: ti.pages, hasText: ti.pages.length > 0 && ti.total >= 40 });
+        }
+        const textOfPage = (fname) => {
+          const m = String(fname || '').match(/^(.+?)_p(\d+)\.jpg$/i);
+          if (!m) return null;
+          const ti = pdfTextMapL.get(m[1].toLowerCase());
+          if (!ti || !ti.hasText) return null;
+          const t = ti.pages[parseInt(m[2], 10) - 1];
+          return t && t.trim().length >= 10 ? t : null;
+        };
+        const pageTextsL = prepared.map(f => textOfPage(f.name));
+        const allTextLayerL = prepared.length > 0 && pageTextsL.every(Boolean);
+        // Разделение ДО распознавания: несколько РАЗНЫХ документов (разные номера/даты/итоги)?
+        const groupsL = allTextLayerL ? splitPagesClientText(pageTextsL) : null;
+        const isMultiDocL = !!(groupsL && groupsL.length > 1);
+        if (isMultiDocL) console.log(`v57.1: в PDF обнаружено ${groupsL.length} РАЗНЫХ документов — делим ДО распознавания`);
         let pdfMdOk = false;
-        if (allFromPdfL) {
+        if (allFromPdfL && allTextLayerL && !isMultiDocL) {
+          // ОДИН документ с текстовым слоем → MarkItDown на Mac (лучшее качество таблиц)
           const mdTexts = [];
           for (const f of pdfSrcsL) {
             let r = null;
@@ -2904,10 +2971,26 @@ function App() {
           if (mdTexts.length && mdTexts.length === pdfSrcsL.length) {
             ocrTexts.push(...mdTexts);
             pdfMdOk = true;
-            console.log('MarkItDown (Mac): текстовый слой PDF получен, Vision OCR пропущен');
+            console.log('MarkItDown (Mac): текстовый слой PDF получен, OCR пропущен');
           }
         }
-        if (!pdfMdOk) for (let i = 0; i < prepared.length; i++) {
+        if (!pdfMdOk && allTextLayerL) {
+          // Текстовый слой у ВСЕХ страниц — OCR не нужен вовсе; мульти-документы делит бэкенд (v57)
+          ocrTexts.push(...pageTextsL);
+          textLayerOnly = true;
+          console.log('v57.1: весь текст взят из текстового слоя PDF (OCR пропущен)');
+        } else if (!pdfMdOk) {
+          // v52.3: probe только когда реально нужен OCR (цифровые PDF обходятся без Mac-сервера)
+          const macBase = macOcrBase();
+          const probe = await testMacOcr(macBase);
+          if (!probe.ok) {
+            throw new Error(macOcrUrl
+              ? `Mac OCR не отвечает (${macBase}): ${probe.detail}.\nПроверьте, что на Mac запущены И mac-ocr-server.py, И cloudflared-туннель, и что URL в ⚙ — из текущего окна туннеля (при перезапуске cloudflared адрес меняется!).`
+              : `Mac OCR не отвечает (${macBase}): ${probe.detail}.\nЗапустите python3 mac-ocr-server.py. Если сервер запущен, а ошибка остаётся — браузер блокирует http://127.0.0.1 с https-страницы: поднимите туннель «cloudflared tunnel --url http://127.0.0.1:8787» и задайте его URL через ⚙.`);
+          }
+          for (let i = 0; i < prepared.length; i++) {
+          // Смешанная пачка: страницы с текстовым слоем — из pdf.js, сканы — через Mac OCR
+          if (pageTextsL[i]) { ocrTexts.push(pageTextsL[i]); continue; }
           setProgressStage('upload');
           setUploadProgress(Math.round(((i + 1) / prepared.length) * 30));
           let r;
@@ -2919,6 +3002,7 @@ function App() {
           const j = await r.json().catch(() => ({}));
           if (!r.ok) throw new Error('Mac OCR: ' + (j.error || `HTTP ${r.status}`));
           ocrTexts.push(j.text || '');
+          }
         }
         if (ocrTexts.some(t => !t || t.trim().length < 10)) {
           throw new Error('Mac OCR вернул пустой/короткий текст по странице — проверьте фото (резкость, поворот) или выберите другую модель.');
@@ -2931,15 +3015,30 @@ function App() {
         ? await Promise.all(prepared.map(f => (isPdfFile(f) ? f : compressImageFile(f, 1600, 2400, 0.72, true).catch(() => f))))
         : prepared;
       for (const f of pagesToUpload) formData.append('pages', f);
-      // v56: вся пачка — из PDF → прикладываем исходники; бэкенд попробует MarkItDown (PDF→Markdown) ДО vision
+      // v56/v57.1: вся пачка — из PDF. Текстовый слой проверяем в браузере (pdf.js) ДО распознавания:
+      // у ВСЕХ PDF есть текст → исходники на MarkItDown + постраничные тексты (бэкенд делит разные
+      // документы ДО распознавания); хотя бы один скан без текста → обычный vision-конвейер
       const pdfSrcsUp = (pdfSourcesRef.current || []).filter(isPdfFile);
       const allFromPdfUp = pdfSrcsUp.length > 0 && pagesToUpload.length > 0 && pagesToUpload.every(f => /_p\d+\.jpg$/i.test(f.name || ''));
       if (effModel !== 'local-mac-ocr' && allFromPdfUp) {
-        for (const f of pdfSrcsUp) formData.append('pages', f);
-        formData.append('pdf_source_names', JSON.stringify(pdfSrcsUp.map(f => f.name || 'document.pdf')));
+        const pageTextsUp = [];
+        let allDigitalUp = true;
+        for (const f of pdfSrcsUp) {
+          const ti = await getPdfPageTexts(f);
+          if (ti.pages.length && ti.total >= 40) pageTextsUp.push(...ti.pages);
+          else { allDigitalUp = false; break; }
+        }
+        if (allDigitalUp && pageTextsUp.length === pagesToUpload.length) {
+          for (const f of pdfSrcsUp) formData.append('pages', f);
+          formData.append('pdf_source_names', JSON.stringify(pdfSrcsUp.map(f => f.name || 'document.pdf')));
+          formData.append('pdf_page_texts', JSON.stringify(pageTextsUp)); // v57.1: деление ДО распознавания
+          console.log('v57.1: у всех PDF есть текстовый слой → MarkItDown; постраничные тексты приложены для разделения');
+        } else {
+          console.log('v57.1: есть PDF без текстового слоя (скан) → обычный vision-конвейер');
+        }
       }
       if (allowDuplicate) formData.append('allow_duplicate', '1');
-      formData.append('model', effModel);
+      formData.append('model', textLayerOnly ? 'pdf-text-layer' : effModel);
       formData.append('currency', currency);
       formData.append('docType', docType);
       formData.append('subtype', subtype);
@@ -5901,7 +6000,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-17 · v57 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-17 · v57.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

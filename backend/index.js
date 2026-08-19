@@ -127,7 +127,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v57-2026-08-19', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v57.1-2026-08-19', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -3121,6 +3121,54 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
       const srcSet = new Set(pdfSourceNames);
       const pdfSrcs = files.filter(f => srcSet.has(f.originalname));
       const pageImgs = files.filter(f => !srcSet.has(f.originalname));
+      // v57.1: РАЗДЕЛЕНИЕ ДО РАСПОЗНАВАНИЯ — фронт прислал постраничные тексты текстового слоя.
+      // Если страницы — РАЗНЫЕ документы (разные № фактур/квитанций, даты, итоги) — делим сразу,
+      // каждый документ финализируем и сохраняем ОТДЕЛЬНОЙ карточкой (без vision и markitdown)
+      let pdfPageTexts = null;
+      try {
+        const ppt = JSON.parse(req.body.pdf_page_texts || 'null');
+        if (Array.isArray(ppt) && ppt.length && ppt.every(t => t && String(t).trim().length >= 10)) pdfPageTexts = ppt.map(String);
+      } catch (_) { pdfPageTexts = null; }
+      const docGroupsM = (pdfPageTexts && pageImgs.length === pdfPageTexts.length) ? splitPagesIntoDocuments(pdfPageTexts) : null;
+      if (docGroupsM && docGroupsM.length > 1) {
+        console.log(`v57.1: PDF с текстовым слоем — ${pdfPageTexts.length} стр. = ${docGroupsM.length} РАЗНЫХ документов → отдельные карточки (markitdown/vision не нужны)`);
+        const jobIdS = createDocJob(pdfPageTexts.length);
+        res.json({ success: true, jobId: jobIdS, async: true });
+        const jobS = docJobs.get(jobIdS);
+        const t0s = Date.now();
+        try {
+          const bufsS = []; const mimesS = [];
+          for (const f of pageImgs) {
+            const isPdf = f.mimetype === 'application/pdf' || /\.pdf$/i.test(f.originalname || '');
+            bufsS.push(isPdf ? f.buffer : await processImage(f.buffer));
+            mimesS.push(isPdf ? 'application/pdf' : 'image/jpeg');
+          }
+          const results = [];
+          for (let gi = 0; gi < docGroupsM.length; gi++) {
+            const g = docGroupsM[gi];
+            jobS.stage = 'translate';
+            const rd = await finalizeDocumentFromPageTexts(g.pages.map(pi => pdfPageTexts[pi]), currency, docType, () => { jobS.translateDone++; });
+            rd.docType = docType === 'auto' ? (rd.document_type || 'other') : docType;
+            rd.object = (object && object !== 'other') ? object : (rd.object || 'other');
+            if (subtypeOverride) rd.subtype = subtypeOverride;
+            if (paymentStatusOverride) rd.payment_status = paymentStatusOverride;
+            rd.page_urls = await uploadPagesToStorage(g.pages.map(pi => bufsS[pi]), g.pages.map(pi => mimesS[pi]), user.id);
+            const imgS = rd.page_urls[0] || null;
+            if (req.body.allow_duplicate === '1') rd.allowDuplicate = true;
+            verifyDocAgainstSignature(rd, g.sig, `док. ${gi + 1}/${docGroupsM.length}`);
+            const sv = await saveReceiptToDB(rd, imgS, user, `pdf text-layer multi-doc ${gi + 1}/${docGroupsM.length} (async)`);
+            results.push({ success: true, id: sv.id, ...sv, image_url: imgS });
+          }
+          jobS.status = 'done';
+          jobS.result = { success: true, multiple: true, count: results.length, results };
+          console.log(`Задача ${jobIdS}: text-layer multi-doc — ${results.length} карточек за ${Math.round((Date.now() - t0s) / 1000)}с`);
+        } catch (e) {
+          console.error(`Задача ${jobIdS} (text-layer split) упала:`, e);
+          jobS.status = 'error';
+          jobS.error = e.message;
+        }
+        return;
+      }
       const mdTexts = [];
       let allOk = pdfSrcs.length > 0;
       for (const f of pdfSrcs) {
@@ -3182,6 +3230,7 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
         pageBuffersL.push(isPdf ? f.buffer : await processImage(f.buffer));
         mimeTypesL.push(isPdf ? 'application/pdf' : 'image/jpeg');
       }
+      const srcTagL = String(req.body.model || '') === 'pdf-text-layer' ? 'pdf text-layer' : 'local mac-ocr';
       const jobIdL = createDocJob(pageTexts.length);
       res.json({ success: true, jobId: jobIdL, async: true });
       const jobL = docJobs.get(jobIdL);
@@ -3206,7 +3255,7 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
             const imgG = rd.page_urls[0] || await uploadToStorage(pageBuffersL[g.pages[0]], files[g.pages[0]].originalname, user.id, mimeTypesL[g.pages[0]]);
             if (req.body.allow_duplicate === '1') rd.allowDuplicate = true;
             verifyDocAgainstSignature(rd, g.sig, `док. ${gi + 1}/${docGroupsL.length}`);
-            const sv = await saveReceiptToDB(rd, imgG, user, `local mac-ocr multi-doc ${gi + 1}/${docGroupsL.length} (async)`);
+            const sv = await saveReceiptToDB(rd, imgG, user, `${srcTagL} multi-doc ${gi + 1}/${docGroupsL.length} (async)`);
             results.push({ success: true, id: sv.id, ...sv, image_url: imgG });
           }
           jobL.status = 'done';
@@ -3222,7 +3271,7 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
         receiptData.page_urls = await uploadPagesToStorage(pageBuffersL, mimeTypesL, user.id);
         const imageUrl = receiptData.page_urls[0] || await uploadToStorage(pageBuffersL[0], files[0].originalname, user.id, mimeTypesL[0]);
         if (req.body.allow_duplicate === '1') receiptData.allowDuplicate = true;
-        const saved = await saveReceiptToDB(receiptData, imageUrl, user, `local mac-ocr ${pageTexts.length}p (async)`);
+        const saved = await saveReceiptToDB(receiptData, imageUrl, user, `${srcTagL} ${pageTexts.length}p (async)`);
         jobL.status = 'done';
         jobL.result = { success: true, id: saved.id, ...saved, image_url: imageUrl };
         console.log(`Задача ${jobIdL}: local mac-ocr ${pageTexts.length} стр. готов за ${Math.round((Date.now() - t0l) / 1000)}с`);
