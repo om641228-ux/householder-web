@@ -470,6 +470,22 @@ function loadPdfJs() {
   return pdfjsLoading;
 }
 
+// ========== EXCEL PREVIEW: SheetJS по CDN (v58) — просмотр xlsx/xls/csv прямо в карточке ==========
+let xlsxLoading = null;
+function loadXlsx() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (xlsxLoading) return xlsxLoading;
+  xlsxLoading = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+    script.onload = () => resolve(window.XLSX);
+    script.onerror = () => reject(new Error('Не удалось загрузить модуль Excel — проверьте интернет'));
+    document.head.appendChild(script);
+  });
+  return xlsxLoading;
+}
+const isExcelName = (name) => /\.(xlsx?|xlsm|xlsb|csv|ods)(\?|$)/i.test(name || '');
+
 const isPdfFile = (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '');
 // Word/текст как источник распознавания (v32.3): PDF → Word → правка → загрузка → распознавание из текста
 const isWordFile = (f) => /\.(docx?|html?|txt)$/i.test(f.name || '') || /wordprocessingml|msword|text\/(html|plain)/.test(f.type || '');
@@ -805,6 +821,7 @@ function DocsTab({ user, token }) {
   const [docsOcr, setDocsOcr] = useState(null); // v57.6: {loading} | {name, url, pageUrls[], pages[{original,russian}], idx, tab, saved}
   const [docFolder, setDocFolder] = useState({ home: 'All', auto: 'All', personal: 'All' }); // v57.7: выбранная подпапка
   const [docsHover, setDocsHover] = useState(null); // v57.8: увеличенный предпросмотр при наведении {url, kind, name}
+  const [docsExcel, setDocsExcel] = useState(null); // v58: {loading} | {name, sheets:[{name, html}], idx}
   const [docPath, setDocPath] = useState({ home: '', auto: '', personal: '' }); // v57.9: текущий путь внутри загруженной структуры папок
   const [docsZoom, setDocsZoom] = useState(false);
   const [docsVErr, setDocsVErr] = useState(false);
@@ -944,6 +961,27 @@ function DocsTab({ user, token }) {
     }
   };
 
+  // v58: Excel → таблица прямо в приложении (SheetJS), без скачивания
+  const openExcelDoc = async (m) => {
+    if (docsExcel && docsExcel.loading) return;
+    setDocsExcel({ loading: true, name: m.name || 'Таблица' });
+    try {
+      const XLSX = await loadXlsx();
+      const resp = await fetch(m.url);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} при скачивании файла`);
+      const wb = XLSX.read(await resp.arrayBuffer(), { type: 'array' });
+      const sheets = wb.SheetNames.map(sn => ({
+        name: sn,
+        html: XLSX.utils.sheet_to_html(wb.Sheets[sn], { header: '', footer: '' })
+      }));
+      if (!sheets.length) throw new Error('В файле нет листов');
+      setDocsExcel({ loading: false, name: m.name || 'Таблица', url: m.url, sheets, idx: 0 });
+    } catch (e) {
+      setDocsExcel(null);
+      alert('Не удалось открыть Excel: ' + e.message);
+    }
+  };
+
   const docThumb = (entry, key) => {
     const m = docMediaOf(entry);
     const openViewer = () => { setDocsViewer({ url: m.url, kind: m.kind, name: m.name || '' }); setDocsZoom(false); setDocsVErr(false); };
@@ -962,9 +1000,13 @@ function DocsTab({ user, token }) {
         ) : m.kind === 'audio' ? (
           <span onClick={openViewer} style={box}>🎵</span>
         ) : m.kind === 'doc' || m.kind === 'file' ? (
+          isExcelName(m.name || '') || isExcelName(m.url || '') ? (
+            <span onClick={() => openExcelDoc(m)} title={`${m.name || 'Excel'} — открыть таблицу`} style={{ ...box, fontSize: 24 }}>📊</span>
+          ) : (
           <a href={m.url} target="_blank" rel="noreferrer" style={{ ...box, textDecoration: 'none', flexDirection: 'column', fontSize: 24 }}>
             {m.kind === 'doc' ? (/\.pdf(\?|$)/i.test(m.name || m.url || '') ? '📄' : '📝') : '📎'}
           </a>
+          )
         ) : (
           <img src={m.url} alt="" onClick={openViewer} style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 8, cursor: 'zoom-in', border: '1px solid #e0e0e0' }} />
         )}
@@ -1069,6 +1111,39 @@ function DocsTab({ user, token }) {
           {items.length === 0 && subFolders.length === 0 && !docsBusy && <div style={{ fontSize: 13, color: '#8e8e93', alignSelf: 'center' }}>Файлов пока нет — нажмите 📎 (файлы) или 📂 (папку со структурой), чтобы загрузить.</div>}
         </div>
       </div>
+
+      {docsExcel && (
+        <div onClick={() => { if (!docsExcel.loading) setDocsExcel(null); }} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 210, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, width: 'min(1100px, 94vw)', maxHeight: '92vh', display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid #eee', gap: 10 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📊 {docsExcel.name}</div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                {!docsExcel.loading && docsExcel.url && (
+                  <a href={docsExcel.url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#0071e3', textDecoration: 'none', whiteSpace: 'nowrap' }}>⬇ Скачать</a>
+                )}
+                <button onClick={() => !docsExcel.loading && setDocsExcel(null)} style={{ border: 'none', background: '#f0f0f2', borderRadius: '50%', width: 28, height: 28, cursor: docsExcel.loading ? 'not-allowed' : 'pointer', fontSize: 13 }}>✕</button>
+              </div>
+            </div>
+            {docsExcel.loading ? (
+              <div style={{ padding: 40, textAlign: 'center', color: '#8e8e93' }}>⏳ Открываю таблицу…</div>
+            ) : (
+              <React.Fragment>
+                {docsExcel.sheets.length > 1 && (
+                  <div style={{ display: 'flex', gap: 6, padding: '8px 14px', borderBottom: '1px solid #eee', flexWrap: 'wrap' }}>
+                    {docsExcel.sheets.map((sh, si) => (
+                      <button key={si} onClick={() => setDocsExcel(prev => ({ ...prev, idx: si }))}
+                        style={{ padding: '4px 12px', borderRadius: 980, border: si === docsExcel.idx ? 'none' : '1px solid #d0d0d5', background: si === docsExcel.idx ? '#0071e3' : '#fff', color: si === docsExcel.idx ? '#fff' : '#1d1d1f', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>{sh.name}</button>
+                    ))}
+                  </div>
+                )}
+                <style>{'.xlsx-view table{border-collapse:collapse;font-size:12px}.xlsx-view td,.xlsx-view th{border:1px solid #d8dce1;padding:3px 8px;white-space:nowrap;max-width:320px;overflow:hidden;text-overflow:ellipsis}.xlsx-view tr:nth-child(even){background:#fafafc}'}</style>
+                <div className="xlsx-view" style={{ overflow: 'auto', padding: 12, flex: 1 }}
+                  dangerouslySetInnerHTML={{ __html: docsExcel.sheets[docsExcel.idx].html }} />
+              </React.Fragment>
+            )}
+          </div>
+        </div>
+      )}
 
       {docsHover && (
         <div style={{ position: 'fixed', right: 24, top: '50%', transform: 'translateY(-50%)', zIndex: 190, pointerEvents: 'none', background: '#fff', borderRadius: 14, boxShadow: '0 16px 48px rgba(0,0,0,0.35)', padding: 10, width: 'min(520px, 44vw)' }}>
@@ -6258,7 +6333,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-19 · v57.9 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-19 · v58 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

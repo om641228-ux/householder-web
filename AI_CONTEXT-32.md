@@ -1528,3 +1528,12 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Новая кнопка загрузки **📂** (`<input webkitdirectory directory multiple>`) рядом с 📎 — выбор папки целиком, структура сохраняется в Supabase.
 - Проверки: esbuild OK; eslint — только 3 прежних exhaustive-deps warning (303, 3568, 3577).
 - Требуется redeploy: householder-api (build v57.9) + householder-web (v57.9).
+
+## v58 (2026-08-19) — Просмотр Excel прямо в «Документах»
+**Запрос:** «не показывает и не открывает файл excell исправь - при нажатии он только загружается».
+
+**Frontend (App.js, label · v58 ·):**
+- Модуль SheetJS по CDN (`loadXlsx()`, jsdelivr xlsx@0.18.5) — как loadPdfJs; `isExcelName()` = xlsx/xls/xlsm/xlsb/csv/ods.
+- DocsTab: Excel-файлы (📊) в docThumb открываются кликом В ПРИЛОЖЕНИИ — `openExcelDoc(m)`: fetch blob → XLSX.read → sheet_to_html по каждому листу.
+- Модалка-просмотрщик: вкладки листов (если >1), HTML-таблица со стилями (.xlsx-view, zebra, границы), кнопка «⬇ Скачать», закрытие ✕/клик по фону.
+- Проверки: esbuild OK; eslint — только 3 прежних warning. Backend не менялся. Redeploy: только householder-web.
