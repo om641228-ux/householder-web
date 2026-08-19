@@ -436,6 +436,8 @@ const FALLBACK_MODELS = [
   { name: 'groq-gpt-oss-safeguard-20b', displayName: 'Groq GPT-OSS Safeguard 20B', provider: 'Groq' },
   { name: 'groq-qwen3-32b', displayName: 'Groq Qwen3 32B', provider: 'Groq' },
   { name: 'openrouter-google/gemma-4-26b-a4b-it:free', displayName: 'Gemma 4 26B (Free)', provider: 'OpenRouter' },
+  { name: 'openrouter-google/gemma-4-31b-it:free', displayName: 'Gemma 4 31B (Free)', provider: 'OpenRouter' },
+  { name: 'openrouter-nvidia/nemotron-nano-12b-v2-vl:free', displayName: 'Nemotron Nano 12B v2 VL — документы/OCR (Free)', provider: 'OpenRouter' },
   { name: 'openrouter-qwen/qwen2.5-vl-32b-instruct:free', displayName: 'Qwen 2.5 VL 32B (Free)', provider: 'OpenRouter' },
   { name: 'openrouter-qwen/qwen2.5-vl-72b-instruct:free', displayName: 'Qwen 2.5 VL 72B (Free)', provider: 'OpenRouter' },
   { name: 'github-openai/gpt-4o-mini', displayName: 'GPT-4o mini (GitHub)', provider: 'GitHub' },
@@ -2545,6 +2547,7 @@ function App() {
   const [object, setObject] = useState('other');
   const [modelModalOpen, setModelModalOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState('');
+  const [freeModelTipOpen, setFreeModelTipOpen] = useState(true); // v57.2: рекомендация бесплатной модели
   const [exportMode, setExportMode] = useState('all');
 
   const [models, setModels] = useState([]);
@@ -5319,6 +5322,23 @@ ${bodyHtml}
                 onChange={e => setModelSearch(e.target.value)}
               />
             </div>
+            {freeModelTipOpen && (
+              <div style={{ margin: '0 16px 8px', padding: '10px 12px', background: '#fff8e1', border: '1px solid #ffe082', borderRadius: 8, fontSize: 12, lineHeight: 1.5 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                  <strong>💡 Бесплатная модель, которой может не быть в списке (проверено: август 2026)</strong>
+                  <button onClick={() => setFreeModelTipOpen(false)} title="Скрыть подсказку" style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 13, color: '#999', padding: 0 }}>✕</button>
+                </div>
+                <div style={{ marginTop: 4 }}>
+                  📄 <b>NVIDIA Nemotron Nano 12B v2 VL</b> (<code style={{ fontSize: 11 }}>nvidia/nemotron-nano-12b-v2-vl:free</code>) — обучена специально на ДОКУМЕНТАХ (лидер OCRBench/DocVQA среди открытых моделей), идеальна для чеков и выписок. Бесплатно на OpenRouter: 20 зап/мин, 200 зап/день.
+                </div>
+                <div style={{ marginTop: 3 }}>
+                  🔄 Альтернатива: <b>Google Gemma 4 31B</b> (<code style={{ fontSize: 11 }}>google/gemma-4-31b-it:free</code>) — мультимодальная (текст+фото+видео), контекст 262K.
+                </div>
+                <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px dashed #ffe082' }}>
+                  <b>Как подключить:</b> openrouter.ai → Keys → Create Key → Railway (householder-api) → Variables → добавьте <code style={{ fontSize: 11 }}>OPENROUTER_API_KEY</code> → Redeploy → здесь нажмите «🔄 Обновить». Все бесплатные vision-модели OpenRouter появятся в списке автоматически.
+                </div>
+              </div>
+            )}
             <div className="model-modal-body">
               {modelsLoading ? (
                 <div className="loading-center">
@@ -6000,7 +6020,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-17 · v57.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-17 · v57.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

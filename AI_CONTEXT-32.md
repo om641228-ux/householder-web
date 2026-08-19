@@ -1427,3 +1427,14 @@ Backend не менялся (v56.5-2026-08-19).
 ### Проверки
 - node --check OK; esbuild OK; eslint — только 3 прежних exhaustive-deps warning.
 - Логика разделения/склейки протестирована в v57 на реальном OCR «Скан 22.pdf» (16/16 разделено).
+
+## v57.2 (2026-08-19) — рекомендация бесплатной модели в окне выбора модели
+- Модалка «Выбор модели AI»: жёлтый баннер (сворачиваемый, freeModelTipOpen) с рекомендацией
+  бесплатной модели, которой нет в списке (проверено по OpenRouter на 18.08.2026):
+  📄 nvidia/nemotron-nano-12b-v2-vl:free — специализация на документах (OCRBench/DocVQA),
+  20 зап/мин, 200 зап/день; альтернатива google/gemma-4-31b-it:free (262K, мультимодальная).
+  Инструкция подключения: openrouter.ai → Keys → Railway Variables OPENROUTER_API_KEY →
+  Redeploy → «Обновить» — бэкенд САМ подтягивает все :free vision-модели (listOpenAICompatModels).
+- FALLBACK_MODELS (App.js) += gemma-4-31b-it:free, nemotron-nano-12b-v2-vl:free.
+- Backend openrouter.fallbackIds += nvidia/nemotron-nano-12b-v2-vl:free; build v57.2-2026-08-19.
+- eslint: 3 прежних warning; esbuild/node --check OK.
