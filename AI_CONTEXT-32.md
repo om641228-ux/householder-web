@@ -1653,3 +1653,19 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Файлы: App.js (метка · v61.4 ·). Backend не тронут.
 - Проверки: esbuild OK; eslint — только 3 прежних warning (305/3839/3848).
 - Деплой: householder-web (frontend). Если итоги/налоги не видны после этого — значит на Railway старая сборка, нужен redeploy householder-web.
+
+## v61.5 — справочная строка банка перенесена во вкладку «Налоги»
+- По требованию: строка «🏦 N Движений в выписке · N Привязано автоматически · N Платежи без фактуры · N Счета без платежа в банке» убрана из вкладки «Анализ» и показывается во вкладке «Налоги», первой строкой блока «💶 Платежи из банка».
+- В «Анализе» удалены ставшие ненужными matched/unmatchedOut/unpaidBills/stat.
+- В IIFE «Налогов»: qBankMatched/qBankUnmatchedOut/qBankUnpaidBills + хелпер qBankStat.
+- Файлы: App.js (метка · v61.5 ·). Backend не тронут. Проверки: esbuild OK; eslint — только 3 прежних warning.
+- Деплой: householder-web (frontend).
+
+## v62 — Impuesto de Sociedades (налог на прибыль) + полный календарь обязательных форм
+- Проблема: считался только IGIC (420) и retenciones (111); налог на прибыль SL отсутствовал.
+- computeTaxRange: isRate (default 25%, override в черновике); benefNetoQ = доходы нетто (bruto/1.07) − baseDed (расходы нетто по фактурам); isPago202 = isRate% × max(0, benefNetoQ) — аванс modelo 202. recargo/пени и grandTotal теперь включают IS. Возвращает totalIS, isRate.
+- UI: плашка итогов + строка «🏛 IS прибыль (mod.202)»; модалка черновика: строка IS, поле ставки IS (25/24/21–22 подсказка), в карточке квартала прибыль нетто + аванс 202; текстовый отчёт: строка IS.
+- TAX_CALENDAR: добавлены modelo 202 (20 апр / 20 окт / 20 дек), modelo 200 (до 25 июля след. года), modelo 425 (resumen anual IGIC, до 30 янв).
+- TAX_GUIDE: запись «IS — Modelo 202 + 200» (ставки 25/24/21–22, перенос убытков).
+- Файлы: App.js (метка · v62 ·). Backend не тронут. esbuild OK; eslint — только 3 прежних warning.
+- Деплой: householder-web.

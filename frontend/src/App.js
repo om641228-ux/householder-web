@@ -82,6 +82,11 @@ const TAX_CALENDAR = [
   { id: '130-4T', form: '130', name: 'Modelo 130 — IRPF, 4 квартал', period: '4T', deadline: { m: 1, d: 30 }, nextYear: true, what: 'Только для autónomo. ISERA 2020, SL НЕ подаёт 130 — вместо него Modelo 111 (до 20 января).', optional: true },
   { id: '115-4T', form: '115', name: 'Modelo 115 — retenciones alquiler, 4T', period: '4T', deadline: { m: 1, d: 20 }, nextYear: true, what: 'Удержания с аренды за окт–дек.', optional: true },
   { id: '111-4T', form: '111', name: 'Modelo 111 — retenciones IRPF, 4 квартал', period: '4T', deadline: { m: 1, d: 20 }, nextYear: true, what: 'Удержания IRPF (cas.03+09) за окт–дек (срок до 20 января следующего года).' },
+  { id: '202-A', form: '202', name: 'Modelo 202 — IS, pago fraccionado 1', period: 'PF1', deadline: { m: 4, d: 20 }, what: 'Первый аванс налога на прибыль (Impuesto de Sociedades): апрель, 1–20. Оценка = 25% (PYME 24%) от прибыли 1T.' },
+  { id: '202-B', form: '202', name: 'Modelo 202 — IS, pago fraccionado 2', period: 'PF2', deadline: { m: 10, d: 20 }, what: 'Второй аванс налога на прибыль: октябрь, 1–20 (прибыль янв–сент).' },
+  { id: '202-C', form: '202', name: 'Modelo 202 — IS, pago fraccionado 3', period: 'PF3', deadline: { m: 12, d: 20 }, what: 'Третий аванс налога на прибыль: декабрь, 1–20 (прибыль янв–ноябрь).' },
+  { id: '425-year', form: '425', name: 'Modelo 425 — IGIC resumen anual', period: 'AÑO', deadline: { m: 1, d: 30 }, nextYear: true, what: 'Годовая сводка IGIC (ATC): сверка четырёх modelo 420 года. До 30 января.' },
+  { id: '200-year', form: '200', name: 'Modelo 200 — Impuesto de Sociedades (годовой)', period: 'AÑO', deadline: { m: 7, d: 25 }, nextYear: true, what: 'Годовой налог на прибыль SL: 25% (PYME <10 млн — 24%, микро <1 млн — 21/22%) от beneficio, минус авансы modelo 202. Срок: до 25 июля следующего года.' },
   { id: '190-year', form: '190', name: 'Modelo 190 — resumen anual retenciones', period: 'AÑO', deadline: { m: 1, d: 31 }, nextYear: true, what: 'Годовая сводка удержаний по modelo 111 (если подавали 111).', optional: true },
   { id: '180-year', form: '180', name: 'Modelo 180 — resumen anual alquileres', period: 'AÑO', deadline: { m: 1, d: 31 }, nextYear: true, what: 'Годовая сводка удержаний по modelo 115 (если подавали 115).', optional: true },
   { id: '100-year', form: '100', name: 'Modelo 100 — Renta (IRPF anual)', period: 'AÑO', deadline: { m: 6, d: 30 }, what: 'Годовая декларация подоходного за прошлый год: все доходы, вычеты, зачёт платежей modelo 130.' },
@@ -95,6 +100,12 @@ const TAX_GUIDE = [
     docs: 'Книга facturas emitidas и recibidas за квартал: базы и cuotas по каждому типу IGIC (0%, 3%, 5%, 7%…). Наши черновики заполняются из банка и фактур автоматически.',
     when: '1–20 апр / 1–20 июл / 1–20 окт / до 30 янв (4T).',
     url: 'https://www3.gobiernodecanarias.org/tributos/atc/w/modelo-420-versiones-programa-de-ayuda' },
+  { form: '200', title: 'IS — Modelo 202 + 200 (налог на прибыль SL)', color: '#b03a2e',
+    who: 'Все sociedades (SL) — ISERA 2020, SL платит IS, а не IRPF по деятельности.',
+    what: 'Квартальные авансы modelo 202 (20 апр / 20 окт / 20 дек) и годовой расчёт modelo 200 (до 25 июля след. года): 25% от прибыли (PYME <10 млн — 24% с 2025; микро <1 млн — 21/22%) минус уплаченные авансы. Убытки переносятся на будущие годы.',
+    docs: 'Прибыль = доходы нетто − расходы нетто (по фактурам). Блок «Платежи из банка» считает аванс 202 автоматически (строка «IS прибыль»).',
+    when: '202: 1–20 апр / окт / дек. 200: 1–25 июля следующего года.',
+    url: 'https://sede.agenciatributaria.gob.es/Sede/impuesto-sobre-sociedades.html' },
   { form: '130', title: 'IRPF — Modelo 130 (pagos fraccionados)', color: '#c0392b',
     who: 'Autónomo с деятельностью (аренда жилья посуточно/долгосрочная — тоже).',
     what: 'Ежеквартальный аванс подоходного: 20% от накопленной прибыли (ingresos − gastos deducibles) минус уже уплаченные авансы года.',
@@ -4764,6 +4775,9 @@ function App() {
     while ((y < b.y || (y === b.y && q <= b.q)) && guard++ < 40) { list.push({ y, q }); q++; if (q > 4) { q = 1; y++; } }
     if (!list.length) list.push(a);
     const rate = overrides.igicRate != null ? overrides.igicRate : 7;
+    // v62: Impuesto de Sociedades (налог на прибыль SL). Ставка: 25% общая; PYME (оборот < 10 млн) — 24% с 2025, микро (< 1 млн) — 21/22%.
+    // Авансы — modelo 202 (20 апр/окт/дек), годовой расчёт — modelo 200 (до 25 июля след. года). Переопределяется полем isRate.
+    const isRate = overrides.isRate != null ? overrides.isRate : 25;
     const r2 = n => Math.round(n * 100) / 100;
     const today0 = new Date().setHours(0, 0, 0, 0);
     // v61: пересчёт строго по ОФИЦИАЛЬНЫМ формам из поданных деклараций ISERA 2020, SL:
@@ -4798,6 +4812,10 @@ function App() {
       const retAct = overrides[`retAct_${y}_${q}`] != null ? overrides[`retAct_${y}_${q}`] : 0;        // casilla 09
       const sum28 = r2(retTrab + retAct);                                                           // casilla 28
       const result111 = r2(sum28);                                                                  // casilla 30
+      // v62 — IMPUESTO DE SOCIEDADES: прибыль квартала = доходы НЕТТО − расходы НЕТТО (по фактурам);
+      // аванс modelo 202 = isRate% от ПОЛОЖИТЕЛЬНОЙ прибыли квартала (убыток → 0, перенос учитывается в годовом modelo 200).
+      const benefNetoQ = r2(r2(quarter.ingresos / (1 + rate / 100)) - baseDed);
+      const isPago202 = r2(Math.max(0, benefNetoQ) * isRate / 100);
       const rendCum = r2(cum.ingresos - cum.gastos); // справочно (прибыль нарастающим — для modelo 200/IS)
       const cumIngresos = r2(cum.ingresos), cumGastos = r2(cum.gastos);
       // Просрочка: дедлайн прошёл, а платить нужно → надбавка + пени (добровольная подача)
@@ -4808,20 +4826,20 @@ function App() {
       const recargoRate = !isLate ? 0 : monthsLate > 12 ? 0.15 : Math.min(12, monthsLate + 1) * 0.01;
       const interestFrom = new Date(dl.getTime()); interestFrom.setMonth(interestFrom.getMonth() + 12);
       const interestDays = monthsLate > 12 ? Math.floor((today0 - interestFrom.getTime()) / 86400000) : 0;
-      const base420 = Math.max(0, result420), base111 = result111;
-      const recargo = r2((base420 + base111) * recargoRate);
-      const intereses = interestDays > 0 ? r2((base420 + base111) * 0.040625 * interestDays / 365) : 0;
-      return { y, q, key: `${y}-${q}T`, from, to, ingresos, gastos, igicSoportado, igicRepercutido, baseDev, cuotaDev, baseDed, cuotaDed, dif41, comp43, result420, numTrab, percTrab, retTrab, numAct, percAct, retAct, sum28, result111, ingresosBrutos, gastosBrutos, cumIngresos, cumGastos, rendCum, dl, isLate, monthsLate, recargoRate, recargo, intereses, counts: quarter };
+      const base420 = Math.max(0, result420), base111 = result111, baseIS = isPago202;
+      const recargo = r2((base420 + base111 + baseIS) * recargoRate);
+      const intereses = interestDays > 0 ? r2((base420 + base111 + baseIS) * 0.040625 * interestDays / 365) : 0;
+      return { y, q, key: `${y}-${q}T`, from, to, ingresos, gastos, igicSoportado, igicRepercutido, baseDev, cuotaDev, baseDed, cuotaDed, dif41, comp43, result420, numTrab, percTrab, retTrab, numAct, percAct, retAct, sum28, result111, benefNetoQ, isPago202, ingresosBrutos, gastosBrutos, cumIngresos, cumGastos, rendCum, dl, isLate, monthsLate, recargoRate, recargo, intereses, counts: quarter };
     });
     const tot = (f) => r2(quarters.reduce((s, x) => s + (x[f] || 0), 0));
-    const total420 = tot('result420'), total111 = tot('result111');
+    const total420 = tot('result420'), total111 = tot('result111'), totalIS = tot('isPago202');
     const totalRecargo = tot('recargo'), totalIntereses = tot('intereses');
     return {
-      fromKey, toKey, igicRate: rate, quarters,
-      total420, total111, totalRecargo, totalIntereses,
+      fromKey, toKey, igicRate: rate, isRate, quarters,
+      total420, total111, totalIS, totalRecargo, totalIntereses,
       // Отрицательный результат 420 — это «к компенсации», а не к оплате: в итог к оплате идут только положительные суммы
-      grandTotal: r2(Math.max(0, total420) + total111 + totalRecargo + totalIntereses),
-      lateCount: quarters.filter(x => x.isLate && (x.result420 > 0 || x.result111 > 0)).length
+      grandTotal: r2(Math.max(0, total420) + total111 + totalIS + totalRecargo + totalIntereses),
+      lateCount: quarters.filter(x => x.isLate && (x.result420 > 0 || x.result111 > 0 || x.isPago202 > 0)).length
     };
   };
 
@@ -5405,6 +5423,7 @@ ${bodyHtml}
     lines.push(`════════ ИТОГО ЗА ПЕРИОД ════════`);
     lines.push(`  IGIC (modelo 420) к оплате:      ${f(Math.max(0, d.total420))} €${d.total420 < 0 ? `   (ещё ${f(Math.abs(d.total420))} € — a compensar, к компенсации)` : ''}`);
     lines.push(`  IRPF retenciones (modelo 111):   ${f(d.total111)} €`);
+    lines.push(`  IS прибыль (modelo 202, авансы): ${f(d.totalIS || 0)} €   (ставка ${d.isRate || 25}%; годовой — modelo 200 до 25.07)`);
     lines.push(`  ШТРАФ-надбавка (recargo):        ${f(d.totalRecargo)} €`);
     lines.push(`  ПЕНИ (intereses de demora):      ${f(d.totalIntereses)} €`);
     lines.push(`  ══ ВСЕГО К ОПЛАТЕ:               ${f(d.grandTotal)} € ══`);
@@ -6670,7 +6689,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v61.4 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v62 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7284,15 +7303,6 @@ ${bodyHtml}
           {(() => {
             const isOut = m => Number(m.amount) < 0;
             const out = bankMovements.filter(isOut);
-            const matched = bankMovements.filter(m => m.matched_receipt_id);
-            const unmatchedOut = out.filter(m => !m.matched_receipt_id);
-            const unpaidBills = receipts.filter(r => ['bill', 'invoice'].includes(r.document_type) && !r.bank_movement_id && r.payment_status !== 'paid');
-            const stat = (label, value, color, bg) => (
-              <div key={label} style={{ flex: '0 0 auto', display: 'flex', alignItems: 'baseline', gap: 6, background: 'linear-gradient(180deg,#ffffff,#ececf0)', border: '1px solid #d2d2d7', borderRadius: 999, padding: '3px 12px', whiteSpace: 'nowrap' }}>
-                <span style={{ fontSize: 16, fontWeight: 800, color }}>{value}</span>
-                <span style={{ fontSize: 12, color: '#6e6e73' }}>{label}</span>
-              </div>
-            );
             const q = bankSearch.trim().toLowerCase();
             const linkedReceiptOf = m => m.matched_receipt_id ? receipts.find(r => String(r.id) === String(m.matched_receipt_id)) : null;
             // Уникальные контрагенты выписки (с количеством движений) для выпадающего фильтра
@@ -7452,13 +7462,6 @@ ${bodyHtml}
                     Выписка ещё не загружена. Откройте вкладку «Загрузка» → кнопка «🏦 Выписка банка» и выберите Excel-файл (.xlsx) из банка — движения появятся здесь, а фактуры с совпавшими суммами сами получат статус 🟢 Оплачено.
                   </div>
                 )}
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4, overflowX: 'auto', flexWrap: 'nowrap' }}>
-                  <span style={{ fontSize: 18, lineHeight: 1, flexShrink: 0 }}>🏦</span>
-                    {stat('Движений в выписке', bankMovements.length, '#2c3e50', '#f4f6f7')}
-                    {stat('Привязано автоматически', matched.length, '#27ae60', '#e8f8ef')}
-                    {stat('Платежи без фактуры', unmatchedOut.length, '#e67e22', '#fdf2e3')}
-                    {stat('Счета без платежа в банке', unpaidBills.length, '#e74c3c', '#fdecea')}
-                </div>
                 {(manualRows.length > 0 || bankMovements.length > 0) && (
                   <div id="paycal-top" style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: '10px 12px', marginBottom: 10, scrollMarginTop: 100 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: payCalCollapsed ? 0 : 8 }}>
@@ -7844,6 +7847,16 @@ ${bodyHtml}
         const qInvSum = sumAbs(qOut.filter(m => m.has_invoice || m.matched_receipt_id));
         // v61.4: налоги за выбранный диапазон (IGIC 420 + IRPF 111) — тем же расчётом, что и автозаполнение форм
         const qRangeTax = computeTaxRange(qRangeKeys[0], qRangeKeys[1]);
+        // v61.5: справочная статистика банка (перенесена из «Анализа»)
+        const qBankMatched = bankMovements.filter(m => m.matched_receipt_id).length;
+        const qBankUnmatchedOut = bankMovements.filter(m => Number(m.amount) < 0 && !m.matched_receipt_id).length;
+        const qBankUnpaidBills = receipts.filter(r => ['bill', 'invoice'].includes(r.document_type) && !r.bank_movement_id && r.payment_status !== 'paid').length;
+        const qBankStat = (label, value, color) => (
+          <div key={label} style={{ flex: '0 0 auto', display: 'flex', alignItems: 'baseline', gap: 6, background: 'linear-gradient(180deg,#ffffff,#ececf0)', border: '1px solid #d2d2d7', borderRadius: 999, padding: '3px 12px', whiteSpace: 'nowrap' }}>
+            <span style={{ fontSize: 16, fontWeight: 800, color }}>{value}</span>
+            <span style={{ fontSize: 12, color: '#6e6e73' }}>{label}</span>
+          </div>
+        );
         // v60.1: локальный фильтр по контрагенту (клик по строке или поисковая строка)
         const qCpQ = qCpSearch.trim().toLowerCase();
         const qOutVis = qCpQ ? qOut.filter(m => String(m.counterparty || m.concept || '').toLowerCase().includes(qCpQ)) : qOut;
@@ -7964,6 +7977,14 @@ ${bodyHtml}
 
             {/* ПЛАТЕЖИ БАНКА ЗА ВЫБРАННЫЙ ДИАПАЗОН + ГАЛКА «ЕСТЬ ФАКТУРА» (ниже расчётов; диапазон общий с автозаполнением — v30.5) */}
             <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 10, padding: '12px 16px', marginTop: 14 }}>
+              {/* v61.5: справочная строка статистики банка — перенесена из «Анализа» в «Налоги» */}
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10, overflowX: 'auto', flexWrap: 'nowrap' }}>
+                <span style={{ fontSize: 18, lineHeight: 1, flexShrink: 0 }}>🏦</span>
+                {qBankStat('Движений в выписке', bankMovements.length, '#2c3e50')}
+                {qBankStat('Привязано автоматически', qBankMatched, '#27ae60')}
+                {qBankStat('Платежи без фактуры', qBankUnmatchedOut, '#e67e22')}
+                {qBankStat('Счета без платежа в банке', qBankUnpaidBills, '#e74c3c')}
+              </div>
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
                 <h3 style={{ margin: 0 }}>💶 Платежи из банка за выбранный диапазон — отметьте, по каким есть фактура</h3>
                 <button onClick={loadBankMovements} style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #ccc', background: '#fff', cursor: 'pointer' }}>🔄 Обновить движения</button>
@@ -7983,6 +8004,7 @@ ${bodyHtml}
                     {qRangeTax.total420 < 0 && <span style={{ fontSize: 11, color: '#7f8c8d' }}> ({formatAmount(Math.abs(qRangeTax.total420), 'EUR')} к компенсации)</span>}
                   </span>
                   <span style={{ fontSize: 13 }}>🧾 IRPF (mod.111): <b style={{ color: '#8e44ad' }}>{formatAmount(qRangeTax.total111, 'EUR')}</b></span>
+                  <span style={{ fontSize: 13 }}>🏛 IS прибыль (mod.202, {qRangeTax.isRate || 25}%): <b style={{ color: '#8e44ad' }}>{formatAmount(qRangeTax.totalIS || 0, 'EUR')}</b></span>
                   {(qRangeTax.totalRecargo > 0 || qRangeTax.totalIntereses > 0) && (
                     <span style={{ fontSize: 12, color: '#c0392b' }}>⚠ recargo {formatAmount(qRangeTax.totalRecargo, 'EUR')} · пени {formatAmount(qRangeTax.totalIntereses, 'EUR')}</span>
                   )}
@@ -8040,14 +8062,21 @@ ${bodyHtml}
                       onChange={e => setTaxDraft(prev => computeTaxRange(prev.fromKey, prev.toKey, { ...prev, igicRate: parseFloat(e.target.value) || 0 }))}
                       style={{ width: 70, padding: '5px 8px', borderRadius: 6, border: '1px solid #ccc' }} />
                   </label>
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 10, marginLeft: 16 }}>
+                    <span style={{ color: '#555' }}>Ставка IS (прибыль), %:</span>
+                    <input type="number" step="1" value={taxDraft.isRate || 25}
+                      onChange={e => setTaxDraft(prev => computeTaxRange(prev.fromKey, prev.toKey, { ...prev, isRate: parseFloat(e.target.value) || 0 }))}
+                      style={{ width: 70, padding: '5px 8px', borderRadius: 6, border: '1px solid #ccc' }} />
+                    <span style={{ fontSize: 11, color: '#7f8c8d' }}>25 общая · 24 PYME&lt;10М · 21–22 микро&lt;1М</span>
+                  </label>
 
                   {taxDraft.quarters.map(x => {
-                    const late = x.isLate && (x.result420 > 0 || x.result111 > 0);
+                    const late = x.isLate && (x.result420 > 0 || x.result111 > 0 || x.isPago202 > 0);
                     return (
                       <div key={x.key} style={{ border: `1px solid ${late ? '#8e8e93' : '#e0e0e0'}`, borderLeft: `4px solid ${late ? '#48484a' : '#c7c7cc'}`, borderRadius: 8, padding: '10px 12px', marginBottom: 10 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
                           <strong>{x.key.replace('-', ' · ')} <span style={{ fontSize: 12, color: '#7f8c8d' }}>({x.from}…{x.to})</span></strong>
-                          <span style={{ fontSize: 12, color: '#7f8c8d' }}>поступлений {x.counts.incCount} · расходов с фактурой {x.counts.outInvCount} из {x.counts.outCount}</span>
+                          <span style={{ fontSize: 12, color: '#7f8c8d' }}>поступлений {x.counts.incCount} · расходов с фактурой {x.counts.outInvCount} из {x.counts.outCount} · прибыль нетто {formatAmount(x.benefNetoQ, 'EUR')} · IS аванс 202: <b style={{ color: '#b03a2e' }}>{formatAmount(x.isPago202, 'EUR')}</b></span>
                         </div>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8, fontSize: 13, marginBottom: 8 }}>
                           {[// v61: casillas официальной Modelo 420 (базы НЕТТО) + Modelo 111 (retenciones — вручную)
@@ -8128,6 +8157,8 @@ ${bodyHtml}
                         {taxDraft.total420 < 0 && <span style={{ fontSize: 12, color: '#3a3a3c' }}> (ещё {formatAmount(Math.abs(taxDraft.total420), 'EUR')} к компенсации в следующих кварталах — a compensar)</span>}
                       </div>
                       <div>IRPF retenciones (modelo 111) к оплате: <strong>{formatAmount(taxDraft.total111, 'EUR')}</strong></div>
+                      <div>🏛 Impuesto de Sociedades — авансы modelo 202 ({taxDraft.isRate || 25}% от прибыли квартала): <strong>{formatAmount(taxDraft.totalIS || 0, 'EUR')}</strong>
+                        <span style={{ fontSize: 12, color: '#7f8c8d' }}> годовой расчёт — modelo 200 до 25 июля: 25% (PYME 24%) от прибыли года минус авансы 202</span></div>
                       <div>Штраф-надбавка (recargo): <strong style={{ color: taxDraft.totalRecargo > 0 ? '#c0392b' : 'inherit' }}>{formatAmount(taxDraft.totalRecargo, 'EUR')}</strong></div>
                       <div>Пени (intereses de demora): <strong style={{ color: taxDraft.totalIntereses > 0 ? '#c0392b' : 'inherit' }}>{formatAmount(taxDraft.totalIntereses, 'EUR')}</strong></div>
                     </div>
