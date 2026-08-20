@@ -4619,6 +4619,7 @@ function App() {
   const [qDateFilter, setQDateFilter] = useState('');
   const [qAmtMin, setQAmtMin] = useState('');
   const [qAmtMax, setQAmtMax] = useState('');
+  const [qCpSortAsc, setQCpSortAsc] = useState(true); // v64.3: А→Я (true) / Я→А (false)
   const pmSlotHas = (n, id) => (pmSlots[String(n)] || []).includes(String(id));
   const pmSlotToggle = (n, id, on) => savePmSlots(prev => {
     const cur = new Set(prev[String(n)] || []);
@@ -6728,7 +6729,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v64.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v64.3 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7907,7 +7908,7 @@ ${bodyHtml}
         const qAmtMinN = parseFloat(qAmtMin), qAmtMaxN = parseFloat(qAmtMax);
         // v64.2: контрагенты диапазона по алфавиту — для выпадающего фильтра
         const qCpList = [...new Set(qOut.map(m => String(m.counterparty || m.concept || '').trim()).filter(Boolean))]
-          .sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
+          .sort((a, b) => qCpSortAsc ? a.localeCompare(b, 'es', { sensitivity: 'base' }) : b.localeCompare(a, 'es', { sensitivity: 'base' }));
         const qOutVis = qOutSlot.filter(m => {
           if (qCpQ && !String(m.counterparty || m.concept || '').toLowerCase().includes(qCpQ)) return false;
           if (qDateFilter.trim() && !String(m.operation_date || '').includes(qDateFilter.trim())) return false;
@@ -8151,10 +8152,15 @@ ${bodyHtml}
                   <button onClick={() => { setQDateFilter(''); setQAmtMin(''); setQAmtMax(''); }} title="Сбросить фильтры по дате и сумме"
                     style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>✕ дата/сумма · показано {qOutVis.length}</button>
                 )}
+                <button onClick={() => setQCpSortAsc(v => !v)}
+                  title={qCpSortAsc ? 'Список контрагентов по возрастанию (А→Я) — нажмите для обратного порядка (Я→А)' : 'Список контрагентов по убыванию (Я→А) — нажмите для прямого порядка (А→Я)'}
+                  style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                  {qCpSortAsc ? 'А→Я' : 'Я→А'}
+                </button>
                 <select value={qCpList.includes(qCpSearch) ? qCpSearch : ''} onChange={e => setQCpSearch(e.target.value)}
-                  title="Фильтр по контрагенту — список по алфавиту"
+                  title={`Фильтр по контрагенту — список ${qCpSortAsc ? 'по возрастанию (А→Я)' : 'по убыванию (Я→А)'}`}
                   style={{ padding: '5px 8px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13, maxWidth: 220, cursor: 'pointer', background: '#fff' }}>
-                  <option value="">⇅ контрагент А–Я ({qCpList.length})</option>
+                  <option value="">⇅ контрагент {qCpSortAsc ? 'А–Я' : 'Я–А'} ({qCpList.length})</option>
                   {qCpList.map(cp => <option key={cp} value={cp}>{cp}</option>)}
                 </select>
                 <input value={qCpSearch} onChange={e => setQCpSearch(e.target.value)} placeholder="🔍 Фильтр по контрагенту… (или кликните по нему в строке)"
