@@ -1669,3 +1669,12 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - TAX_GUIDE: запись «IS — Modelo 202 + 200» (ставки 25/24/21–22, перенос убытков).
 - Файлы: App.js (метка · v62 ·). Backend не тронут. esbuild OK; eslint — только 3 прежних warning.
 - Деплой: householder-web.
+
+## v62.1 — авто-вычеты: налоги / Seguridad Social / зарплаты = подтверждённые расходы без фактуры
+- Проблема: обязательные платежи (tes gral seg socia, AEAT/ATC, nóminas) НЕ входили в расходы без галки «есть фактура» → прибыль и налоги завышались.
+- AUTO_DEDUCT_RE (модульный): seg gral/seguridad social/tgss/tesorería, agencia tributaria/aeat/hacienda/tributos/atc/impuesto/modelo N/igic/irpf/is sociedad, autónomo/mutua, nómina/salario/sueldo/cotización. autoDeductOf(m), isConfirmedExpense(m) = галка ИЛИ привязка ИЛИ авто.
+- taxQuarterSums: outInv = isConfirmedExpense → налоги/соцстрах/зарплаты идут в расходы 420/IS автоматически (прямой вычет из прибыли).
+- UI: строки авто-вычетов — зелёный фон, галка «📄 в расходах» + бейдж вида (🛡 Seguridad Social · 🏛 налог · 💼 зарплата · 👤 autónomo/mutua); заголовок «в расходах: N»; плашка — разбивка «в т.ч. авто: X €».
+- Regex проверен на реальных контрагентах (tes gral seg socia → AUTO; cta vista/eni/mapfre/naturgy — нет).
+- Файлы: App.js (метка · v62.1 ·). Backend не тронут. esbuild OK; eslint — 3 прежних warning.
+- Деплой: householder-web.

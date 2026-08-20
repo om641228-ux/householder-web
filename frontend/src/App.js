@@ -4720,6 +4720,22 @@ function App() {
     }
   };
 
+  // v62.1: ОБЯЗАТЕЛЬНЫЕ платежи = подтверждённые расходы БЕЗ фактуры (прямой вычет из прибыли):
+  // налоги (AEAT/ATC/Hacienda: IGIC 420, IRPF 111/115, IS 200/202…), Tesorería/Seguridad Social,
+  // cuota de autónomos, mutua, зарплаты (nómina/salario). Такие платежи НЕ требуют галки «есть фактура».
+  const AUTO_DEDUCT_RE = /seg\s*gr?al|seguridad\s+social|tgss|tesorer[ií]a|tes\.?\s*gral|agencia\s+tributaria|a\.?e\.?a\.?t|hacienda|tributos?|a\.?t\.?c\b|impuesto|modelo\s*\d|igic|irpf|\bis\b.*sociedad|aut[óo]nomo|mutua|n[óo]mina|salario|sueldo|payroll|cotizaci/i;
+  const autoDeductOf = (m) => AUTO_DEDUCT_RE.test(String(m.counterparty || '') + ' ' + String(m.concept || ''));
+  const isConfirmedExpense = (m) => !!(m.has_invoice || m.matched_receipt_id) || autoDeductOf(m);
+  // Вид авто-вычета для бейджа в строке платежа (v62.1)
+  const autoDeductKind = (m) => {
+    const t = (String(m.counterparty || '') + ' ' + String(m.concept || '')).toLowerCase();
+    if (!autoDeductOf(m)) return null;
+    if (/seg\s*gr?al|seguridad\s+social|tgss|tesorer|tes\.?\s*gral/.test(t)) return { icon: '🛡', label: 'Seguridad Social', color: '#1e8449' };
+    if (/n[óo]mina|salario|sueldo|payroll/.test(t)) return { icon: '💼', label: 'зарплата', color: '#2471a3' };
+    if (/mutua|aut[óo]nomo/.test(t)) return { icon: '👤', label: 'autónomo/mutua', color: '#7d3c98' };
+    return { icon: '🏛', label: 'налог', color: '#b03a2e' };
+  };
+
   // Квартальные границы: '2026-2T' → [2026-04-01, 2026-06-30]
   const taxQuarterRange = (key) => {
     const [y, qs] = String(key).split('-');
@@ -4742,7 +4758,7 @@ function App() {
     const sums = (list) => {
       const inc = list.filter(m => Number(m.amount) > 0);
       const outAll = list.filter(m => Number(m.amount) < 0);
-      const outInv = outAll.filter(m => m.has_invoice || m.matched_receipt_id);
+      const outInv = outAll.filter(isConfirmedExpense); // v62.1: включая авто-вычеты (налоги/соцстрах/зарплаты)
       const sum = (arr) => arr.reduce((s, m) => s + Math.abs(Number(m.amount) || 0), 0);
       const linked = outInv.map(m => receipts.find(r => String(r.id) === String(m.matched_receipt_id))).filter(Boolean);
       // v61.2: cuota/base deducible — по КАЖДОЙ привязанной фактуре: её tax_amount, а если не распознан —
@@ -6689,7 +6705,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v62 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v62.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7844,7 +7860,9 @@ ${bodyHtml}
         const sumAbs = (list) => list.reduce((a, m) => a + Math.abs(Number(m.amount) || 0), 0);
         const qIncSum = sumAbs(qInc);
         const qOutSum = sumAbs(qOut);
-        const qInvSum = sumAbs(qOut.filter(m => m.has_invoice || m.matched_receipt_id));
+        const qInvSum = sumAbs(qOut.filter(isConfirmedExpense));
+        // v62.1: из них авто-вычеты (налоги / Seguridad Social / зарплаты) — без фактуры
+        const qAutoSum = sumAbs(qOut.filter(m => !m.has_invoice && !m.matched_receipt_id && autoDeductOf(m)));
         // v61.4: налоги за выбранный диапазон (IGIC 420 + IRPF 111) — тем же расчётом, что и автозаполнение форм
         const qRangeTax = computeTaxRange(qRangeKeys[0], qRangeKeys[1]);
         // v61.5: справочная статистика банка (перенесена из «Анализа»)
@@ -7988,7 +8006,7 @@ ${bodyHtml}
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
                 <h3 style={{ margin: 0 }}>💶 Платежи из банка за выбранный диапазон — отметьте, по каким есть фактура</h3>
                 <button onClick={loadBankMovements} style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #ccc', background: '#fff', cursor: 'pointer' }}>🔄 Обновить движения</button>
-                <span style={{ fontSize: 13, color: '#7f8c8d' }}>{qFrom} … {qTo} · исходящих: {qOut.length} · с фактурой: {qOut.filter(m => m.has_invoice || m.matched_receipt_id).length}</span>
+                <span style={{ fontSize: 13, color: '#7f8c8d' }}>{qFrom} … {qTo} · исходящих: {qOut.length} · в расходах: {qOut.filter(isConfirmedExpense).length}</span>
                 <span style={{ fontSize: 13, whiteSpace: 'nowrap' }}>
                   📥 приход: <b style={{ color: '#27ae60' }}>+{formatAmount(qIncSum, 'EUR')}</b>
                   {' · '}📤 расход: <b style={{ color: '#c0392b' }}>−{formatAmount(qOutSum, 'EUR')}</b>
@@ -7999,7 +8017,9 @@ ${bodyHtml}
                   background: '#f5f5f7', border: '1px solid #e0e0e0', borderRadius: 8, padding: '8px 12px', marginTop: 2 }}>
                   <span style={{ fontSize: 13 }}>📥 приход: <b style={{ color: '#27ae60' }}>+{formatAmount(qIncSum, 'EUR')}</b></span>
                   <span style={{ fontSize: 13 }}>📤 расход: <b style={{ color: '#c0392b' }}>−{formatAmount(qOutSum, 'EUR')}</b></span>
-                  <span style={{ fontSize: 13 }}>📄 подтверждено фактурами: <b style={{ color: '#1e8449' }}>{formatAmount(qInvSum, 'EUR')}</b></span>
+                  <span style={{ fontSize: 13 }}>📄 подтверждено (расходы): <b style={{ color: '#1e8449' }}>{formatAmount(qInvSum, 'EUR')}</b>
+                    {qAutoSum > 0 && <span style={{ fontSize: 11, color: '#7f8c8d' }}> (в т.ч. 🏛 налоги/соцстрах/зарплаты авто: {formatAmount(qAutoSum, 'EUR')})</span>}
+                  </span>
                   <span style={{ fontSize: 13 }}>🧾 IGIC (mod.420): <b style={{ color: '#8e44ad' }}>{formatAmount(Math.max(0, qRangeTax.total420), 'EUR')}</b>
                     {qRangeTax.total420 < 0 && <span style={{ fontSize: 11, color: '#7f8c8d' }}> ({formatAmount(Math.abs(qRangeTax.total420), 'EUR')} к компенсации)</span>}
                   </span>
@@ -8024,13 +8044,20 @@ ${bodyHtml}
               {qOut.length === 0 && <p style={{ color: '#7f8c8d', fontSize: 13 }}>Нет исходящих платежей за этот диапазон — загрузите выписку банка на вкладке «Загрузка» (🏦 Выписка банка).</p>}
               {qOutVis.map(m => {
                 const linked = m.matched_receipt_id ? receipts.find(r => String(r.id) === String(m.matched_receipt_id)) : null;
+                const autoK = autoDeductKind(m); // v62.1: налоги/соцстрах/зарплаты — подтверждены автоматически
                 return (
-                  <div key={m.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f0f0f0', fontSize: 13, flexWrap: 'wrap' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', minWidth: 150, fontWeight: 700, color: m.has_invoice ? '#1e8449' : '#95a5a6' }}
-                      title="Галка = по этому платежу есть фактура → платёж попадает в расходы modelo 130/420">
-                      <input type="checkbox" checked={!!m.has_invoice} onChange={() => toggleInvoiceFlag(m)} />
-                      📄 есть фактура
+                  <div key={m.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f0f0f0', fontSize: 13, flexWrap: 'wrap', background: autoK ? '#f6fef9' : 'transparent', borderRadius: autoK ? 6 : 0 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', minWidth: 150, fontWeight: 700, color: (m.has_invoice || autoK) ? '#1e8449' : '#95a5a6' }}
+                      title={autoK ? `${autoK.label}: обязательный платёж — прямой вычет из прибыли, фактура не нужна (галка не требуется)` : 'Галка = по этому платежу есть фактура → платёж попадает в расходы modelo 420/IS'}>
+                      <input type="checkbox" checked={!!m.has_invoice || !!autoK} onChange={() => toggleInvoiceFlag(m)} />
+                      📄 {autoK ? 'в расходах' : 'есть фактура'}
                     </label>
+                    {autoK && (
+                      <span style={{ fontSize: 11, fontWeight: 800, color: autoK.color, background: '#fff', border: `1px solid ${autoK.color}`, borderRadius: 999, padding: '2px 8px', whiteSpace: 'nowrap' }}
+                        title="Обязательный платёж — автоматически зачтён как подтверждённый расход (прямой вычет из прибыли)">
+                        {autoK.icon} {autoK.label} · авто-вычет
+                      </span>
+                    )}
                     <span style={{ minWidth: 92, color: '#7f8c8d' }}>{m.operation_date}</span>
                     <span onClick={() => setQCpSearch(String(m.counterparty || m.concept || '').trim())}
                       onDoubleClick={() => applyBankCpFilter(m.counterparty || m.concept)}
