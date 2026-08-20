@@ -6729,7 +6729,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v64.3 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v64.4 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7917,6 +7917,14 @@ ${bodyHtml}
           if (!Number.isNaN(qAmtMaxN) && qAmtMax !== '' && amt > qAmtMaxN) return false;
           return true;
         });
+        // v64.4: сортировка строк по контрагенту А→Я / Я→А (кнопка у фильтра); внутри контрагента — по дате, новые сверху
+        qOutVis.sort((a, b) => {
+          const ca = String(a.counterparty || a.concept || '').toLowerCase();
+          const cb = String(b.counterparty || b.concept || '').toLowerCase();
+          const c = ca.localeCompare(cb, 'es', { sensitivity: 'base' });
+          if (c !== 0) return qCpSortAsc ? c : -c;
+          return String(b.operation_date || '').localeCompare(String(a.operation_date || ''));
+        });
         const pmSelIds = Object.keys(pmSelected).filter(id => pmSelected[id]);
         const pmSelSum = qOut.filter(m => pmSelected[String(m.id)]).reduce((a, m) => a + Math.abs(Number(m.amount) || 0), 0);
         const fmtD = d => d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
@@ -8153,7 +8161,7 @@ ${bodyHtml}
                     style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>✕ дата/сумма · показано {qOutVis.length}</button>
                 )}
                 <button onClick={() => setQCpSortAsc(v => !v)}
-                  title={qCpSortAsc ? 'Список контрагентов по возрастанию (А→Я) — нажмите для обратного порядка (Я→А)' : 'Список контрагентов по убыванию (Я→А) — нажмите для прямого порядка (А→Я)'}
+                  title={qCpSortAsc ? 'Сортировка таблицы и списка по контрагенту А→Я — нажмите для обратного порядка (Я→А)' : 'Сортировка таблицы и списка по контрагенту Я→А — нажмите для прямого порядка (А→Я)'}
                   style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}>
                   {qCpSortAsc ? 'А→Я' : 'Я→А'}
                 </button>
