@@ -4614,6 +4614,13 @@ function App() {
   const [pmSelected, setPmSelected] = useState({}); // id → true (текущий выбор галками в строках)
   const [pmSlots, setPmSlots] = useState(() => { try { return JSON.parse(localStorage.getItem('bankPaySlots') || '{}'); } catch { return {}; } });
   const [pmSlotView, setPmSlotView] = useState(null); // номер активного слота (1..5) или null
+  const [pmSlotArm, setPmSlotArm] = useState(null); // v64: «заряженный» вариант — галки строк добавляются в него автоматически (накопительно)
+  const pmSlotHas = (n, id) => (pmSlots[String(n)] || []).includes(String(id));
+  const pmSlotToggle = (n, id, on) => savePmSlots(prev => {
+    const cur = new Set(prev[String(n)] || []);
+    if (on) cur.add(String(id)); else cur.delete(String(id));
+    return { ...prev, [String(n)]: [...cur] };
+  });
   const savePmSlots = (updater) => setPmSlots(prev => { const nx = typeof updater === 'function' ? updater(prev) : updater; try { localStorage.setItem('bankPaySlots', JSON.stringify(nx)); } catch { /* noop */ } return nx; });
 
   // Открыть карточку документа по id (из списка движений в «Анализе»)
@@ -6717,7 +6724,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v63.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v64 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8051,6 +8058,18 @@ ${bodyHtml}
                 <div style={{ flex: '1 1 100%', display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', background: '#eef4ff', border: '1px solid #c7d7f5', borderRadius: 8, padding: '6px 10px' }}>
                   <span style={{ fontSize: 12, fontWeight: 800, color: '#1d4ed8' }}>💾 Варианты:</span>
                   <span style={{ fontSize: 12, color: '#555' }}>выбрано: <b>{pmSelIds.length}</b>{pmSelIds.length > 0 && <> на <b>{formatAmount(pmSelSum, 'EUR')}</b></>}</span>
+                  <span style={{ fontSize: 12, color: '#6e6e73' }}>добавлять в →</span>
+                  {[1, 2, 3, 4, 5].map(n => {
+                    const armed = pmSlotArm === n;
+                    return (
+                      <button key={`arm${n}`}
+                        title={armed ? `Вариант ${n} активен: галки строк добавляются в него автоматически (накопительно). Нажмите ещё раз — выключить` : `Включить вариант ${n}: дальше галки строк будут накапливаться в нём автоматически`}
+                        onClick={() => setPmSlotArm(armed ? null : n)}
+                        style={{ padding: '3px 10px', borderRadius: 999, border: `1px solid ${armed ? '#1e8449' : '#1d4ed8'}`, background: armed ? '#1e8449' : '#fff', color: armed ? '#fff' : '#1d4ed8', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>
+                        {armed ? `✔ ${n} (${(pmSlots[String(n)] || []).length})` : `${n} (${(pmSlots[String(n)] || []).length})`}
+                      </button>
+                    );
+                  })}
                   <span style={{ fontSize: 12, color: '#6e6e73' }}>сохранить в →</span>
                   {[1, 2, 3, 4, 5].map(n => (
                     <button key={`sv${n}`} disabled={!pmSelIds.length}
@@ -8079,13 +8098,21 @@ ${bodyHtml}
                       ✕ вариант {pmSlotView}: показано {qOutSlot.length} — сбросить
                     </button>
                   )}
-                  <button onClick={() => setPmSelected(prev => { const nx = { ...prev }; qOutVis.forEach(m => { nx[String(m.id)] = true; }); return nx; })}
-                    title={`Выбрать все показанные платежи (${qOutVis.length}) — для сохранения в вариант 1..5`}
+                  <button onClick={() => {
+                      if (pmSlotArm) { // v64: накопительно добавить все показанные в активный вариант
+                        savePmSlots(prev => { const cur = new Set(prev[String(pmSlotArm)] || []); qOutVis.forEach(m => cur.add(String(m.id))); return { ...prev, [String(pmSlotArm)]: [...cur] }; });
+                      } else setPmSelected(prev => { const nx = { ...prev }; qOutVis.forEach(m => { nx[String(m.id)] = true; }); return nx; });
+                    }}
+                    title={pmSlotArm ? `Добавить все показанные (${qOutVis.length}) в вариант ${pmSlotArm} (накопительно)` : `Выбрать все показанные платежи (${qOutVis.length}) — для сохранения в вариант 1..5`}
                     style={{ padding: '3px 10px', borderRadius: 999, border: '1px solid #1d4ed8', background: '#fff', color: '#1d4ed8', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>
-                    ☑ выбрать все ({qOutVis.length})
+                    ☑ {pmSlotArm ? `все в вариант ${pmSlotArm} (${qOutVis.length})` : `выбрать все (${qOutVis.length})`}
                   </button>
-                  <button onClick={() => setPmSelected({})} title="Снять выделение со всех платежей"
-                    style={{ padding: '3px 10px', borderRadius: 999, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>☐ снять выделение</button>
+                  <button onClick={() => {
+                      if (pmSlotArm) { // v64: убрать показанные из активного варианта
+                        savePmSlots(prev => { const cur = new Set(prev[String(pmSlotArm)] || []); qOutVis.forEach(m => cur.delete(String(m.id))); return { ...prev, [String(pmSlotArm)]: [...cur] }; });
+                      } else setPmSelected({});
+                    }} title={pmSlotArm ? `Убрать показанные из варианта ${pmSlotArm}` : 'Снять выделение со всех платежей'}
+                    style={{ padding: '3px 10px', borderRadius: 999, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>☐ {pmSlotArm ? `убрать из варианта ${pmSlotArm}` : 'снять выделение'}</button>
                 </div>
                 <input value={qCpSearch} onChange={e => setQCpSearch(e.target.value)} placeholder="🔍 Фильтр по контрагенту… (или кликните по нему в строке)"
                   style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13, flex: '1 1 220px', maxWidth: 340 }} />
@@ -8103,11 +8130,14 @@ ${bodyHtml}
                 const linked = m.matched_receipt_id ? receipts.find(r => String(r.id) === String(m.matched_receipt_id)) : null;
                 const autoK = autoDeductKind(m); // v62.1: налоги/соцстрах/зарплаты — подтверждены автоматически
                 return (
-                  <div key={m.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f0f0f0', fontSize: 13, flexWrap: 'wrap', background: pmSelected[String(m.id)] ? '#eef4ff' : autoK ? '#f6fef9' : 'transparent', borderRadius: (autoK || pmSelected[String(m.id)]) ? 6 : 0 }}>
-                    <input type="checkbox" checked={!!pmSelected[String(m.id)]}
-                      onChange={() => setPmSelected(prev => { const nx = { ...prev }; if (nx[String(m.id)]) delete nx[String(m.id)]; else nx[String(m.id)] = true; return nx; })}
-                      title="Выбрать платёж — затем «сохранить в → 1..5»"
-                      style={{ cursor: 'pointer', accentColor: '#1d4ed8' }} />
+                  <div key={m.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f0f0f0', fontSize: 13, flexWrap: 'wrap', background: (pmSlotArm ? pmSlotHas(pmSlotArm, m.id) : pmSelected[String(m.id)]) ? '#eef4ff' : autoK ? '#f6fef9' : 'transparent', borderRadius: (autoK || pmSelected[String(m.id)] || (pmSlotArm && pmSlotHas(pmSlotArm, m.id))) ? 6 : 0 }}>
+                    <input type="checkbox" checked={pmSlotArm ? pmSlotHas(pmSlotArm, m.id) : !!pmSelected[String(m.id)]}
+                      onChange={() => {
+                        if (pmSlotArm) pmSlotToggle(pmSlotArm, m.id, !pmSlotHas(pmSlotArm, m.id));
+                        else setPmSelected(prev => { const nx = { ...prev }; if (nx[String(m.id)]) delete nx[String(m.id)]; else nx[String(m.id)] = true; return nx; });
+                      }}
+                      title={pmSlotArm ? `Галка = платёж в варианте ${pmSlotArm} (накопительно, сохраняется автоматически)` : 'Выбрать платёж — затем «сохранить в → 1..5»'}
+                      style={{ cursor: 'pointer', accentColor: pmSlotArm ? '#1e8449' : '#1d4ed8' }} />
                     <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', minWidth: 150, fontWeight: 700, color: (m.has_invoice || autoK) ? '#1e8449' : '#95a5a6' }}
                       title={autoK ? `${autoK.label}: обязательный платёж — прямой вычет из прибыли, фактура не нужна (галка не требуется)` : 'Галка = по этому платежу есть фактура → платёж попадает в расходы modelo 420/IS'}>
                       <input type="checkbox" checked={!!m.has_invoice || !!autoK} onChange={() => toggleInvoiceFlag(m)} />
