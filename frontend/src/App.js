@@ -67,21 +67,21 @@ const MONTH_NAMES = ['Январь', 'Февраль', 'Март', 'Апрель
 // Календарь дедлайнов (месяц/день окончания срока; январские — года СЛЕДУЮЩЕГО за отчётным)
 const TAX_CALENDAR = [
   { id: '420-1T', form: '420', name: 'Modelo 420 — IGIC, 1 квартал', period: '1T', deadline: { m: 4, d: 20 }, what: 'Автоликвидация IGIC за янв–март: IGIC с продаж минус IGIC с покупок. Подаётся даже без деятельности («sin actividad»).' },
-  { id: '130-1T', form: '130', name: 'Modelo 130 — IRPF, 1 квартал', period: '1T', deadline: { m: 4, d: 20 }, what: 'Платёж подоходного 20% от прибыли (доходы − расходы) за янв–март.' },
+  { id: '130-1T', form: '130', name: 'Modelo 130 — IRPF, 1 квартал', period: '1T', deadline: { m: 4, d: 20 }, what: 'Только для autónomo (физлицо). ISERA 2020, SL НЕ подаёт 130 — вместо него Modelo 111 (retenciones).', optional: true },
   { id: '115-1T', form: '115', name: 'Modelo 115 — retenciones alquiler, 1T', period: '1T', deadline: { m: 4, d: 20 }, what: 'Удержания 19% с аренды офиса/помещения (если арендуете).', optional: true },
-  { id: '111-1T', form: '111', name: 'Modelo 111 — retenciones trabajadores, 1T', period: '1T', deadline: { m: 4, d: 20 }, what: 'Удержания с зарплат работников/профессионалов (если есть).', optional: true },
+  { id: '111-1T', form: '111', name: 'Modelo 111 — retenciones IRPF, 1 квартал', period: '1T', deadline: { m: 4, d: 20 }, what: 'Удержания IRPF с зарплат (cas.03) и профессионалов (cas.09) за янв–март. Основная форма IRPF для ISERA 2020, SL (подана: 1T-2024, 13.327,13 €).' },
   { id: '420-2T', form: '420', name: 'Modelo 420 — IGIC, 2 квартал', period: '2T', deadline: { m: 7, d: 20 }, what: 'Автоликвидация IGIC за апр–июнь.' },
-  { id: '130-2T', form: '130', name: 'Modelo 130 — IRPF, 2 квартал', period: '2T', deadline: { m: 7, d: 20 }, what: 'Платёж IRPF 20% от накопленной прибыли за янв–июнь минус предыдущие платежи.' },
+  { id: '130-2T', form: '130', name: 'Modelo 130 — IRPF, 2 квартал', period: '2T', deadline: { m: 7, d: 20 }, what: 'Только для autónomo (физлицо). ISERA 2020, SL НЕ подаёт 130 — вместо него Modelo 111.', optional: true },
   { id: '115-2T', form: '115', name: 'Modelo 115 — retenciones alquiler, 2T', period: '2T', deadline: { m: 7, d: 20 }, what: 'Удержания с аренды за апр–июнь.', optional: true },
-  { id: '111-2T', form: '111', name: 'Modelo 111 — retenciones trabajadores, 2T', period: '2T', deadline: { m: 7, d: 20 }, what: 'Удержания с зарплат за апр–июнь.', optional: true },
+  { id: '111-2T', form: '111', name: 'Modelo 111 — retenciones IRPF, 2 квартал', period: '2T', deadline: { m: 7, d: 20 }, what: 'Удержания IRPF (cas.03+09) за апр–июнь.' },
   { id: '420-3T', form: '420', name: 'Modelo 420 — IGIC, 3 квартал', period: '3T', deadline: { m: 10, d: 20 }, what: 'Автоликвидация IGIC за июль–сент.' },
-  { id: '130-3T', form: '130', name: 'Modelo 130 — IRPF, 3 квартал', period: '3T', deadline: { m: 10, d: 20 }, what: 'Платёж IRPF 20% от накопленной прибыли за янв–сент минус предыдущие платежи.' },
+  { id: '130-3T', form: '130', name: 'Modelo 130 — IRPF, 3 квартал', period: '3T', deadline: { m: 10, d: 20 }, what: 'Только для autónomo (физлицо). ISERA 2020, SL НЕ подаёт 130 — вместо него Modelo 111.', optional: true },
   { id: '115-3T', form: '115', name: 'Modelo 115 — retenciones alquiler, 3T', period: '3T', deadline: { m: 10, d: 20 }, what: 'Удержания с аренды за июль–сент.', optional: true },
-  { id: '111-3T', form: '111', name: 'Modelo 111 — retenciones trabajadores, 3T', period: '3T', deadline: { m: 10, d: 20 }, what: 'Удержания с зарплат за июль–сент.', optional: true },
+  { id: '111-3T', form: '111', name: 'Modelo 111 — retenciones IRPF, 3 квартал', period: '3T', deadline: { m: 10, d: 20 }, what: 'Удержания IRPF (cas.03+09) за июль–сент.' },
   { id: '420-4T', form: '420', name: 'Modelo 420 — IGIC, 4 квартал', period: '4T', deadline: { m: 1, d: 30 }, nextYear: true, what: 'Автоликвидация IGIC за окт–дек (срок до 30 января следующего года).' },
-  { id: '130-4T', form: '130', name: 'Modelo 130 — IRPF, 4 квартал', period: '4T', deadline: { m: 1, d: 30 }, nextYear: true, what: 'Платёж IRPF за весь год минус предыдущие платежи (до 30 января).' },
+  { id: '130-4T', form: '130', name: 'Modelo 130 — IRPF, 4 квартал', period: '4T', deadline: { m: 1, d: 30 }, nextYear: true, what: 'Только для autónomo. ISERA 2020, SL НЕ подаёт 130 — вместо него Modelo 111 (до 20 января).', optional: true },
   { id: '115-4T', form: '115', name: 'Modelo 115 — retenciones alquiler, 4T', period: '4T', deadline: { m: 1, d: 20 }, nextYear: true, what: 'Удержания с аренды за окт–дек.', optional: true },
-  { id: '111-4T', form: '111', name: 'Modelo 111 — retenciones trabajadores, 4T', period: '4T', deadline: { m: 1, d: 20 }, nextYear: true, what: 'Удержания с зарплат за окт–дек.', optional: true },
+  { id: '111-4T', form: '111', name: 'Modelo 111 — retenciones IRPF, 4 квартал', period: '4T', deadline: { m: 1, d: 20 }, nextYear: true, what: 'Удержания IRPF (cas.03+09) за окт–дек (срок до 20 января следующего года).' },
   { id: '190-year', form: '190', name: 'Modelo 190 — resumen anual retenciones', period: 'AÑO', deadline: { m: 1, d: 31 }, nextYear: true, what: 'Годовая сводка удержаний по modelo 111 (если подавали 111).', optional: true },
   { id: '180-year', form: '180', name: 'Modelo 180 — resumen anual alquileres', period: 'AÑO', deadline: { m: 1, d: 31 }, nextYear: true, what: 'Годовая сводка удержаний по modelo 115 (если подавали 115).', optional: true },
   { id: '100-year', form: '100', name: 'Modelo 100 — Renta (IRPF anual)', period: 'AÑO', deadline: { m: 6, d: 30 }, what: 'Годовая декларация подоходного за прошлый год: все доходы, вычеты, зачёт платежей modelo 130.' },
@@ -131,82 +131,95 @@ const TAX_GUIDE = [
 // электронные в sede electrónica; наш .txt — помощник для переноса цифр в веб-форму)
 const TAX_FORM_TEMPLATES = {
   '420': {
-    blank: `МОДЕЛО 420 — IGIC (Канары) — БЛАНК-ЧЕРНОВИК НА РУССКОМ
+    blank: `МОДЕЛО 420 — IGIC TRIMESTRAL (ATC, Канары) — БЛАНК НА РУССКОМ
 ============================================================
-Год (Ejercicio): ______        Квартал (Período): 1T / 2T / 3T / 4T
-NIF/NIE: ____________  Фамилия и имя: ________________________
+Ejercicio: ______   Período: 1T / 2T / 3T / 4T
+NIF: ____________  Razón social: ____________________
 
-IGIC НАЧИСЛЕННЫЙ (с ваших продаж/аренды за квартал):
-  Casilla 01 — Налоговая база (Base imponible, тип ___%): __________ ,__
-  Casilla 06 — Сумма налога (Cuota = база × тип):         __________ ,__
-  Casilla 11 — Всего начислено (Total devengado):         __________ ,__
+7. LIQUIDACIÓN — I.G.I.C. DEVENGADO (начислен с продаж):
+  Casilla 01 — Base imponible (НЕТТО, без IGIC):   __________ ,__
+  Casilla 02 — Tipo de gravamen, %:                     7,00
+  Casilla 03 — Cuota devengada (01 × 02):          __________ ,__
+  Casilla 25 — Total cuotas devengadas:            __________ ,__
 
-IGIC К ВЫЧЕТУ (покупки для деятельности, с фактурами):
-  Casilla 12 — IGIC по покупкам (Cuotas soportadas):      __________ ,__
-  Casilla 17 — Всего к вычету (Total a deducir):          __________ ,__
+I.G.I.C. DEDUCIBLE (покупки для деятельности, с фактурами):
+  Casilla 26 — Base deducible (нетто):             __________ ,__
+  Casilla 27 — Cuota deducible (IGIC по фактурам): __________ ,__
+  Casilla 40 — Total cuotas deducibles:            __________ ,__
 
 РЕЗУЛЬТАТ:
-  Casilla 18 — Разница (11 − 17):                         __________ ,__
-  Casilla 19 — Зачёт прошлых периодов (Compensación):     __________ ,__
-  Casilla 20 — Итог декларации (Resultado):               __________ ,__
-  → К ОПЛАТЕ (a ingresar) / к зачёту / к возврату: ______ ,__
+  Casilla 41 — Diferencia (25 − 40):               __________ ,__
+  Casilla 43 — Cuotas a compensar de períodos anteriores: __________ ,__
+  Casilla 45 — RESULTADO DE LA AUTOLIQUIDACIÓN (41 − 43): __________ ,__
+  → A INGRESAR (к оплате) / A COMPENSAR (к зачёту дальше).
 
-Подача: электронный кабинет ATC (сертификат / Cl@ve):
-https://sede.gobiernodecanarias.org/sede-atc/`,
-    example: `МОДЕЛО 420 — ПРИМЕР ЗАПОЛНЕНИЯ (выдуманные цифры!)
+Подача: sede ATC: https://sede.gobcan.es/tributos`,
+    example: `МОДЕЛО 420 — ПРИМЕР (реальная поданная 1T-2025 ISERA 2020, SL!)
 ============================================================
-Год: 2026                     Квартал: 2T
-NIF: Y1234567X  Имя: ALEJANDRO RODRIGUEZ
+Ejercicio: 2025   Período: 1T
+NIF: B76825199   Razón social: ISERA 2020, SL
+Justificante: 4205586417155 (подана 15-04-2025)
 
-Ситуация: за апр–июнь получено аренды 12 000,00 € (IGIC 7%),
-куплено мебели/ремонт с фактурами на 3 000,00 € + IGIC 210,00 €.
+IGIC DEVENGADO:
+  Casilla 01 — Base imponible:        134 557,29
+  Casilla 02 — Tipo:                        7,00 %
+  Casilla 03 — Cuota devengada:         9 419,01
+  Casilla 25 — Total devengado:         9 419,01
 
-IGIC НАЧИСЛЕННЫЙ:
-  Casilla 01 — Налоговая база (тип 7%):    12 000,00
-  Casilla 06 — Сумма налога (12 000 × 7%):    840,00
-  Casilla 11 — Всего начислено:               840,00
-
-IGIC К ВЫЧЕТУ:
-  Casilla 12 — IGIC по покупкам:              210,00
-  Casilla 17 — Всего к вычету:                210,00
+IGIC DEDUCIBLE:
+  Casilla 26 — Base deducible:         18 918,13
+  Casilla 27 — Cuota deducible:         1 199,43
+  Casilla 40 — Total deducible:         1 199,43
 
 РЕЗУЛЬТАТ:
-  Casilla 18 — Разница:                       630,00
-  Casilla 19 — Зачёт прошлых периодов:          0,00
-  Casilla 20 — Итог:                            630,00
-  → К ОПЛАТЕ: 630,00 € (списание с IBAN или NRC через банк)` },
-  '130': {
-    blank: `МОДЕЛО 130 — ПОДОХОДНЫЙ, АВАНСОВЫЙ ПЛАТЁЖ — БЛАНК НА РУССКОМ
+  Casilla 41 — Diferencia:              8 219,58
+  Casilla 43 — A compensar anterior:        0,00
+  Casilla 45 — RESULTADO:               8 219,58
+  → A INGRESAR: 8 219,58 € (domiciliado ES44 3076 0420 2426 5661 3722)` },
+  '111': {
+    blank: `МОДЕЛО 111 — RETENCIONES IRPF (удержания) — БЛАНК НА РУССКОМ
 ============================================================
-Год: ______   Квартал: 1T / 2T / 3T / 4T
-NIF/NIE: ____________  Имя: ____________________
+Ejercicio: ______   Período: 1T / 2T / 3T / 4T
+NIF: ____________  Razón social: ____________________
+(форма ISERA 2020, SL — modelo 130 для SL НЕ подаётся)
 
-(суммы НАРАСТАЮЩИМ ИТОГОМ с 1 января!)
-  Casilla 01 — Доходы (Ingresos computables):            __________ ,__
-  Casilla 02 — Расходы к вычету (Gastos deducibles):     __________ ,__
-  Casilla 03 — Чистая прибыль (01 − 02):                 __________ ,__
-  Casilla 04 — 20% от casilla 03:                        __________ ,__
-  Casilla 05 — Уже уплаченные авансы года + удержания:   __________ ,__
-  Casilla 07 — Результат (04 − 05):                      __________ ,__
-  → К ОПЛАТЕ (если 07 > 0):                              __________ ,__
+I. RENDIMIENTOS DEL TRABAJO (зарплаты работников):
+  Casilla 01 — Nº de perceptores (число получателей):  ____
+  Casilla 02 — Importe de las percepciones (начислено):  __________ ,__
+  Casilla 03 — Importe de las retenciones (удержано):    __________ ,__
 
-Подача: sede AEAT (сертификат / Cl@ve)`,
-    example: `МОДЕЛО 130 — ПРИМЕР ЗАПОЛНЕНИЯ (выдуманные цифры!)
+II. RENDIMIENTOS DE ACTIVIDADES ECONÓMICAS (профессионалы):
+  Casilla 07 — Nº de perceptores:                       ____
+  Casilla 08 — Importe de las percepciones:             __________ ,__
+  Casilla 09 — Importe de las retenciones:              __________ ,__
+
+LIQUIDACIÓN:
+  Casilla 28 — Suma (03 + 06 + 09 + …):                 __________ ,__
+  Casilla 30 — RESULTADO A INGRESAR (28 − 29):          __________ ,__
+  → К ОПЛАТЕ: casilla 30 (domiciliación IBAN или NRC).
+
+Сроки: до 20 апр / 20 июл / 20 окт / 20 янв (4T).
+Подача: sede AEAT (сертификат / Cl@ve).`,
+    example: `МОДЕЛО 111 — ПРИМЕР (реальная поданная 1T-2024 ISERA 2020, SL!)
 ============================================================
-Год: 2026   Квартал: 2T (нарастающий итог янв–июнь)
-NIF: Y1234567X  Имя: ALEJANDRO RODRIGUEZ
+Ejercicio: 2024   Período: 1T
+NIF: B76825199   Razón social: ISERA 2020, SL
+Justificante: 1115816680711 (подана 13-04-2024)
 
-Янв–июнь: доходы от аренды 24 000,00 €; подтверждённые
-расходы (платежи банка с фактурами) 9 500,00 €.
-В 1T уже уплачено 400,00 €.
+I. RENDIMIENTOS DEL TRABAJO:
+  Casilla 01 — Perceptores:                6
+  Casilla 02 — Percepciones:          61 535,97
+  Casilla 03 — Retenciones:           13 264,13
 
-  Casilla 01 — Доходы:              24 000,00
-  Casilla 02 — Расходы:              9 500,00
-  Casilla 03 — Чистая прибыль:      14 500,00
-  Casilla 04 — 20%:                  2 900,00
-  Casilla 05 — Авансы прошлых кв.:     400,00
-  Casilla 07 — Результат:            2 500,00
-  → К ОПЛАТЕ: 2 500,00 €` },
+II. ACTIVIDADES ECONÓMICAS:
+  Casilla 07 — Perceptores:                1
+  Casilla 08 — Percepciones:             900,00
+  Casilla 09 — Retenciones:               63,00
+
+LIQUIDACIÓN:
+  Casilla 28 — Suma (03 + 09):        13 327,13
+  Casilla 30 — RESULTADO A INGRESAR:  13 327,13
+  → К ОПЛАТЕ: 13 327,13 € (domiciliación ES44 3076 0420 2426 5661 3722)` },
   '100': { blank: `МОДЕЛО 100 — ГОДОВАЯ ДЕКЛАРАЦИЯ (Renta) — ЧЕК-ЛИСТ НА РУССКОМ
 ============================================================
 Год: ______ (подаётся апрель–июнь следующего года)
@@ -239,17 +252,6 @@ NIF: Y1234567X  Имя: ALEJANDRO RODRIGUEZ
   Casilla 02 — База: 1 500,00
   Casilla 03 — 19%: 285,00
   → К ОПЛАТЕ: 285,00 €` },
-  '111': { blank: `МОДЕЛО 111 — УДЕРЖАНИЯ С ЗАРПЛАТ — БЛАНК НА РУССКОМ
-============================================================
-Квартал: __T   Год: ______
-  Casilla 01 — Работники: ____ чел.  База: ______ ,__  Удержано: ____ ,__
-  Casilla 02 — Профессионалы: ____ чел. База: ____ ,__  Удержано: ____ ,__
-  → К ОПЛАТЕ: сумма удержаний.`,
-    example: `МОДЕЛО 111 — ПРИМЕР (выдуманные цифры!)
-============================================================
-2T 2026: зарплата работника 1 200 €/мес, удержание 10%.
-  Casilla 01 — Работники: 1  База: 3 600,00  Удержано: 360,00
-  → К ОПЛАТЕ: 360,00 €` },
   '036': { blank: `МОДЕЛО 036 / 400 (Канары) — ПОСТАНОВКА НА УЧЁТ — ЧЕК-ЛИСТ
 ============================================================
 □ Alta: NIF/NIE, код деятельности (epígrafe IAE), дата начала, адрес.
@@ -4752,22 +4754,40 @@ function App() {
     const rate = overrides.igicRate != null ? overrides.igicRate : 7;
     const r2 = n => Math.round(n * 100) / 100;
     const today0 = new Date().setHours(0, 0, 0, 0);
-    const paid130ByYear = {}; // авто-зачёт авансов: суммы результатов 130 предыдущих кварталов года
+    // v61: пересчёт строго по ОФИЦИАЛЬНЫМ формам из поданных деклараций ISERA 2020, SL:
+    //   Modelo 420 (ATC):  01 base devengada · 02 tipo · 03 cuota devengada · 25 total devengado
+    //                      26 base deducible · 27 cuota deducible · 40 total deducible
+    //                      41 diferencia (25−40) · 43 cuotas a compensar de períodos anteriores · 45 resultado (41+42−43−44)
+    //   Modelo 111 (AEAT): 02 percepciones trabajo · 03 retenciones trabajo · 08 percepciones act. econ. · 09 retenciones act.
+    //                      28 suma retenciones · 30 resultado a ingresar (= 28). ISERA — SL: modelo 130 НЕ подаётся.
+    // Выписка банка — суммы БРУТТО (с IGIC), базы в форме — НЕТТО: base = bruto / (1 + tipo).
+    let igicCompCarry = 0; // «a compensar» из прошлых кварталов → casilla 43 следующего
     const quarters = list.map(({ y, q }) => {
       const { from, to, quarter, cum } = taxQuarterSums(y, q, src);
-      const ingresos = overrides[`ingresos_${y}_${q}`] != null ? overrides[`ingresos_${y}_${q}`] : r2(quarter.ingresos);
-      const gastos = overrides[`gastos_${y}_${q}`] != null ? overrides[`gastos_${y}_${q}`] : r2(quarter.gastos);
-      const igicSoportado = overrides[`igicSop_${y}_${q}`] != null ? overrides[`igicSop_${y}_${q}`] : r2(quarter.igicSop);
-      const igicRepercutido = r2(ingresos * rate / 100);
-      const result420 = r2(igicRepercutido - igicSoportado);
-      // Modelo 130 — нарастающим итогом с 1 января минус авансы прошлых кварталов
-      const rendCum = r2(cum.ingresos - cum.gastos);
+      // ── MODELO 420 ──
+      const ingresosBrutos = r2(quarter.ingresos);
+      const baseDev = overrides[`ingresos_${y}_${q}`] != null ? overrides[`ingresos_${y}_${q}`] : r2(ingresosBrutos / (1 + rate / 100)); // casilla 01 (нетто)
+      const cuotaDev = r2(baseDev * rate / 100);                                  // casilla 03 = casilla 25
+      const gastosBrutos = r2(quarter.gastos);
+      const baseDed = overrides[`gastos_${y}_${q}`] != null ? overrides[`gastos_${y}_${q}`] : r2(gastosBrutos / (1 + rate / 100)); // casilla 26 (нетто)
+      const cuotaDed = overrides[`igicSop_${y}_${q}`] != null ? overrides[`igicSop_${y}_${q}`] : r2(quarter.igicSop); // casilla 27 = casilla 40 (из tax_amount фактур)
+      const dif41 = r2(cuotaDev - cuotaDed);                                      // casilla 41
+      const comp43 = r2(igicCompCarry);                                           // casilla 43
+      const result420 = r2(dif41 - comp43);                                       // casilla 45
+      igicCompCarry = result420 < 0 ? Math.abs(result420) : 0;                    // отрицательный итог → a compensar дальше
+      // Совместимость полей (UI/текст):
+      const ingresos = baseDev, gastos = baseDed, igicSoportado = cuotaDed, igicRepercutido = cuotaDev;
+      // ── MODELO 111 (retenciones IRPF; из выписки не выводится — вручную по платёжным ведомостям) ──
+      const numTrab = overrides[`numTrab_${y}_${q}`] != null ? overrides[`numTrab_${y}_${q}`] : 0;     // casilla 01 (v61.1)
+      const percTrab = overrides[`percTrab_${y}_${q}`] != null ? overrides[`percTrab_${y}_${q}`] : 0;  // casilla 02
+      const retTrab = overrides[`retTrab_${y}_${q}`] != null ? overrides[`retTrab_${y}_${q}`] : 0;     // casilla 03
+      const numAct = overrides[`numAct_${y}_${q}`] != null ? overrides[`numAct_${y}_${q}`] : 0;        // casilla 07 (v61.1)
+      const percAct = overrides[`percAct_${y}_${q}`] != null ? overrides[`percAct_${y}_${q}`] : 0;     // casilla 08
+      const retAct = overrides[`retAct_${y}_${q}`] != null ? overrides[`retAct_${y}_${q}`] : 0;        // casilla 09
+      const sum28 = r2(retTrab + retAct);                                                           // casilla 28
+      const result111 = r2(sum28);                                                                  // casilla 30
+      const rendCum = r2(cum.ingresos - cum.gastos); // справочно (прибыль нарастающим — для modelo 200/IS)
       const cumIngresos = r2(cum.ingresos), cumGastos = r2(cum.gastos);
-      const pagoCum = r2(Math.max(0, rendCum) * 0.20);
-      const prev130 = paid130ByYear[y] || 0;
-      const result130raw = r2(pagoCum - prev130);
-      const result130 = Math.max(0, result130raw);
-      paid130ByYear[y] = r2(prev130 + result130);
       // Просрочка: дедлайн прошёл, а платить нужно → надбавка + пени (добровольная подача)
       const dl = taxQuarterDeadline(y, q);
       const isLate = dl.getTime() < today0;
@@ -4776,20 +4796,20 @@ function App() {
       const recargoRate = !isLate ? 0 : monthsLate > 12 ? 0.15 : Math.min(12, monthsLate + 1) * 0.01;
       const interestFrom = new Date(dl.getTime()); interestFrom.setMonth(interestFrom.getMonth() + 12);
       const interestDays = monthsLate > 12 ? Math.floor((today0 - interestFrom.getTime()) / 86400000) : 0;
-      const base420 = Math.max(0, result420), base130 = result130;
-      const recargo = r2((base420 + base130) * recargoRate);
-      const intereses = interestDays > 0 ? r2((base420 + base130) * 0.040625 * interestDays / 365) : 0;
-      return { y, q, key: `${y}-${q}T`, from, to, ingresos, gastos, igicSoportado, igicRepercutido, result420, cumIngresos, cumGastos, rendCum, pagoCum, prev130, result130, dl, isLate, monthsLate, recargoRate, recargo, intereses, counts: quarter };
+      const base420 = Math.max(0, result420), base111 = result111;
+      const recargo = r2((base420 + base111) * recargoRate);
+      const intereses = interestDays > 0 ? r2((base420 + base111) * 0.040625 * interestDays / 365) : 0;
+      return { y, q, key: `${y}-${q}T`, from, to, ingresos, gastos, igicSoportado, igicRepercutido, baseDev, cuotaDev, baseDed, cuotaDed, dif41, comp43, result420, numTrab, percTrab, retTrab, numAct, percAct, retAct, sum28, result111, ingresosBrutos, gastosBrutos, cumIngresos, cumGastos, rendCum, dl, isLate, monthsLate, recargoRate, recargo, intereses, counts: quarter };
     });
     const tot = (f) => r2(quarters.reduce((s, x) => s + (x[f] || 0), 0));
-    const total420 = tot('result420'), total130 = tot('result130');
+    const total420 = tot('result420'), total111 = tot('result111');
     const totalRecargo = tot('recargo'), totalIntereses = tot('intereses');
     return {
       fromKey, toKey, igicRate: rate, quarters,
-      total420, total130, totalRecargo, totalIntereses,
+      total420, total111, totalRecargo, totalIntereses,
       // Отрицательный результат 420 — это «к компенсации», а не к оплате: в итог к оплате идут только положительные суммы
-      grandTotal: r2(Math.max(0, total420) + total130 + totalRecargo + totalIntereses),
-      lateCount: quarters.filter(x => x.isLate && (x.result420 > 0 || x.result130 > 0)).length
+      grandTotal: r2(Math.max(0, total420) + total111 + totalRecargo + totalIntereses),
+      lateCount: quarters.filter(x => x.isLate && (x.result420 > 0 || x.result111 > 0)).length
     };
   };
 
@@ -4799,25 +4819,36 @@ function App() {
     const row = (label, val) => `  ${label}:`.padEnd(76, ' ') + f(val);
     const rows = [];
     if (form === '420') {
-      rows.push(row(`Casilla 01 — Base imponible (tipo ${d.igicRate}%) — Налогооблагаемая база`, x.ingresos));
-      rows.push(row('Casilla 06 — Cuota devengada — Начисленный налог', x.igicRepercutido));
-      rows.push(row('Casilla 11 — Total devengado — Всего начислено', x.igicRepercutido));
-      rows.push(row('Casilla 12 — IGIC deducible (con facturas) — IGIC к вычету по фактурам', x.igicSoportado));
-      rows.push(row('Casilla 17 — Total a deducir — Всего к вычету', x.igicSoportado));
-      rows.push(row('Casilla 18 — Diferencia — Разница', x.result420));
-      rows.push(row('Casilla 20 — Resultado — Результат', x.result420));
+      // v61: casillas ТОЧНО как в официальной Modelo 420 ATC (образец: поданная 1T-2025, justificante 4205586417155)
+      rows.push(`  — IGIC DEVENGADO (начислен с продаж) —`);
+      rows.push(row(`Casilla 01 — Base imponible (нетто, bruto/${(1 + d.igicRate / 100).toFixed(2)}) — База`, x.baseDev != null ? x.baseDev : x.ingresos));
+      rows.push(`  Casilla 02 — Tipo de gravamen — Ставка:`.padEnd(76, ' ') + `${f(d.igicRate)} %`);
+      rows.push(row('Casilla 03 — Cuota devengada (01 × 02) — Начисленный IGIC', x.cuotaDev != null ? x.cuotaDev : x.igicRepercutido));
+      rows.push(row('Casilla 25 — Total cuotas devengadas — Всего начислено', x.cuotaDev != null ? x.cuotaDev : x.igicRepercutido));
+      rows.push(`  — IGIC DEDUCIBLE (к вычету, по фактурам) —`);
+      rows.push(row('Casilla 26 — Base deducible (bienes y servicios corrientes) — База вычета', x.baseDed != null ? x.baseDed : x.gastos));
+      rows.push(row('Casilla 27 — Cuota deducible — IGIC к вычету (tax_amount фактур)', x.cuotaDed != null ? x.cuotaDed : x.igicSoportado));
+      rows.push(row('Casilla 40 — Total cuotas deducibles — Всего к вычету', x.cuotaDed != null ? x.cuotaDed : x.igicSoportado));
+      rows.push(row('Casilla 41 — Diferencia (25 − 40) — Разница', x.dif41 != null ? x.dif41 : x.result420));
+      if (x.comp43) rows.push(row('Casilla 43 — Cuotas a compensar de períodos anteriores — Зачёт прошлых', x.comp43));
+      rows.push(row('Casilla 45 — RESULTADO DE LA AUTOLIQUIDACIÓN (41 − 43) — ИТОГ', x.result420));
       rows.push(x.result420 >= 0
         ? `  → A INGRESAR — К УПЛАТЕ: ${f(x.result420)} €`
         : `  → A COMPENSAR — К КОМПЕНСАЦИИ в следующих кварталах: ${f(Math.abs(x.result420))} €`);
     } else {
-      rows.push(`  (нарастающим итогом с 1 января ${x.y} — при необходимости поправьте!)`);
-      rows.push(row('Casilla 01 — Ingresos computables — Облагаемые доходы', x.cumIngresos));
-      rows.push(row('Casilla 02 — Gastos deducibles — Вычитаемые расходы', x.cumGastos));
-      rows.push(row('Casilla 03 — Rendimiento neto — Чистый доход', x.rendCum));
-      rows.push(row('Casilla 04 — 20%', x.pagoCum));
-      rows.push(row('Casilla 05 — Pagos anteriores/retenciones — Авансы прошлых кварталов', x.prev130));
-      rows.push(row('Casilla 07 — Resultado — Результат', x.result130));
-      rows.push(`  → A INGRESAR — К УПЛАТЕ: ${f(x.result130)} €`);
+      // v61: Modelo 111 — retenciones IRPF (образец: поданная 1T-2024, justificante 1115816680711). ISERA 2020, SL — modelo 130 НЕ подаёт.
+      rows.push(`  I. Rendimientos del trabajo — Удержания с зарплат:`);
+      rows.push(`  Casilla 01 — Nº de perceptores — Число получателей:`.padEnd(76, ' ') + `${x.numTrab || 0}`);
+      rows.push(row('Casilla 02 — Importe de las percepciones — Начислено работникам', x.percTrab || 0));
+      rows.push(row('Casilla 03 — Importe de las retenciones — Удержано IRPF', x.retTrab || 0));
+      rows.push(`  II. Rendimientos de actividades económicas — Удержания профессионалам:`);
+      rows.push(`  Casilla 07 — Nº de perceptores — Число получателей:`.padEnd(76, ' ') + `${x.numAct || 0}`);
+      rows.push(row('Casilla 08 — Importe de las percepciones — Начислено', x.percAct || 0));
+      rows.push(row('Casilla 09 — Importe de las retenciones — Удержано', x.retAct || 0));
+      rows.push(row('Casilla 28 — Suma de retenciones (03 + 09) — Всего удержано', x.sum28 != null ? x.sum28 : x.result111));
+      rows.push(row('Casilla 30 — RESULTADO A INGRESAR — К УПЛАТЕ', x.result111));
+      rows.push(`  → A INGRESAR — К УПЛАТЕ: ${f(x.result111)} €`);
+      rows.push(`  (Справочно, прибыль нарастающим с 01.01.${x.y}: ${f(x.rendCum)} € — для Modelo 200/IS, не для 111)`);
     }
     return rows;
   };
@@ -5352,16 +5383,16 @@ ${bodyHtml}
       lines.push(`  ──────────── MODELO 420 — IGIC ${x.key} ────────────`);
       lines.push(...taxFormRows('420', x, d));
       lines.push('');
-      lines.push(`  ──────────── MODELO 130 — IRPF ${x.key} ────────────`);
-      lines.push(...taxFormRows('130', x, d));
-      if (x.isLate && (x.result420 > 0 || x.result130 > 0)) {
+      lines.push(`  ──────────── MODELO 111 — RETENCIONES IRPF ${x.key} ────────────`);
+      lines.push(...taxFormRows('111', x, d));
+      if (x.isLate && (x.result420 > 0 || x.result111 > 0)) {
         lines.push(`  ⚠ ПРОСРОЧЕНО (дедлайн ${x.dl.toLocaleDateString('ru-RU')}, ${x.monthsLate} мес.): надбавка recargo ${(x.recargoRate * 100).toFixed(0)}% = ${f(x.recargo)} · пени intereses = ${f(x.intereses)}`);
       }
       lines.push('');
     });
     lines.push(`════════ ИТОГО ЗА ПЕРИОД ════════`);
     lines.push(`  IGIC (modelo 420) к оплате:      ${f(Math.max(0, d.total420))} €${d.total420 < 0 ? `   (ещё ${f(Math.abs(d.total420))} € — a compensar, к компенсации)` : ''}`);
-    lines.push(`  IRPF (modelo 130) к оплате:      ${f(d.total130)} €`);
+    lines.push(`  IRPF retenciones (modelo 111):   ${f(d.total111)} €`);
     lines.push(`  ШТРАФ-надбавка (recargo):        ${f(d.totalRecargo)} €`);
     lines.push(`  ПЕНИ (intereses de demora):      ${f(d.totalIntereses)} €`);
     lines.push(`  ══ ВСЕГО К ОПЛАТЕ:               ${f(d.grandTotal)} € ══`);
@@ -5372,11 +5403,11 @@ ${bodyHtml}
   // Текст ОДНОЙ заполненной модели (420 или 130) за конкретный квартал — для попапа и скачивания (v30.2)
   const buildSingleTaxFormText = (form, x, d) => {
     const f = n => Number(n || 0).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const lines = [`MODELO ${form} — ${form === '420' ? 'IGIC' : 'IRPF'} · ${x.key} — автозаполнено из банка (${new Date().toLocaleString('ru-RU')})`,
+    const lines = [`MODELO ${form} — ${form === '420' ? 'IGIC (ATC)' : 'RETENCIONES IRPF (AEAT)'} · ${x.key} — автозаполнено из банка (${new Date().toLocaleString('ru-RU')})`,
       `Основание: ${x.counts.incCount} поступлений и ${x.counts.outInvCount} платежей с фактурой за ${x.from}…${x.to}`,
       '(Это помощник для переноса цифр в веб-форму — НЕ официальный документ. Проверьте цифры!)', '',
       ...taxFormRows(form, x, d)];
-    if (x.isLate && (x.result420 > 0 || x.result130 > 0)) {
+    if (x.isLate && (x.result420 > 0 || x.result111 > 0)) {
       lines.push('');
       lines.push(`  ⚠ ПРОСРОЧЕНО (дедлайн ${x.dl.toLocaleDateString('ru-RU')}, ${x.monthsLate} мес.): надбавка recargo ${(x.recargoRate * 100).toFixed(0)}% = ${f(x.recargo)} · пени intereses = ${f(x.intereses)}`);
     }
@@ -6627,7 +6658,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v60.3 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v61.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7971,7 +8002,7 @@ ${bodyHtml}
                   </label>
 
                   {taxDraft.quarters.map(x => {
-                    const late = x.isLate && (x.result420 > 0 || x.result130 > 0);
+                    const late = x.isLate && (x.result420 > 0 || x.result111 > 0);
                     return (
                       <div key={x.key} style={{ border: `1px solid ${late ? '#8e8e93' : '#e0e0e0'}`, borderLeft: `4px solid ${late ? '#48484a' : '#c7c7cc'}`, borderRadius: 8, padding: '10px 12px', marginBottom: 10 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
@@ -7979,14 +8010,20 @@ ${bodyHtml}
                           <span style={{ fontSize: 12, color: '#7f8c8d' }}>поступлений {x.counts.incCount} · расходов с фактурой {x.counts.outInvCount} из {x.counts.outCount}</span>
                         </div>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8, fontSize: 13, marginBottom: 8 }}>
-                          {[
-                            [`ingresos_${x.y}_${x.q}`, 'Доходы, €'],
-                            [`gastos_${x.y}_${x.q}`, 'Расходы с фактурами, €'],
-                            [`igicSop_${x.y}_${x.q}`, 'IGIC soportado, €'],
-                          ].map(([field, label]) => (
+                          {[// v61: casillas официальной Modelo 420 (базы НЕТТО) + Modelo 111 (retenciones — вручную)
+                            [`ingresos_${x.y}_${x.q}`, '420 · cas.01 База IGIC (нетто), €', 'baseDev'],
+                            [`gastos_${x.y}_${x.q}`, '420 · cas.26 База deducible, €', 'baseDed'],
+                            [`igicSop_${x.y}_${x.q}`, '420 · cas.27 Cuota deducible, €', 'cuotaDed'],
+                            [`numTrab_${x.y}_${x.q}`, '111 · cas.01 Perceptores (чел.)', 'numTrab'],
+                            [`percTrab_${x.y}_${x.q}`, '111 · cas.02 Percepciones trabajo, €', 'percTrab'],
+                            [`retTrab_${x.y}_${x.q}`, '111 · cas.03 Retenciones trabajo, €', 'retTrab'],
+                            [`numAct_${x.y}_${x.q}`, '111 · cas.07 Perceptores act. (чел.)', 'numAct'],
+                            [`percAct_${x.y}_${x.q}`, '111 · cas.08 Percepciones act. econ., €', 'percAct'],
+                            [`retAct_${x.y}_${x.q}`, '111 · cas.09 Retenciones act. econ., €', 'retAct'],
+                          ].map(([field, label, valKey]) => (
                             <label key={field} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                               <span style={{ color: '#555' }}>{label}</span>
-                              <input type="number" step="0.01" value={x[field.startsWith('igicSop') ? 'igicSoportado' : field.startsWith('gastos') ? 'gastos' : 'ingresos']}
+                              <input type="number" step="0.01" value={x[valKey]}
                                 onChange={e => setTaxDraft(prev => computeTaxRange(prev.fromKey, prev.toKey, { ...prev, [field]: parseFloat(e.target.value) || 0 }))}
                                 style={{ padding: '5px 8px', borderRadius: 6, border: '1px solid #ccc' }} />
                             </label>
@@ -7996,13 +8033,14 @@ ${bodyHtml}
                           <div role="button" onClick={() => setTaxFormPopup({ form: '420', q: x })} title="Открыть заполненную modelo 420"
                             style={{ cursor: 'pointer', borderRadius: 6, padding: '3px 6px', marginLeft: -6 }}
                             onMouseEnter={e => e.currentTarget.style.background = '#ececf0'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                            📄 <strong style={{ color: '#1d1d1f', textDecoration: 'underline dotted' }}>Modelo 420</strong> (IGIC): cuota {formatAmount(x.igicRepercutido, 'EUR')} − deducible {formatAmount(x.igicSoportado, 'EUR')} = <strong>{formatAmount(x.result420, 'EUR')}</strong>
-                            {x.result420 < 0 && <span style={{ fontSize: 12, color: '#1e8449' }}> → к компенсации</span>}
+                            📄 <strong style={{ color: '#1d1d1f', textDecoration: 'underline dotted' }}>Modelo 420</strong> (IGIC): cuota {formatAmount(x.cuotaDev, 'EUR')} − deducible {formatAmount(x.cuotaDed, 'EUR')}{x.comp43 ? ` − a compensar ${formatAmount(x.comp43, 'EUR')}` : ''} = <strong>{formatAmount(x.result420, 'EUR')}</strong>
+                            {x.result420 < 0 && <span style={{ fontSize: 12, color: '#1e8449' }}> → к компенсации (cas.43 след. квартала)</span>}
                           </div>
-                          <div role="button" onClick={() => setTaxFormPopup({ form: '130', q: x })} title="Открыть заполненную modelo 130"
+                          <div role="button" onClick={() => setTaxFormPopup({ form: '111', q: x })} title="Открыть заполненную modelo 111"
                             style={{ cursor: 'pointer', borderRadius: 6, padding: '3px 6px', marginLeft: -6 }}
                             onMouseEnter={e => e.currentTarget.style.background = '#ececf0'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                            📄 <strong style={{ color: '#1d1d1f', textDecoration: 'underline dotted' }}>Modelo 130</strong> (IRPF, нарастающим): рендимьенто {formatAmount(x.rendCum, 'EUR')} × 20% − авансы {formatAmount(x.prev130, 'EUR')} = <strong>{formatAmount(x.result130, 'EUR')}</strong>
+                            📄 <strong style={{ color: '#1d1d1f', textDecoration: 'underline dotted' }}>Modelo 111</strong> (retenciones IRPF): cas.03 {formatAmount(x.retTrab, 'EUR')} + cas.09 {formatAmount(x.retAct, 'EUR')} = <strong>{formatAmount(x.result111, 'EUR')}</strong>
+                            <span style={{ fontSize: 11, color: '#8e8e93' }}> · заполняется по платёжным ведомостям (cas.02/08 — в форме)</span>
                           </div>
                           {late && (
                             <div style={{ color: '#1d1d1f', fontWeight: 700, background: '#e4e4e8', borderRadius: 6, padding: '6px 8px', marginTop: 6 }}>
@@ -8044,7 +8082,7 @@ ${bodyHtml}
                       <div>IGIC (modelo 420) к оплате: <strong>{formatAmount(Math.max(0, taxDraft.total420), 'EUR')}</strong>
                         {taxDraft.total420 < 0 && <span style={{ fontSize: 12, color: '#3a3a3c' }}> (ещё {formatAmount(Math.abs(taxDraft.total420), 'EUR')} к компенсации в следующих кварталах — a compensar)</span>}
                       </div>
-                      <div>IRPF (modelo 130) к оплате: <strong>{formatAmount(taxDraft.total130, 'EUR')}</strong></div>
+                      <div>IRPF retenciones (modelo 111) к оплате: <strong>{formatAmount(taxDraft.total111, 'EUR')}</strong></div>
                       <div>Штраф-надбавка (recargo): <strong style={{ color: taxDraft.totalRecargo > 0 ? '#c0392b' : 'inherit' }}>{formatAmount(taxDraft.totalRecargo, 'EUR')}</strong></div>
                       <div>Пени (intereses de demora): <strong style={{ color: taxDraft.totalIntereses > 0 ? '#c0392b' : 'inherit' }}>{formatAmount(taxDraft.totalIntereses, 'EUR')}</strong></div>
                     </div>
@@ -8053,7 +8091,7 @@ ${bodyHtml}
                     </div>
                     {taxDraft.lateCount > 0 && (
                       <div style={{ fontSize: 12, color: '#7f8c8d', marginTop: 6 }}>
-                        Санкции посчитаны для добровольной подачи ДО требования налоговой; если придёт требование — штраф 50–150% от суммы налога.
+                        Санкции посчитаны для добровольной подачи ДО требования налоговой; если придёт требование — штраф 50–150% от суммы налога. Если дело дойдёт до providencia de apremio (modelo 049): recargo de apremio 20% (10% — при оплате в срок apremio, 5% — если долг погашен до уведомления).
                       </div>
                     )}
                   </div>
@@ -8066,7 +8104,7 @@ ${bodyHtml}
                       style={{ background: '#2980b9', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}
                       title="Перезагрузить выписку и пересчитать — делайте это прямо перед подачей">🔄 Финальный пересчёт из банка</button>
                   </div>
-                  <p style={{ fontSize: 12, color: '#95a5a6', margin: '10px 0 0' }}>Проверьте цифры перед подачей: доходы могут включать переводы между своими счетами (уберите их правкой поля «Доходы»), расходы без галки в расчёт не идут.</p>
+                  <p style={{ fontSize: 12, color: '#95a5a6', margin: '10px 0 0' }}>v61: пересчёт по официальным формам ISERA 2020, SL — Modelo 420 (cas. 01/03/25/26/27/40/41/43/45; базы НЕТТО = брутто/1,07) и Modelo 111 (cas. 02/03/08/09/28/30). Modelo 130 для SL не подаётся. Проверьте цифры: переводы между своими счетами уберите правкой cas.01, расходы без галки в вычет не идут.</p>
                 </div>
               </div>
             )}
@@ -8081,13 +8119,13 @@ ${bodyHtml}
                   onClick={() => setTaxFormPopup(null)}>
                   <div style={{ background: '#fff', borderRadius: 12, maxWidth: 640, width: '100%', maxHeight: '85vh', overflow: 'auto', padding: 20 }} onClick={e => e.stopPropagation()}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                      <h3 style={{ margin: 0 }}>{form === '420' ? '📄 Modelo 420 — IGIC' : '📄 Modelo 130 — IRPF'} · {x.key.replace('-', ' · ')}</h3>
+                      <h3 style={{ margin: 0 }}>{form === '420' ? '📄 Modelo 420 — IGIC (ATC)' : '📄 Modelo 111 — Retenciones IRPF (AEAT)'} · {x.key.replace('-', ' · ')}</h3>
                       <button onClick={() => setTaxFormPopup(null)} style={{ border: 'none', background: '#eee', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }}>✖</button>
                     </div>
                     <pre style={{ background: '#f8f9fa', border: '1px solid #e0e0e0', borderRadius: 8, padding: 12, fontSize: 13, whiteSpace: 'pre-wrap', margin: '0 0 12px' }}>{buildSingleTaxFormText(form, x, taxDraft)}</pre>
-                    {(form === '420' ? Math.max(0, x.result420) : x.result130) > 0 && (
+                    {(form === '420' ? Math.max(0, x.result420) : x.result111) > 0 && (
                       <div style={{ background: 'linear-gradient(180deg,#ffffff,#e4e4e8)', border: '2px solid #8e8e93', borderRadius: 10, padding: '8px 14px', marginBottom: 12, color: '#c0392b', fontWeight: 800, fontSize: 18 }}>
-                        💶 К ОПЛАТЕ: {formatAmount(form === '420' ? Math.max(0, x.result420) : x.result130, 'EUR')}
+                        💶 К ОПЛАТЕ: {formatAmount(form === '420' ? Math.max(0, x.result420) : x.result111, 'EUR')}
                         {x.isLate && (x.recargo > 0 || x.intereses > 0) && <span style={{ fontSize: 13, fontWeight: 700 }}> + штраф {formatAmount(x.recargo, 'EUR')} + пени {formatAmount(x.intereses, 'EUR')}</span>}
                       </div>
                     )}
