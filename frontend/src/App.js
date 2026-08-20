@@ -6670,7 +6670,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v61.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v61.3 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7836,6 +7836,12 @@ ${bodyHtml}
         const [qFrom] = taxQuarterRange(qRangeKeys[0]);
         const [, qTo] = taxQuarterRange(qRangeKeys[1]);
         const qOut = bankMovements.filter(m => Number(m.amount) < 0 && m.operation_date && m.operation_date >= qFrom && m.operation_date <= qTo);
+        // v61.3: итоги диапазона — общий приход / общий расход / подтверждено фактурами
+        const qInc = bankMovements.filter(m => Number(m.amount) > 0 && m.operation_date && m.operation_date >= qFrom && m.operation_date <= qTo);
+        const sumAbs = (list) => list.reduce((a, m) => a + Math.abs(Number(m.amount) || 0), 0);
+        const qIncSum = sumAbs(qInc);
+        const qOutSum = sumAbs(qOut);
+        const qInvSum = sumAbs(qOut.filter(m => m.has_invoice || m.matched_receipt_id));
         // v60.1: локальный фильтр по контрагенту (клик по строке или поисковая строка)
         const qCpQ = qCpSearch.trim().toLowerCase();
         const qOutVis = qCpQ ? qOut.filter(m => String(m.counterparty || m.concept || '').toLowerCase().includes(qCpQ)) : qOut;
@@ -7960,6 +7966,11 @@ ${bodyHtml}
                 <h3 style={{ margin: 0 }}>💶 Платежи из банка за выбранный диапазон — отметьте, по каким есть фактура</h3>
                 <button onClick={loadBankMovements} style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #ccc', background: '#fff', cursor: 'pointer' }}>🔄 Обновить движения</button>
                 <span style={{ fontSize: 13, color: '#7f8c8d' }}>{qFrom} … {qTo} · исходящих: {qOut.length} · с фактурой: {qOut.filter(m => m.has_invoice || m.matched_receipt_id).length}</span>
+                <span style={{ fontSize: 13, whiteSpace: 'nowrap' }}>
+                  📥 приход: <b style={{ color: '#27ae60' }}>+{formatAmount(qIncSum, 'EUR')}</b>
+                  {' · '}📤 расход: <b style={{ color: '#c0392b' }}>−{formatAmount(qOutSum, 'EUR')}</b>
+                  {' · '}📄 подтверждено: <b style={{ color: '#1e8449' }}>{formatAmount(qInvSum, 'EUR')}</b>
+                </span>
                 <input value={qCpSearch} onChange={e => setQCpSearch(e.target.value)} placeholder="🔍 Фильтр по контрагенту… (или кликните по нему в строке)"
                   style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13, flex: '1 1 220px', maxWidth: 340 }} />
                 {qCpSearch && (
