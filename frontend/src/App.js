@@ -4620,6 +4620,7 @@ function App() {
   const [qAmtMin, setQAmtMin] = useState('');
   const [qAmtMax, setQAmtMax] = useState('');
   const [qCpSortAsc, setQCpSortAsc] = useState(true); // v64.3: А→Я (true) / Я→А (false)
+  const [qSelFilter, setQSelFilter] = useState('all'); // v65: фильтр по галке выбора: all | sel | unsel
   const pmSlotHas = (n, id) => (pmSlots[String(n)] || []).includes(String(id));
   const pmSlotToggle = (n, id, on) => savePmSlots(prev => {
     const cur = new Set(prev[String(n)] || []);
@@ -6729,7 +6730,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v64.4 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v65 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7909,7 +7910,7 @@ ${bodyHtml}
         // v64.2: контрагенты диапазона по алфавиту — для выпадающего фильтра
         const qCpList = [...new Set(qOut.map(m => String(m.counterparty || m.concept || '').trim()).filter(Boolean))]
           .sort((a, b) => qCpSortAsc ? a.localeCompare(b, 'es', { sensitivity: 'base' }) : b.localeCompare(a, 'es', { sensitivity: 'base' }));
-        const qOutVis = qOutSlot.filter(m => {
+        let qOutVis = qOutSlot.filter(m => {
           if (qCpQ && !String(m.counterparty || m.concept || '').toLowerCase().includes(qCpQ)) return false;
           if (qDateFilter.trim() && !String(m.operation_date || '').includes(qDateFilter.trim())) return false;
           const amt = Math.abs(Number(m.amount) || 0);
@@ -7917,6 +7918,10 @@ ${bodyHtml}
           if (!Number.isNaN(qAmtMaxN) && qAmtMax !== '' && amt > qAmtMaxN) return false;
           return true;
         });
+        // v65: фильтр по галке выбора (выбранные / не выбранные); при активном варианте — членство в нём
+        const qSelOf = (m) => pmSlotArm ? pmSlotHas(pmSlotArm, m.id) : !!pmSelected[String(m.id)];
+        if (qSelFilter === 'sel') qOutVis = qOutVis.filter(qSelOf);
+        else if (qSelFilter === 'unsel') qOutVis = qOutVis.filter(m => !qSelOf(m));
         // v64.4: сортировка строк по контрагенту А→Я / Я→А (кнопка у фильтра); внутри контрагента — по дате, новые сверху
         qOutVis.sort((a, b) => {
           const ca = String(a.counterparty || a.concept || '').toLowerCase();
@@ -8096,7 +8101,16 @@ ${bodyHtml}
                     return (
                       <button key={`arm${n}`}
                         title={armed ? `Вариант ${n} активен: галки строк добавляются в него автоматически (накопительно). Нажмите ещё раз — выключить` : `Включить вариант ${n}: дальше галки строк будут накапливаться в нём автоматически`}
-                        onClick={() => setPmSlotArm(armed ? null : n)}
+                        onClick={() => {
+                          if (armed) { setPmSlotArm(null); return; }
+                          // v65 FIX: при включении варианта — текущие выбранные галки сразу попадают в него (накопительно)
+                          const ids = Object.keys(pmSelected).filter(id => pmSelected[id]);
+                          if (ids.length) {
+                            savePmSlots(prev => { const cur = new Set(prev[String(n)] || []); ids.forEach(id => cur.add(String(id))); return { ...prev, [String(n)]: [...cur] }; });
+                            setPmSelected({});
+                          }
+                          setPmSlotArm(n);
+                        }}
                         style={{ padding: '3px 10px', borderRadius: 999, border: `1px solid ${armed ? '#1e8449' : '#1d4ed8'}`, background: armed ? '#1e8449' : '#fff', color: armed ? '#fff' : '#1d4ed8', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>
                         {armed ? `✔ ${n} (${(pmSlots[String(n)] || []).length})` : `${n} (${(pmSlots[String(n)] || []).length})`}
                       </button>
@@ -8160,6 +8174,13 @@ ${bodyHtml}
                   <button onClick={() => { setQDateFilter(''); setQAmtMin(''); setQAmtMax(''); }} title="Сбросить фильтры по дате и сумме"
                     style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>✕ дата/сумма · показано {qOutVis.length}</button>
                 )}
+                {[['all', '○ все'], ['sel', '☑ выбранные'], ['unsel', '☐ не выбранные']].map(([k, lbl]) => (
+                  <button key={`sf_${k}`} onClick={() => setQSelFilter(k)}
+                    title={k === 'all' ? 'Показать все платежи' : k === 'sel' ? 'Показать только выбранные галкой' : 'Показать только НЕ выбранные галкой'}
+                    style={{ padding: '5px 10px', borderRadius: 999, border: `1px solid ${qSelFilter === k ? '#1d4ed8' : '#d0d0d5'}`, background: qSelFilter === k ? '#1d4ed8' : '#fff', color: qSelFilter === k ? '#fff' : '#1d1d1f', fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    {lbl}
+                  </button>
+                ))}
                 <button onClick={() => setQCpSortAsc(v => !v)}
                   title={qCpSortAsc ? 'Сортировка таблицы и списка по контрагенту А→Я — нажмите для обратного порядка (Я→А)' : 'Сортировка таблицы и списка по контрагенту Я→А — нажмите для прямого порядка (А→Я)'}
                   style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}>
