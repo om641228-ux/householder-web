@@ -4615,6 +4615,10 @@ function App() {
   const [pmSlots, setPmSlots] = useState(() => { try { return JSON.parse(localStorage.getItem('bankPaySlots') || '{}'); } catch { return {}; } });
   const [pmSlotView, setPmSlotView] = useState(null); // номер активного слота (1..5) или null
   const [pmSlotArm, setPmSlotArm] = useState(null); // v64: «заряженный» вариант — галки строк добавляются в него автоматически (накопительно)
+  // v64.1: фильтры по каждому столбцу (дата / контрагент=qCpSearch / сумма от-до)
+  const [qDateFilter, setQDateFilter] = useState('');
+  const [qAmtMin, setQAmtMin] = useState('');
+  const [qAmtMax, setQAmtMax] = useState('');
   const pmSlotHas = (n, id) => (pmSlots[String(n)] || []).includes(String(id));
   const pmSlotToggle = (n, id, on) => savePmSlots(prev => {
     const cur = new Set(prev[String(n)] || []);
@@ -6724,7 +6728,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v64 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v64.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7899,7 +7903,16 @@ ${bodyHtml}
         // v63: активный слот (1..5) → показываем только запомненные в нём платежи
         const pmSlotIds = pmSlotView ? new Set(pmSlots[String(pmSlotView)] || []) : null;
         const qOutSlot = pmSlotIds ? qOut.filter(m => pmSlotIds.has(String(m.id))) : qOut;
-        const qOutVis = qCpQ ? qOutSlot.filter(m => String(m.counterparty || m.concept || '').toLowerCase().includes(qCpQ)) : qOutSlot;
+        // v64.1: фильтры по столбцам — контрагент (qCpSearch), дата (подстрока, напр. 2025-06), сумма от/до
+        const qAmtMinN = parseFloat(qAmtMin), qAmtMaxN = parseFloat(qAmtMax);
+        const qOutVis = qOutSlot.filter(m => {
+          if (qCpQ && !String(m.counterparty || m.concept || '').toLowerCase().includes(qCpQ)) return false;
+          if (qDateFilter.trim() && !String(m.operation_date || '').includes(qDateFilter.trim())) return false;
+          const amt = Math.abs(Number(m.amount) || 0);
+          if (!Number.isNaN(qAmtMinN) && qAmtMin !== '' && amt < qAmtMinN) return false;
+          if (!Number.isNaN(qAmtMaxN) && qAmtMax !== '' && amt > qAmtMaxN) return false;
+          return true;
+        });
         const pmSelIds = Object.keys(pmSelected).filter(id => pmSelected[id]);
         const pmSelSum = qOut.filter(m => pmSelected[String(m.id)]).reduce((a, m) => a + Math.abs(Number(m.amount) || 0), 0);
         const fmtD = d => d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
@@ -8057,7 +8070,14 @@ ${bodyHtml}
                 {/* v63: слоты запоминания выбора 1..5 — сохранить текущие галки / вывести сохранённые */}
                 <div style={{ flex: '1 1 100%', display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', background: '#eef4ff', border: '1px solid #c7d7f5', borderRadius: 8, padding: '6px 10px' }}>
                   <span style={{ fontSize: 12, fontWeight: 800, color: '#1d4ed8' }}>💾 Варианты:</span>
-                  <span style={{ fontSize: 12, color: '#555' }}>выбрано: <b>{pmSelIds.length}</b>{pmSelIds.length > 0 && <> на <b>{formatAmount(pmSelSum, 'EUR')}</b></>}</span>
+                  {pmSlotArm ? (
+                    <span style={{ fontSize: 12, color: '#1e8449', fontWeight: 700 }}>✔ вариант {pmSlotArm} активен: <b>{(pmSlots[String(pmSlotArm)] || []).length}</b> платежей
+                      {' на '}<b>{formatAmount(bankMovements.filter(m => Number(m.amount) < 0 && (pmSlots[String(pmSlotArm)] || []).includes(String(m.id))).reduce((a, m) => a + Math.abs(Number(m.amount) || 0), 0), 'EUR')}</b>
+                      <span style={{ fontWeight: 400, color: '#6e6e73' }}> · галки строк пишутся в него автоматически</span>
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: 12, color: '#555' }}>выбрано: <b>{pmSelIds.length}</b>{pmSelIds.length > 0 && <> на <b>{formatAmount(pmSelSum, 'EUR')}</b></>}</span>
+                  )}
                   <span style={{ fontSize: 12, color: '#6e6e73' }}>добавлять в →</span>
                   {[1, 2, 3, 4, 5].map(n => {
                     const armed = pmSlotArm === n;
@@ -8114,6 +8134,20 @@ ${bodyHtml}
                     }} title={pmSlotArm ? `Убрать показанные из варианта ${pmSlotArm}` : 'Снять выделение со всех платежей'}
                     style={{ padding: '3px 10px', borderRadius: 999, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>☐ {pmSlotArm ? `убрать из варианта ${pmSlotArm}` : 'снять выделение'}</button>
                 </div>
+                {/* v64.1: фильтры по каждому столбцу */}
+                <input value={qDateFilter} onChange={e => setQDateFilter(e.target.value)} placeholder="📅 дата (напр. 2025-06)"
+                  title="Фильтр по столбцу «дата» — подстрока: 2025, 2025-06, -06-15…"
+                  style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13, width: 150 }} />
+                <input value={qAmtMin} onChange={e => setQAmtMin(e.target.value)} placeholder="€ от" type="number" step="0.01"
+                  title="Фильтр по столбцу «сумма» — минимум"
+                  style={{ padding: '5px 8px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13, width: 80 }} />
+                <input value={qAmtMax} onChange={e => setQAmtMax(e.target.value)} placeholder="€ до" type="number" step="0.01"
+                  title="Фильтр по столбцу «сумма» — максимум"
+                  style={{ padding: '5px 8px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13, width: 80 }} />
+                {(qDateFilter || qAmtMin !== '' || qAmtMax !== '') && (
+                  <button onClick={() => { setQDateFilter(''); setQAmtMin(''); setQAmtMax(''); }} title="Сбросить фильтры по дате и сумме"
+                    style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>✕ дата/сумма · показано {qOutVis.length}</button>
+                )}
                 <input value={qCpSearch} onChange={e => setQCpSearch(e.target.value)} placeholder="🔍 Фильтр по контрагенту… (или кликните по нему в строке)"
                   style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13, flex: '1 1 220px', maxWidth: 340 }} />
                 {qCpSearch && (
