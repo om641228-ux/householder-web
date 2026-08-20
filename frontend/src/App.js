@@ -1182,6 +1182,7 @@ function DocsTab({ user, token }) {
     .filter(f => !(hiddenFolders[docSection] || []).includes(f));
   return (
     <div style={{ padding: '12px 15px', maxWidth: 1100, margin: '0 auto' }}>
+      <style>{'.docs-active-tab{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important}.docs-active-tab:hover{background:#0066d6 !important}'}</style>
       <h2 style={{ margin: '4px 0 4px', fontSize: 20 }}>📁 Документы</h2>
       <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 12 }}>
         Файлы любых типов — фото, видео, аудио, текст, PDF и другие. Общее хранилище команды (сервер). Видео больше ~50 МБ сжимаются на сервере автоматически.
@@ -1193,8 +1194,8 @@ function DocsTab({ user, token }) {
       )}
       <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
         {DOC_SECTIONS.map(sec => (
-          <button key={sec.key} onClick={() => { setDocSection(sec.key); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
-            style={{ padding: '8px 18px', borderRadius: 980, border: docSection === sec.key ? 'none' : '1px solid #c7c7cc', background: docSection === sec.key ? '#0071e3' : '#fff', color: docSection === sec.key ? '#fff' : '#1d1d1f', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
+          <button key={sec.key} className={docSection === sec.key ? 'docs-active-tab' : ''} onClick={() => { setDocSection(sec.key); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
+            style={{ padding: '8px 18px', borderRadius: 980, border: docSection === sec.key ? '2px solid #0071e3' : '1px solid #c7c7cc', background: docSection === sec.key ? '#0071e3' : '#fff', color: docSection === sec.key ? '#fff' : '#1d1d1f', fontWeight: 700, fontSize: 14, cursor: 'pointer', boxShadow: docSection === sec.key ? '0 2px 8px rgba(0,113,227,0.35)' : 'none' }}>
             {sec.title} ({(sections[sec.key] || []).length})
           </button>
         ))}
@@ -1207,8 +1208,8 @@ function DocsTab({ user, token }) {
             const on = curDocFolder === fn;
             return (
               <span key={fn} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
-                <button onClick={() => { setDocFolder(prev => ({ ...prev, [docSection]: fn })); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
-                  style={{ padding: '5px 14px', borderRadius: 980, border: on ? 'none' : '1px solid #d0d0d5', background: on ? '#0071e3' : '#fff', color: on ? '#fff' : '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer' }}>
+                <button className={on ? 'docs-active-tab' : ''} onClick={() => { setDocFolder(prev => ({ ...prev, [docSection]: fn })); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
+                  style={{ padding: '5px 14px', borderRadius: 980, border: on ? '2px solid #0071e3' : '1px solid #d0d0d5', background: on ? '#0071e3' : '#fff', color: on ? '#fff' : '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer', boxShadow: on ? '0 2px 8px rgba(0,113,227,0.35)' : 'none' }}>
                   {fn === 'All' ? '🗂 Все' : `📁 ${fn}`} ({cnt})
                 </button>
                 {fn !== 'All' && (
@@ -5759,6 +5760,7 @@ ${bodyHtml}
               Выбор модели
             </button>
           </div>
+          <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}'}</style>
           <nav className="tabs-inline">
             <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>Загрузка</button>
             <button className={activeTab === 'list' ? 'active' : ''} onClick={() => {setActiveTab('list'); loadReceipts();}}>
@@ -6522,7 +6524,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v59.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v59.3 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
