@@ -6728,7 +6728,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v64.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v64.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7905,6 +7905,9 @@ ${bodyHtml}
         const qOutSlot = pmSlotIds ? qOut.filter(m => pmSlotIds.has(String(m.id))) : qOut;
         // v64.1: фильтры по столбцам — контрагент (qCpSearch), дата (подстрока, напр. 2025-06), сумма от/до
         const qAmtMinN = parseFloat(qAmtMin), qAmtMaxN = parseFloat(qAmtMax);
+        // v64.2: контрагенты диапазона по алфавиту — для выпадающего фильтра
+        const qCpList = [...new Set(qOut.map(m => String(m.counterparty || m.concept || '').trim()).filter(Boolean))]
+          .sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
         const qOutVis = qOutSlot.filter(m => {
           if (qCpQ && !String(m.counterparty || m.concept || '').toLowerCase().includes(qCpQ)) return false;
           if (qDateFilter.trim() && !String(m.operation_date || '').includes(qDateFilter.trim())) return false;
@@ -8148,6 +8151,12 @@ ${bodyHtml}
                   <button onClick={() => { setQDateFilter(''); setQAmtMin(''); setQAmtMax(''); }} title="Сбросить фильтры по дате и сумме"
                     style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>✕ дата/сумма · показано {qOutVis.length}</button>
                 )}
+                <select value={qCpList.includes(qCpSearch) ? qCpSearch : ''} onChange={e => setQCpSearch(e.target.value)}
+                  title="Фильтр по контрагенту — список по алфавиту"
+                  style={{ padding: '5px 8px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13, maxWidth: 220, cursor: 'pointer', background: '#fff' }}>
+                  <option value="">⇅ контрагент А–Я ({qCpList.length})</option>
+                  {qCpList.map(cp => <option key={cp} value={cp}>{cp}</option>)}
+                </select>
                 <input value={qCpSearch} onChange={e => setQCpSearch(e.target.value)} placeholder="🔍 Фильтр по контрагенту… (или кликните по нему в строке)"
                   style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13, flex: '1 1 220px', maxWidth: 340 }} />
                 {qCpSearch && (
