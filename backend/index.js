@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v57.9-2026-08-19', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v59-2026-08-19', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -4134,29 +4134,72 @@ app.post('/api/docs/recognize-text', requireAuth, crmMediaMulter('pages'), async
   }
 });
 
-// PATCH /api/docs/:category/files (v57.7) — body {url, ocr:{pages:[{original,russian}]}}:
-// прикрепляет распознанный текст к файлу (показывается карточкой без повторного OCR)
+// PATCH /api/docs/:category/files — операции над файлами/папками раздела:
+//  {url, ocr:{pages}, docDate?}        — распознанный текст (v57.7) + дата документа (v59)
+//  {url, docDate}                      — только дата документа (v59)
+//  {urls:[…], folder:'X'}              — переместить файлы в подпапку (v59, мультивыбор; '' — убрать из папки)
+//  {folderRename:{from,to}}            — переименовать подпапку (v59)
+//  {folderDelete:'X'}                  — удалить подпапку: файлы остаются, поле folder снимается (v59)
 app.patch('/api/docs/:category/files', requireAuth, async (req, res) => {
   try {
     const cat = String(req.params.category || '');
     if (!DOC_CATEGORIES.includes(cat)) return res.status(400).json({ error: 'Неизвестный раздел (нужен home, auto или personal)' });
-    const url = req.body && req.body.url;
-    const ocr = req.body && req.body.ocr;
-    if (!url) return res.status(400).json({ error: 'Передайте url файла' });
-    if (!ocr || !Array.isArray(ocr.pages) || !ocr.pages.length) return res.status(400).json({ error: 'Передайте ocr {pages:[…]}' });
+    const body = req.body || {};
     const { data: row, error: e0 } = await supabaseAdmin.from('doc_sections').select('*').eq('category', cat).maybeSingle();
     if (e0) throw e0;
     const cur = row && Array.isArray(row.attachments) ? row.attachments : [];
-    let found = false;
-    const next = cur.map(it => {
-      const iu = typeof it === 'string' ? it : it && it.url;
-      if (iu === url && it && typeof it === 'object') {
+    const objIt = (it) => (it && typeof it === 'object');
+    let next = cur;
+
+    if (Array.isArray(body.urls) && typeof body.folder === 'string') {
+      // v59: перемещение группы файлов в подпапку
+      const set = new Set(body.urls.slice(0, 500).map(String));
+      const folder = body.folder.trim().slice(0, 40);
+      let cnt = 0;
+      next = cur.map(it => {
+        if (!objIt(it) || !set.has(it.url)) return it;
+        cnt++;
+        const o = { ...it };
+        if (folder) o.folder = folder; else delete o.folder;
+        return o;
+      });
+      if (!cnt) return res.status(404).json({ error: 'Файлы не найдены в разделе' });
+    } else if (body.folderRename && typeof body.folderRename.from === 'string') {
+      // v59: переименование подпапки
+      const from = body.folderRename.from.trim().slice(0, 40);
+      const to = String(body.folderRename.to || '').trim().slice(0, 40);
+      if (!from || !to) return res.status(400).json({ error: 'Передайте folderRename {from, to}' });
+      if (from === to) return res.status(400).json({ error: 'Имя не изменилось' });
+      next = cur.map(it => (objIt(it) && it.folder === from) ? { ...it, folder: to } : it);
+    } else if (typeof body.folderDelete === 'string') {
+      // v59: удаление подпапки (файлы НЕ удаляются — попадают в «Все»)
+      const f = body.folderDelete.trim().slice(0, 40);
+      next = cur.map(it => {
+        if (!objIt(it) || it.folder !== f) return it;
+        const o = { ...it };
+        delete o.folder;
+        return o;
+      });
+    } else {
+      // v57.7/v59: OCR-текст и/или дата документа
+      const url = body.url;
+      const ocr = body.ocr;
+      const docDate = (typeof body.docDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.docDate)) ? body.docDate : null;
+      if (!url) return res.status(400).json({ error: 'Передайте url файла' });
+      const hasOcr = ocr && Array.isArray(ocr.pages) && ocr.pages.length;
+      if (!hasOcr && !docDate) return res.status(400).json({ error: 'Передайте ocr {pages:[…]} и/или docDate (YYYY-MM-DD)' });
+      let found = false;
+      next = cur.map(it => {
+        const iu = typeof it === 'string' ? it : it && it.url;
+        if (iu !== url || !objIt(it)) return it;
         found = true;
-        return { ...it, ocr: { pages: ocr.pages.slice(0, 60), ts: Date.now() } };
-      }
-      return it;
-    });
-    if (!found) return res.status(404).json({ error: 'Файл не найден в разделе' });
+        const o = { ...it };
+        if (hasOcr) o.ocr = { pages: ocr.pages.slice(0, 60), ts: Date.now() };
+        if (docDate) o.docDate = docDate;
+        return o;
+      });
+      if (!found) return res.status(404).json({ error: 'Файл не найден в разделе' });
+    }
     const { data, error } = await supabaseAdmin.from('doc_sections')
       .upsert({ category: cat, attachments: next, updated_at: new Date().toISOString() }, { onConflict: 'category' })
       .select().single();
@@ -4172,12 +4215,14 @@ app.delete('/api/docs/:category/files', requireAuth, async (req, res) => {
   try {
     const cat = String(req.params.category || '');
     if (!DOC_CATEGORIES.includes(cat)) return res.status(400).json({ error: 'Неизвестный раздел (нужен home, auto или personal)' });
-    const url = req.body && req.body.url;
-    if (!url) return res.status(400).json({ error: 'Передайте url файла' });
+    const b = req.body || {};
+    const urls = Array.isArray(b.urls) ? b.urls.map(String).slice(0, 500) : (b.url ? [String(b.url)] : []); // v59: urls[] — мультивыбор
+    if (!urls.length) return res.status(400).json({ error: 'Передайте url файла (или массив urls)' });
+    const delSet = new Set(urls);
     const { data: row, error: e0 } = await supabaseAdmin.from('doc_sections').select('*').eq('category', cat).maybeSingle();
     if (e0) throw e0;
     const cur = row && Array.isArray(row.attachments) ? row.attachments : [];
-    const next = cur.filter(u => (typeof u === 'string' ? u : u && u.url) !== url);
+    const next = cur.filter(u => !delSet.has(typeof u === 'string' ? u : u && u.url));
     if (next.length === cur.length) return res.status(404).json({ error: 'Файл не найден в разделе' });
     const { data, error } = await supabaseAdmin.from('doc_sections')
       .upsert({ category: cat, attachments: next, updated_at: new Date().toISOString() }, { onConflict: 'category' })

@@ -811,6 +811,19 @@ const DOC_FOLDERS = {
 const docKindOf = (f) => /^image\//.test(f.type || '') ? 'photo' : /^video\//.test(f.type || '') ? 'video' : /^audio\//.test(f.type || '') ? 'audio'
   : (f.type === 'application/pdf' || /^text\//.test(f.type || '') || /\.(pdf|txt|md|csv)$/i.test(f.name || '')) ? 'doc' : 'file';
 const docMediaOf = (entry) => (entry && typeof entry === 'object') ? entry : { url: entry, kind: 'photo', name: '' };
+// v59: вытащить дату документа из распознанного текста (dd.mm.yyyy / dd/mm/yyyy / yyyy-mm-dd)
+function parseDocDateFromText(text) {
+  if (!text) return null;
+  let m = /\b(\d{1,2})[./](\d{1,2})[./](20\d{2})\b/.exec(text);
+  if (m) {
+    const d = +m[1], mo = +m[2], y = +m[3];
+    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  }
+  m = /\b(20\d{2})-(\d{2})-(\d{2})\b/.exec(text);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  return null;
+}
+const fmtDocDate = (iso) => iso ? iso.split('-').reverse().join('.') : '';
 
 function DocsTab({ user, token }) {
   const [sections, setSections] = useState({ home: [], auto: [], personal: [] });
@@ -823,6 +836,10 @@ function DocsTab({ user, token }) {
   const [docsHover, setDocsHover] = useState(null); // v57.8: увеличенный предпросмотр при наведении {url, kind, name}
   const [docsExcel, setDocsExcel] = useState(null); // v58: {loading} | {name, sheets:[{name, html}], idx}
   const [docPath, setDocPath] = useState({ home: '', auto: '', personal: '' }); // v57.9: текущий путь внутри загруженной структуры папок
+  const [docsSort, setDocsSort] = useState({ by: 'docDate', dir: 'desc' }); // v59: сортировка по дате документа / дате распознавания
+  const [docsSelectMode, setDocsSelectMode] = useState(false); // v59: режим мультивыбора файлов
+  const [docsSelected, setDocsSelected] = useState({}); // v59: {url: true}
+  const [hiddenFolders, setHiddenFolders] = useState({ home: [], auto: [], personal: [] }); // v59: локально скрытые пустые папки
   const [docsZoom, setDocsZoom] = useState(false);
   const [docsVErr, setDocsVErr] = useState(false);
 
@@ -880,8 +897,9 @@ function DocsTab({ user, token }) {
         try {
           const mm = docMediaOf(it);
           const pages = await recognizeFilePages(mm);
-          await saveDocOcr(cat, mm.url, pages);
-          console.log(`Документы: текст «${mm.name}» распознан и сохранён (${pages.length} стр.)`);
+          const docDate = parseDocDateFromText((pages.pages || []).map(p => p.original || '').join('\n')); // v59
+          await saveDocOcr(cat, mm.url, pages.pages || pages, docDate);
+          console.log(`Документы: текст «${mm.name}» распознан и сохранён (${(pages.pages || pages).length} стр.${docDate ? ', дата ' + docDate : ''})`);
         } catch (e2) { console.error('Авто-распознавание пропущено:', e2.message); }
       }
     } catch (e) {
@@ -913,10 +931,12 @@ function DocsTab({ user, token }) {
   };
 
   // v57.7: сохранить распознанный текст в карточке файла (PATCH на сервер + локальный state)
-  const saveDocOcr = async (cat, url, pages) => {
+  const saveDocOcr = async (cat, url, pages, docDate) => {
+    const body = { url, ocr: { pages } };
+    if (docDate) body.docDate = docDate; // v59: дата документа из текста
     const r = await fetch(`${API_URL}/api/docs/${cat}/files?token=${token}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, ocr: { pages } })
+      body: JSON.stringify(body)
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
@@ -935,6 +955,60 @@ function DocsTab({ user, token }) {
     } catch (e) { alert('Не удалилось на сервере: ' + e.message); }
   };
 
+  // v59: операции с папками — переименовать / удалить (файлы остаются в разделе)
+  const docsFolderOp = async (body, okMsg) => {
+    const r = await fetch(`${API_URL}/api/docs/${docSection}/files?token=${token}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    setSections(prev => ({ ...prev, [docSection]: Array.isArray(j.attachments) ? j.attachments : prev[docSection] }));
+    if (okMsg) console.log(okMsg);
+  };
+  const renameDocsFolder = async (fn) => {
+    const to = (window.prompt(`Переименовать папку «${fn}» в:`, fn) || '').trim();
+    if (!to || to === fn) return;
+    try {
+      await docsFolderOp({ folderRename: { from: fn, to } });
+      if (curDocFolder === fn) setDocFolder(prev => ({ ...prev, [docSection]: to }));
+      if ((DOC_FOLDERS[docSection] || []).includes(fn)) {
+        setHiddenFolders(prev => ({ ...prev, [docSection]: [...new Set([...(prev[docSection] || []), fn])] }));
+      }
+    } catch (e) { alert('Не переименовалось: ' + e.message); }
+  };
+  const deleteDocsFolder = async (fn) => {
+    const cnt = allItems.filter(it => docMediaOf(it).folder === fn).length;
+    if (!window.confirm(`Удалить папку «${fn}»?\n${cnt ? `Файлы (${cnt}) НЕ удалятся — попадут в «Все».` : 'Папка пустая.'}`)) return;
+    try {
+      await docsFolderOp({ folderDelete: fn });
+      if (curDocFolder === fn) setDocFolder(prev => ({ ...prev, [docSection]: 'All' }));
+      setHiddenFolders(prev => ({ ...prev, [docSection]: [...new Set([...(prev[docSection] || []), fn])] }));
+    } catch (e) { alert('Не удалилось: ' + e.message); }
+  };
+
+  // v59: мультивыбор — переместить в папку / удалить группой
+  const selectedUrls = Object.keys(docsSelected).filter(u => docsSelected[u]);
+  const moveSelectedDocs = async (folder) => {
+    if (!selectedUrls.length) return;
+    try {
+      await docsFolderOp({ urls: selectedUrls, folder });
+      setDocsSelected({}); setDocsSelectMode(false);
+    } catch (e) { alert('Не переместилось: ' + e.message); }
+  };
+  const removeSelectedDocs = async () => {
+    if (!selectedUrls.length) return;
+    if (!window.confirm(`Удалить выбранные файлы (${selectedUrls.length})?`)) return;
+    try {
+      const r = await fetch(`${API_URL}/api/docs/${docSection}/files?token=${token}`, {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ urls: selectedUrls })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setSections(prev => ({ ...prev, [docSection]: Array.isArray(j.attachments) ? j.attachments : prev[docSection] }));
+      setDocsSelected({}); setDocsSelectMode(false);
+    } catch (e) { alert('Не удалилось: ' + e.message); }
+  };
+
   // v57.6/v57.7: карточка «фото + текст по страницам». Если текст уже распознан и сохранён —
   // открываем мгновенно; иначе распознаём и СОХРАНЯЕМ в карточке файла (оригинал + перевод)
   const recognizeDoc = async (entry) => {
@@ -950,7 +1024,8 @@ function DocsTab({ user, token }) {
     setDocsOcr({ loading: true, name: m.name || 'Файл' });
     try {
       const { pages, pageUrls } = await recognizeFilePages(m);
-      await saveDocOcr(docSection, m.url, pages); // сохранение в карточке (v57.7)
+      const docDate = parseDocDateFromText((pages || []).map(p => p.original || '').join('\n')); // v59
+      await saveDocOcr(docSection, m.url, pages, docDate); // сохранение в карточке (v57.7 + дата документа v59)
       setDocsOcr({
         loading: false, saved: true, name: m.name || 'Файл', url: m.url, kind: m.kind,
         pageUrls, pages, idx: 0, tab: 'ru'
@@ -988,10 +1063,15 @@ function DocsTab({ user, token }) {
     const box = { width: 72, height: 72, borderRadius: 8, border: '1px solid #e0e0e0', background: '#f5f5f7', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontSize: 26, overflow: 'hidden' };
     const isPdfD = m.kind === 'doc' && (/\.pdf(\?|$)/i.test(m.name || '') || /\.pdf(\?|$)/i.test(m.url || ''));
     const canPreview = m.kind === 'photo' || m.kind === 'video' || isPdfD;
+    const isSel = !!docsSelected[m.url]; // v59
     return (
-      <span key={key} style={{ position: 'relative', display: 'inline-block' }} title={m.name || 'Файл'}
-        onMouseEnter={() => { if (canPreview) setDocsHover({ url: m.url, kind: isPdfD ? 'pdf' : m.kind, name: m.name || '' }); }}
+      <span key={key} style={{ position: 'relative', display: 'inline-block', borderRadius: 8, outline: isSel ? '3px solid #0071e3' : 'none', outlineOffset: 1 }} title={m.name || 'Файл'}
+        onClickCapture={docsSelectMode ? (e) => { e.preventDefault(); e.stopPropagation(); setDocsSelected(prev => ({ ...prev, [m.url]: !prev[m.url] })); } : undefined}
+        onMouseEnter={() => { if (canPreview && !docsSelectMode) setDocsHover({ url: m.url, kind: isPdfD ? 'pdf' : m.kind, name: m.name || '' }); }}
         onMouseLeave={() => setDocsHover(prev => (prev && prev.url === m.url ? null : prev))}>
+        {docsSelectMode && (
+          <span style={{ position: 'absolute', top: -6, left: -6, width: 20, height: 20, borderRadius: '50%', background: isSel ? '#0071e3' : '#fff', border: '2px solid #0071e3', color: '#fff', fontSize: 12, lineHeight: '17px', textAlign: 'center', zIndex: 2 }}>{isSel ? '✓' : ''}</span>
+        )}
         {m.kind === 'video' ? (
           <span onClick={openViewer} style={{ ...box, display: 'inline-block', position: 'relative', background: '#1d1d1f' }}>
             <video src={`${m.url}#t=0.1`} muted playsInline preload="auto" style={{ width: 72, height: 72, objectFit: 'cover', display: 'block', pointerEvents: 'none' }} />
@@ -1018,6 +1098,9 @@ function DocsTab({ user, token }) {
           <span title="Текст распознан и сохранён — откроется карточка" style={{ position: 'absolute', bottom: -6, right: -6, width: 16, height: 16, borderRadius: '50%', background: '#34c759', color: '#fff', fontSize: 9, lineHeight: '16px', textAlign: 'center', zIndex: 1 }}>Т</span>
         ) : null}
         {m.name ? <div style={{ position: 'absolute', bottom: -16, left: 0, right: 0, fontSize: 9, color: '#8e8e93', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 72 }}>{m.name}</div> : null}
+        <div style={{ position: 'absolute', bottom: -27, left: 0, right: 0, fontSize: 9, color: m.docDate ? '#1d1d1f' : '#c7c7cc', textAlign: 'center', whiteSpace: 'nowrap', maxWidth: 80, overflow: 'hidden' }}>
+          {m.docDate ? `📅 ${fmtDocDate(m.docDate)}` : (m.ts ? `⇪ ${fmtDocDate(new Date(m.ts).toISOString().slice(0, 10))}` : '')}
+        </div>
       </span>
     );
   };
@@ -1044,6 +1127,22 @@ function DocsTab({ user, token }) {
     seenSub[first]++;
     return false;
   });
+  // v59: сортировка — по дате документа или по дате распознавания/загрузки
+  const sortKeyOf = (it) => {
+    const mm = docMediaOf(it);
+    if (docsSort.by === 'docDate') return mm.docDate || '';
+    return String(mm.ts || (mm.ocr && mm.ocr.ts) || '');
+  };
+  const itemsSorted = [...items].sort((a, b) => {
+    const ka = sortKeyOf(a), kb = sortKeyOf(b);
+    if (ka === kb) return 0;
+    const cmp = ka < kb ? -1 : 1;
+    return docsSort.dir === 'asc' ? cmp : -cmp;
+  });
+  // v59: папки = предустановленные + реально используемые, минус локально скрытые
+  const usedFolders = [...new Set(allItems.map(it => docMediaOf(it).folder).filter(Boolean))];
+  const dynFolders = [...new Set([...(DOC_FOLDERS[docSection] || []), ...usedFolders])]
+    .filter(f => !(hiddenFolders[docSection] || []).includes(f));
   return (
     <div style={{ padding: '12px 15px', maxWidth: 1100, margin: '0 auto' }}>
       <h2 style={{ margin: '4px 0 4px', fontSize: 20 }}>📁 Документы</h2>
@@ -1057,27 +1156,74 @@ function DocsTab({ user, token }) {
       )}
       <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
         {DOC_SECTIONS.map(sec => (
-          <button key={sec.key} onClick={() => setDocSection(sec.key)}
+          <button key={sec.key} onClick={() => { setDocSection(sec.key); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
             style={{ padding: '8px 18px', borderRadius: 980, border: docSection === sec.key ? 'none' : '1px solid #c7c7cc', background: docSection === sec.key ? '#0071e3' : '#fff', color: docSection === sec.key ? '#fff' : '#1d1d1f', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
             {sec.title} ({(sections[sec.key] || []).length})
           </button>
         ))}
       </div>
-      {(DOC_FOLDERS[docSection] || []).length > 0 && (
+      {dynFolders.length > 0 && (
         <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
           <span style={{ fontSize: 12, color: '#8e8e93', marginRight: 2 }}>Папка:</span>
-          {['All', ...DOC_FOLDERS[docSection]].map(fn => {
+          {['All', ...dynFolders].map(fn => {
             const cnt = fn === 'All' ? allItems.length : allItems.filter(it => docMediaOf(it).folder === fn).length;
             const on = curDocFolder === fn;
             return (
-              <button key={fn} onClick={() => setDocFolder(prev => ({ ...prev, [docSection]: fn }))}
-                style={{ padding: '5px 14px', borderRadius: 980, border: on ? 'none' : '1px solid #d0d0d5', background: on ? '#5856d6' : '#fff', color: on ? '#fff' : '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer' }}>
-                {fn === 'All' ? '🗂 Все' : `📁 ${fn}`} ({cnt})
-              </button>
+              <span key={fn} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+                <button onClick={() => { setDocFolder(prev => ({ ...prev, [docSection]: fn })); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
+                  style={{ padding: '5px 14px', borderRadius: 980, border: on ? 'none' : '1px solid #d0d0d5', background: on ? '#0071e3' : '#fff', color: on ? '#fff' : '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer' }}>
+                  {fn === 'All' ? '🗂 Все' : `📁 ${fn}`} ({cnt})
+                </button>
+                {fn !== 'All' && (
+                  <React.Fragment>
+                    <button onClick={() => renameDocsFolder(fn)} title={`Переименовать папку «${fn}»`}
+                      style={{ marginLeft: 2, width: 20, height: 20, borderRadius: '50%', border: '1px solid #d0d0d5', background: '#fff', color: '#1d1d1f', fontSize: 10, cursor: 'pointer', padding: 0, lineHeight: '18px' }}>✎</button>
+                    <button onClick={() => deleteDocsFolder(fn)} title={`Удалить папку «${fn}» (файлы останутся)`}
+                      style={{ marginLeft: 2, width: 20, height: 20, borderRadius: '50%', border: '1px solid #d0d0d5', background: '#fff', color: '#e74c3c', fontSize: 10, cursor: 'pointer', padding: 0, lineHeight: '18px' }}>✕</button>
+                  </React.Fragment>
+                )}
+              </span>
             );
           })}
         </div>
       )}
+      {/* v59: панель сортировки и мультивыбора */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+        <span style={{ fontSize: 12, color: '#8e8e93' }}>Сортировка:</span>
+        <select value={docsSort.by} onChange={e => setDocsSort(prev => ({ ...prev, by: e.target.value }))}
+          style={{ padding: '4px 8px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 12, background: '#fff' }}>
+          <option value="docDate">по дате документа</option>
+          <option value="ts">по дате распознавания/загрузки</option>
+        </select>
+        <button onClick={() => setDocsSort(prev => ({ ...prev, dir: prev.dir === 'asc' ? 'desc' : 'asc' }))} title="Сменить направление"
+          style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>
+          {docsSort.dir === 'asc' ? '↑ сначала старые' : '↓ сначала новые'}
+        </button>
+        <span style={{ flex: 1 }} />
+        {!docsSelectMode ? (
+          <button onClick={() => setDocsSelectMode(true)}
+            style={{ padding: '5px 14px', borderRadius: 980, border: '1px solid #d0d0d5', background: '#fff', color: '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer' }}>☑ Выбрать</button>
+        ) : (
+          <React.Fragment>
+            <span style={{ fontSize: 12, color: '#1d1d1f', fontWeight: 600 }}>Выбрано: {selectedUrls.length}</span>
+            <select defaultValue="" onChange={e => {
+              const v = e.target.value;
+              e.target.value = '';
+              if (v === '__new') { const nm = (window.prompt('Имя новой папки:') || '').trim().slice(0, 40); if (nm) moveSelectedDocs(nm); }
+              else if (v !== '') moveSelectedDocs(v);
+            }} style={{ padding: '4px 8px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 12, background: '#fff' }}>
+              <option value="" disabled>Переместить в…</option>
+              {dynFolders.map(fn => <option key={fn} value={fn}>📁 {fn}</option>)}
+              <option value="__new">＋ Новая папка…</option>
+              <option value="">🚫 Без папки</option>
+            </select>
+            <button onClick={removeSelectedDocs} disabled={!selectedUrls.length}
+              style={{ padding: '5px 14px', borderRadius: 980, border: 'none', background: selectedUrls.length ? '#e74c3c' : '#f0f0f2', color: selectedUrls.length ? '#fff' : '#8e8e93', fontWeight: 600, fontSize: 12.5, cursor: selectedUrls.length ? 'pointer' : 'not-allowed' }}>🗑 Удалить</button>
+            <button onClick={() => { setDocsSelectMode(false); setDocsSelected({}); }}
+              style={{ padding: '5px 14px', borderRadius: 980, border: '1px solid #d0d0d5', background: '#fff', color: '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer' }}>Отмена</button>
+          </React.Fragment>
+        )}
+      </div>
       <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #e3e6ea', padding: 14 }}>
         {(curDocPath || subFolders.length > 0) && (
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
@@ -1098,8 +1244,8 @@ function DocsTab({ user, token }) {
             ))}
           </div>
         )}
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-start', paddingBottom: 18 }}>
-          {items.map((entry, i) => docThumb(entry, i))}
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-start', paddingBottom: 32 }}>
+          {itemsSorted.map((entry, i) => docThumb(entry, i))}
           <label title="Добавить файлы любого типа" style={{ width: 72, height: 72, borderRadius: 8, border: '1px dashed #c7c7cc', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: docsBusy ? 'wait' : 'pointer', fontSize: 24, color: '#8e8e93', background: '#f5f5f7' }}>
             {docsBusy ? '⏳' : '📎'}
             <input type="file" accept="*/*" multiple disabled={docsBusy} style={{ display: 'none' }} onChange={(e) => { addDocs(docSection, e.target.files); e.target.value = ''; }} />
@@ -6333,7 +6479,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-19 · v58 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-19 · v59 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
