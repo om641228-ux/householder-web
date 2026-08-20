@@ -4734,8 +4734,20 @@ function App() {
       const outInv = outAll.filter(m => m.has_invoice || m.matched_receipt_id);
       const sum = (arr) => arr.reduce((s, m) => s + Math.abs(Number(m.amount) || 0), 0);
       const linked = outInv.map(m => receipts.find(r => String(r.id) === String(m.matched_receipt_id))).filter(Boolean);
-      const igicFromR = linked.reduce((s, r) => s + (parseFloat(r.tax_amount) || 0), 0);
-      return { ingresos: sum(inc), gastos: sum(outInv), igicSop: igicFromR > 0 ? igicFromR : sum(outInv) * 0.07 / 1.07, incCount: inc.length, outCount: outAll.length, outInvCount: outInv.length };
+      // v61.2: cuota/base deducible — по КАЖДОЙ привязанной фактуре: её tax_amount, а если не распознан —
+      // IGIC выделяем из суммы фактуры (×7/107). Раньше фактуры без tax_amount в вычет НЕ попадали вообще.
+      let igicFromR = 0, baseDedNet = 0;
+      linked.forEach(r => {
+        const tot = Math.abs(parseFloat(r.total_amount) || 0);
+        let tax = Math.abs(parseFloat(r.tax_amount) || 0);
+        if (!(tax > 0) && tot > 0) tax = tot * 7 / 107;
+        igicFromR += tax;
+        baseDedNet += Math.max(0, tot - tax);
+      });
+      const outInvSum = sum(outInv);
+      // Фолбэк без привязанных фактур (только галка): весь платёж как брутто с 7%
+      if (!linked.length) { igicFromR = outInvSum * 7 / 107; baseDedNet = outInvSum / 1.07; }
+      return { ingresos: sum(inc), gastos: outInvSum, igicSop: igicFromR, baseDedNet, incCount: inc.length, outCount: outAll.length, outInvCount: outInv.length };
     };
     const inQ = mvts.filter(m => m.operation_date && m.operation_date >= from && m.operation_date <= to);
     const cum = mvts.filter(m => m.operation_date && m.operation_date >= yFrom && m.operation_date <= to);
@@ -4769,7 +4781,7 @@ function App() {
       const baseDev = overrides[`ingresos_${y}_${q}`] != null ? overrides[`ingresos_${y}_${q}`] : r2(ingresosBrutos / (1 + rate / 100)); // casilla 01 (нетто)
       const cuotaDev = r2(baseDev * rate / 100);                                  // casilla 03 = casilla 25
       const gastosBrutos = r2(quarter.gastos);
-      const baseDed = overrides[`gastos_${y}_${q}`] != null ? overrides[`gastos_${y}_${q}`] : r2(gastosBrutos / (1 + rate / 100)); // casilla 26 (нетто)
+      const baseDed = overrides[`gastos_${y}_${q}`] != null ? overrides[`gastos_${y}_${q}`] : r2(quarter.baseDedNet != null ? quarter.baseDedNet : gastosBrutos / (1 + rate / 100)); // casilla 26 (нетто, по фактурам — v61.2)
       const cuotaDed = overrides[`igicSop_${y}_${q}`] != null ? overrides[`igicSop_${y}_${q}`] : r2(quarter.igicSop); // casilla 27 = casilla 40 (из tax_amount фактур)
       const dif41 = r2(cuotaDev - cuotaDed);                                      // casilla 41
       const comp43 = r2(igicCompCarry);                                           // casilla 43
@@ -6658,7 +6670,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v61.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v61.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8030,6 +8042,11 @@ ${bodyHtml}
                           ))}
                         </div>
                         <div style={{ fontSize: 13, lineHeight: 1.5 }}>
+                          {x.y === 2025 && x.q === 1 && (
+                            <div style={{ fontSize: 11, color: '#1e8449', background: '#eafaf1', borderRadius: 6, padding: '4px 8px', marginBottom: 4 }}>
+                              ✅ Эталон (поданная 1T-2025, justificante 4205586417155): cas.01 = 134 557,29 · cas.25 = 9 419,01 · cas.40 = 1 199,43 · cas.45 = 8 219,58 — сверьте с цифрами выше
+                            </div>
+                          )}
                           <div role="button" onClick={() => setTaxFormPopup({ form: '420', q: x })} title="Открыть заполненную modelo 420"
                             style={{ cursor: 'pointer', borderRadius: 6, padding: '3px 6px', marginLeft: -6 }}
                             onMouseEnter={e => e.currentTarget.style.background = '#ececf0'} onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
