@@ -4582,6 +4582,18 @@ function App() {
     } finally { setLoading(false); }
   };
 
+  // v60.1: клик по контрагенту в строке → фильтр выписки (чип «Контрагент» + поисковая строка)
+  const applyBankCpFilter = (cp) => {
+    const v = String(cp || '').trim();
+    if (!v) return;
+    setBankCpFilter([v]);
+    setBankSearch(v);
+    setBankDateFrom(''); setBankDateTo('');
+    setBankListCollapsed(false);
+    setActiveTab('analysis');
+  };
+  const [qCpSearch, setQCpSearch] = useState(''); // v60.1: фильтр по контрагенту в блоке «Платежи из банка» (Налоги)
+
   // Открыть карточку документа по id (из списка движений в «Анализе»)
   const openReceiptById = (id) => {
     const r = receipts.find(x => String(x.id) === String(id));
@@ -6574,7 +6586,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v60 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v60.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7543,8 +7555,9 @@ ${bodyHtml}
                   return (
                     <div key={m.id} id={bmAnchor ? `bm-${bmYm}` : undefined} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: '#fff', borderRadius: 8, padding: '8px 10px', marginBottom: 6, boxShadow: '0 1px 3px rgba(0,0,0,0.06)', scrollMarginTop: 100 }}>
                       <span style={{ flex: '0 0 86px', color: '#7f8c8d', fontSize: 13 }}>{formatDate(m.operation_date)}</span>
-                      <span style={{ flex: '1 1 240px', minWidth: 0, overflowWrap: 'break-word', fontSize: 14 }}>
-                        <b>{m.concept || '—'}</b>
+                      <span onClick={() => applyBankCpFilter(m.counterparty || m.concept)} title="Клик — отфильтровать выписку по этому контрагенту (чип + поисковая строка)"
+                        style={{ flex: '1 1 240px', minWidth: 0, overflowWrap: 'break-word', fontSize: 14, cursor: 'pointer' }}>
+                        <b style={{ color: '#1d1d1f', borderBottom: '1px dashed #c7c7cc' }}>{m.concept || '—'}</b>
                         {m.prefix && <span style={{ marginLeft: 6, fontSize: 11, color: '#95a5a6' }}>{m.prefix}</span>}
                         {freqOfMovement(m) && (
                           <span title={`Повторяющийся платёж: ${freqOfMovement(m).text}`} style={{ marginLeft: 6, fontSize: 10, color: '#5856d6', background: '#efeffd', borderRadius: 8, padding: '1px 7px', fontWeight: 700, whiteSpace: 'nowrap' }}>
@@ -7739,6 +7752,9 @@ ${bodyHtml}
         const [qFrom] = taxQuarterRange(qRangeKeys[0]);
         const [, qTo] = taxQuarterRange(qRangeKeys[1]);
         const qOut = bankMovements.filter(m => Number(m.amount) < 0 && m.operation_date && m.operation_date >= qFrom && m.operation_date <= qTo);
+        // v60.1: локальный фильтр по контрагенту (клик по строке или поисковая строка)
+        const qCpQ = qCpSearch.trim().toLowerCase();
+        const qOutVis = qCpQ ? qOut.filter(m => String(m.counterparty || m.concept || '').toLowerCase().includes(qCpQ)) : qOut;
         const fmtD = d => d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
         // Опции кварталов покрывают все годы, за которые есть движения в банке (плюс текущий ±1)
         const mvtYears = bankMovements.map(m => m.operation_date ? +m.operation_date.slice(0, 4) : year).filter(y => y > 2000 && y < 2100);
@@ -7860,9 +7876,15 @@ ${bodyHtml}
                 <h3 style={{ margin: 0 }}>💶 Платежи из банка за выбранный диапазон — отметьте, по каким есть фактура</h3>
                 <button onClick={loadBankMovements} style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #ccc', background: '#fff', cursor: 'pointer' }}>🔄 Обновить движения</button>
                 <span style={{ fontSize: 13, color: '#7f8c8d' }}>{qFrom} … {qTo} · исходящих: {qOut.length} · с фактурой: {qOut.filter(m => m.has_invoice || m.matched_receipt_id).length}</span>
+                <input value={qCpSearch} onChange={e => setQCpSearch(e.target.value)} placeholder="🔍 Фильтр по контрагенту… (или кликните по нему в строке)"
+                  style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13, flex: '1 1 220px', maxWidth: 340 }} />
+                {qCpSearch && (
+                  <button onClick={() => setQCpSearch('')} title="Сбросить фильтр"
+                    style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>✕ {qCpSearch} · показано {qOutVis.length} из {qOut.length}</button>
+                )}
               </div>
               {qOut.length === 0 && <p style={{ color: '#7f8c8d', fontSize: 13 }}>Нет исходящих платежей за этот диапазон — загрузите выписку банка на вкладке «Загрузка» (🏦 Выписка банка).</p>}
-              {qOut.map(m => {
+              {qOutVis.map(m => {
                 const linked = m.matched_receipt_id ? receipts.find(r => String(r.id) === String(m.matched_receipt_id)) : null;
                 return (
                   <div key={m.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f0f0f0', fontSize: 13, flexWrap: 'wrap' }}>
@@ -7872,7 +7894,10 @@ ${bodyHtml}
                       📄 есть фактура
                     </label>
                     <span style={{ minWidth: 92, color: '#7f8c8d' }}>{m.operation_date}</span>
-                    <span style={{ flex: '1 1 220px' }}>{m.counterparty || m.concept || '—'}</span>
+                    <span onClick={() => setQCpSearch(String(m.counterparty || m.concept || '').trim())}
+                      onDoubleClick={() => applyBankCpFilter(m.counterparty || m.concept)}
+                      title="Клик — фильтр по контрагенту в этом списке · двойной клик — открыть в выписке (📊 Анализ) с фильтром"
+                      style={{ flex: '1 1 220px', cursor: 'pointer', color: '#0071e3', borderBottom: '1px dashed #0071e3' }}>{m.counterparty || m.concept || '—'}</span>
                     <span style={{ minWidth: 100, textAlign: 'right', fontWeight: 700, color: '#c0392b' }}>{formatAmount(Math.abs(Number(m.amount)), 'EUR')}</span>
                     {linked
                       ? <button onClick={() => openReceiptById(linked.id)} style={{ fontSize: 12, border: '1px solid #27ae60', color: '#1e8449', background: '#eafaf1', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>🔗 {(linked.store_name || 'фактура')} · {formatAmount(linked.total_amount, linked.currency || 'EUR')}</button>
