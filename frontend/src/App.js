@@ -839,7 +839,23 @@ function DocsTab({ user, token }) {
   const [docsSort, setDocsSort] = useState({ by: 'docDate', dir: 'desc' }); // v59: сортировка по дате документа / дате распознавания
   const [docsSelectMode, setDocsSelectMode] = useState(false); // v59: режим мультивыбора файлов
   const [docsSelected, setDocsSelected] = useState({}); // v59: {url: true}
-  const [hiddenFolders, setHiddenFolders] = useState({ home: [], auto: [], personal: [] }); // v59: локально скрытые пустые папки
+  // v59.1: реестр папок в localStorage — переименованные/новые папки не исчезают, даже если пустые
+  const [hiddenFolders, setHiddenFoldersRaw] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('docsHiddenFolders') || '{}'); } catch (e) { return {}; }
+  });
+  const [customFolders, setCustomFoldersRaw] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('docsCustomFolders') || '{}'); } catch (e) { return {}; }
+  });
+  const setHiddenFolders = (up) => setHiddenFoldersRaw(prev => {
+    const next = typeof up === 'function' ? up(prev) : up;
+    try { localStorage.setItem('docsHiddenFolders', JSON.stringify(next)); } catch (e) {}
+    return next;
+  });
+  const setCustomFolders = (up) => setCustomFoldersRaw(prev => {
+    const next = typeof up === 'function' ? up(prev) : up;
+    try { localStorage.setItem('docsCustomFolders', JSON.stringify(next)); } catch (e) {}
+    return next;
+  });
   const [docsZoom, setDocsZoom] = useState(false);
   const [docsVErr, setDocsVErr] = useState(false);
 
@@ -966,24 +982,34 @@ function DocsTab({ user, token }) {
     if (okMsg) console.log(okMsg);
   };
   const renameDocsFolder = async (fn) => {
-    const to = (window.prompt(`Переименовать папку «${fn}» в:`, fn) || '').trim();
+    const to = (window.prompt(`Переименовать папку «${fn}» в:`, fn) || '').trim().slice(0, 40);
     if (!to || to === fn) return;
     try {
       await docsFolderOp({ folderRename: { from: fn, to } });
-      if (curDocFolder === fn) setDocFolder(prev => ({ ...prev, [docSection]: to }));
-      if ((DOC_FOLDERS[docSection] || []).includes(fn)) {
-        setHiddenFolders(prev => ({ ...prev, [docSection]: [...new Set([...(prev[docSection] || []), fn])] }));
-      }
-    } catch (e) { alert('Не переименовалось: ' + e.message); }
+    } catch (e) {
+      // v59.1: на сервере могло не быть файлов с такой папкой — пустая папка тоже переименовывается (локальный реестр)
+      if (!/не найден|404/i.test(e.message)) { alert('Не переименовалось: ' + e.message); return; }
+    }
+    if (curDocFolder === fn) setDocFolder(prev => ({ ...prev, [docSection]: to }));
+    setCustomFolders(prev => {
+      const list = (prev[docSection] || []).filter(f => f !== fn && f !== to);
+      return { ...prev, [docSection]: [...list, to] };
+    });
+    if ((DOC_FOLDERS[docSection] || []).includes(fn)) {
+      setHiddenFolders(prev => ({ ...prev, [docSection]: [...new Set([...(prev[docSection] || []), fn])] }));
+    }
   };
   const deleteDocsFolder = async (fn) => {
     const cnt = allItems.filter(it => docMediaOf(it).folder === fn).length;
     if (!window.confirm(`Удалить папку «${fn}»?\n${cnt ? `Файлы (${cnt}) НЕ удалятся — попадут в «Все».` : 'Папка пустая.'}`)) return;
     try {
       await docsFolderOp({ folderDelete: fn });
-      if (curDocFolder === fn) setDocFolder(prev => ({ ...prev, [docSection]: 'All' }));
-      setHiddenFolders(prev => ({ ...prev, [docSection]: [...new Set([...(prev[docSection] || []), fn])] }));
-    } catch (e) { alert('Не удалилось: ' + e.message); }
+    } catch (e) {
+      if (!/не найден|404/i.test(e.message)) { alert('Не удалилось: ' + e.message); return; }
+    }
+    if (curDocFolder === fn) setDocFolder(prev => ({ ...prev, [docSection]: 'All' }));
+    setCustomFolders(prev => ({ ...prev, [docSection]: (prev[docSection] || []).filter(f => f !== fn) }));
+    setHiddenFolders(prev => ({ ...prev, [docSection]: [...new Set([...(prev[docSection] || []), fn])] }));
   };
 
   // v59: мультивыбор — переместить в папку / удалить группой
@@ -1141,7 +1167,7 @@ function DocsTab({ user, token }) {
   });
   // v59: папки = предустановленные + реально используемые, минус локально скрытые
   const usedFolders = [...new Set(allItems.map(it => docMediaOf(it).folder).filter(Boolean))];
-  const dynFolders = [...new Set([...(DOC_FOLDERS[docSection] || []), ...usedFolders])]
+  const dynFolders = [...new Set([...(DOC_FOLDERS[docSection] || []), ...(customFolders[docSection] || []), ...usedFolders])]
     .filter(f => !(hiddenFolders[docSection] || []).includes(f));
   return (
     <div style={{ padding: '12px 15px', maxWidth: 1100, margin: '0 auto' }}>
@@ -1209,7 +1235,13 @@ function DocsTab({ user, token }) {
             <select defaultValue="" onChange={e => {
               const v = e.target.value;
               e.target.value = '';
-              if (v === '__new') { const nm = (window.prompt('Имя новой папки:') || '').trim().slice(0, 40); if (nm) moveSelectedDocs(nm); }
+              if (v === '__new') {
+                const nm = (window.prompt('Имя новой папки:') || '').trim().slice(0, 40);
+                if (nm) {
+                  setCustomFolders(prev => ({ ...prev, [docSection]: [...new Set([...(prev[docSection] || []), nm])] }));
+                  moveSelectedDocs(nm);
+                }
+              }
               else if (v !== '') moveSelectedDocs(v);
             }} style={{ padding: '4px 8px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 12, background: '#fff' }}>
               <option value="" disabled>Переместить в…</option>
@@ -6479,7 +6511,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-19 · v59 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v59.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
