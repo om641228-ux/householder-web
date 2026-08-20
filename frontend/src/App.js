@@ -4610,6 +4610,11 @@ function App() {
     setActiveTab('analysis');
   };
   const [qCpSearch, setQCpSearch] = useState(''); // v60.1: фильтр по контрагенту в блоке «Платежи из банка» (Налоги)
+  // v63: слоты запоминания выбранных платежей (1..5) — сохранить выбор / вывести сохранённый (localStorage)
+  const [pmSelected, setPmSelected] = useState({}); // id → true (текущий выбор галками в строках)
+  const [pmSlots, setPmSlots] = useState(() => { try { return JSON.parse(localStorage.getItem('bankPaySlots') || '{}'); } catch { return {}; } });
+  const [pmSlotView, setPmSlotView] = useState(null); // номер активного слота (1..5) или null
+  const savePmSlots = (updater) => setPmSlots(prev => { const nx = typeof updater === 'function' ? updater(prev) : updater; try { localStorage.setItem('bankPaySlots', JSON.stringify(nx)); } catch { /* noop */ } return nx; });
 
   // Открыть карточку документа по id (из списка движений в «Анализе»)
   const openReceiptById = (id) => {
@@ -6705,7 +6710,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v62.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v63 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7877,7 +7882,12 @@ ${bodyHtml}
         );
         // v60.1: локальный фильтр по контрагенту (клик по строке или поисковая строка)
         const qCpQ = qCpSearch.trim().toLowerCase();
-        const qOutVis = qCpQ ? qOut.filter(m => String(m.counterparty || m.concept || '').toLowerCase().includes(qCpQ)) : qOut;
+        // v63: активный слот (1..5) → показываем только запомненные в нём платежи
+        const pmSlotIds = pmSlotView ? new Set(pmSlots[String(pmSlotView)] || []) : null;
+        const qOutSlot = pmSlotIds ? qOut.filter(m => pmSlotIds.has(String(m.id))) : qOut;
+        const qOutVis = qCpQ ? qOutSlot.filter(m => String(m.counterparty || m.concept || '').toLowerCase().includes(qCpQ)) : qOutSlot;
+        const pmSelIds = Object.keys(pmSelected).filter(id => pmSelected[id]);
+        const pmSelSum = qOut.filter(m => pmSelected[String(m.id)]).reduce((a, m) => a + Math.abs(Number(m.amount) || 0), 0);
         const fmtD = d => d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
         // Опции кварталов покрывают все годы, за которые есть движения в банке (плюс текущий ±1)
         const mvtYears = bankMovements.map(m => m.operation_date ? +m.operation_date.slice(0, 4) : year).filter(y => y > 2000 && y < 2100);
@@ -8030,6 +8040,43 @@ ${bodyHtml}
                   )}
                   <span style={{ fontSize: 14 }}>💰 К оплате за период: <b style={{ color: '#1d1d1f' }}>{formatAmount(qRangeTax.grandTotal, 'EUR')}</b></span>
                 </div>
+                {/* v63: слоты запоминания выбора 1..5 — сохранить текущие галки / вывести сохранённые */}
+                <div style={{ flex: '1 1 100%', display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', background: '#eef4ff', border: '1px solid #c7d7f5', borderRadius: 8, padding: '6px 10px' }}>
+                  <span style={{ fontSize: 12, fontWeight: 800, color: '#1d4ed8' }}>💾 Варианты:</span>
+                  <span style={{ fontSize: 12, color: '#555' }}>выбрано: <b>{pmSelIds.length}</b>{pmSelIds.length > 0 && <> на <b>{formatAmount(pmSelSum, 'EUR')}</b></>}</span>
+                  <span style={{ fontSize: 12, color: '#6e6e73' }}>сохранить в →</span>
+                  {[1, 2, 3, 4, 5].map(n => (
+                    <button key={`sv${n}`} disabled={!pmSelIds.length}
+                      title={pmSelIds.length ? `Запомнить выбранные ${pmSelIds.length} платежей в варианте ${n}` : 'Сначала отметьте платежи галкой ☑ в строках'}
+                      onClick={() => { savePmSlots(prev => ({ ...prev, [String(n)]: pmSelIds })); setPmSlotView(null); }}
+                      style={{ padding: '3px 10px', borderRadius: 999, border: '1px solid #1d4ed8', background: pmSelIds.length ? '#1d4ed8' : '#dbe4f5', color: pmSelIds.length ? '#fff' : '#8ea6cf', fontSize: 12, fontWeight: 800, cursor: pmSelIds.length ? 'pointer' : 'not-allowed' }}>
+                      →{n}{(pmSlots[String(n)] || []).length > 0 && <span style={{ fontWeight: 400 }}> ({(pmSlots[String(n)] || []).length})</span>}
+                    </button>
+                  ))}
+                  <span style={{ fontSize: 12, color: '#6e6e73', marginLeft: 8 }}>вывести из →</span>
+                  {[1, 2, 3, 4, 5].map(n => {
+                    const cnt = (pmSlots[String(n)] || []).length;
+                    const active = pmSlotView === n;
+                    return (
+                      <button key={`ld${n}`} disabled={!cnt}
+                        title={cnt ? `Показать сохранённые ${cnt} платежей варианта ${n}` : `Вариант ${n} пуст`}
+                        onClick={() => setPmSlotView(active ? null : n)}
+                        style={{ padding: '3px 10px', borderRadius: 999, border: '1px solid #7c3aed', background: active ? '#7c3aed' : '#fff', color: active ? '#fff' : cnt ? '#7c3aed' : '#c4b5e0', fontSize: 12, fontWeight: 800, cursor: cnt ? 'pointer' : 'not-allowed' }}>
+                        {n} ({cnt})
+                      </button>
+                    );
+                  })}
+                  {pmSlotView && (
+                    <button onClick={() => setPmSlotView(null)} title="Показать все платежи диапазона"
+                      style={{ padding: '3px 10px', borderRadius: 999, border: '1px solid #c0392b', background: '#fff', color: '#c0392b', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>
+                      ✕ вариант {pmSlotView}: показано {qOutSlot.length} — сбросить
+                    </button>
+                  )}
+                  {pmSelIds.length > 0 && (
+                    <button onClick={() => setPmSelected({})} title="Снять выбор"
+                      style={{ padding: '3px 10px', borderRadius: 999, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>☐ снять выбор</button>
+                  )}
+                </div>
                 <input value={qCpSearch} onChange={e => setQCpSearch(e.target.value)} placeholder="🔍 Фильтр по контрагенту… (или кликните по нему в строке)"
                   style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13, flex: '1 1 220px', maxWidth: 340 }} />
                 {qCpSearch && (
@@ -8046,7 +8093,11 @@ ${bodyHtml}
                 const linked = m.matched_receipt_id ? receipts.find(r => String(r.id) === String(m.matched_receipt_id)) : null;
                 const autoK = autoDeductKind(m); // v62.1: налоги/соцстрах/зарплаты — подтверждены автоматически
                 return (
-                  <div key={m.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f0f0f0', fontSize: 13, flexWrap: 'wrap', background: autoK ? '#f6fef9' : 'transparent', borderRadius: autoK ? 6 : 0 }}>
+                  <div key={m.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f0f0f0', fontSize: 13, flexWrap: 'wrap', background: pmSelected[String(m.id)] ? '#eef4ff' : autoK ? '#f6fef9' : 'transparent', borderRadius: (autoK || pmSelected[String(m.id)]) ? 6 : 0 }}>
+                    <input type="checkbox" checked={!!pmSelected[String(m.id)]}
+                      onChange={() => setPmSelected(prev => { const nx = { ...prev }; if (nx[String(m.id)]) delete nx[String(m.id)]; else nx[String(m.id)] = true; return nx; })}
+                      title="Выбрать платёж — затем «сохранить в → 1..5»"
+                      style={{ cursor: 'pointer', accentColor: '#1d4ed8' }} />
                     <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', minWidth: 150, fontWeight: 700, color: (m.has_invoice || autoK) ? '#1e8449' : '#95a5a6' }}
                       title={autoK ? `${autoK.label}: обязательный платёж — прямой вычет из прибыли, фактура не нужна (галка не требуется)` : 'Галка = по этому платежу есть фактура → платёж попадает в расходы modelo 420/IS'}>
                       <input type="checkbox" checked={!!m.has_invoice || !!autoK} onChange={() => toggleInvoiceFlag(m)} />
