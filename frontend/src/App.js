@@ -4776,9 +4776,16 @@ function App() {
         igicFromR += tax;
         baseDedNet += Math.max(0, tot - tax);
       });
+      // v63.2 FIX: подтверждённые платежи БЕЗ привязанной фактуры (галка «есть фактура» или авто-вычет)
+      // тоже идут в вычет ПО КАЖДОМУ платежу (IGIC 7/107, база /1.07) — раньше учитывались только когда
+      // привязанных фактур не было вообще, поэтому налоги НЕ пересчитывались при смене галок.
+      outInv.forEach(m => {
+        if (m.matched_receipt_id) return; // уже учтён через фактуру выше
+        const amt = Math.abs(Number(m.amount) || 0);
+        igicFromR += amt * 7 / 107;
+        baseDedNet += amt / 1.07;
+      });
       const outInvSum = sum(outInv);
-      // Фолбэк без привязанных фактур (только галка): весь платёж как брутто с 7%
-      if (!linked.length) { igicFromR = outInvSum * 7 / 107; baseDedNet = outInvSum / 1.07; }
       return { ingresos: sum(inc), gastos: outInvSum, igicSop: igicFromR, baseDedNet, incCount: inc.length, outCount: outAll.length, outInvCount: outInv.length };
     };
     const inQ = mvts.filter(m => m.operation_date && m.operation_date >= from && m.operation_date <= to);
@@ -6710,7 +6717,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v63.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v63.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
