@@ -6670,7 +6670,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v61.3 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v61.4 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7842,6 +7842,8 @@ ${bodyHtml}
         const qIncSum = sumAbs(qInc);
         const qOutSum = sumAbs(qOut);
         const qInvSum = sumAbs(qOut.filter(m => m.has_invoice || m.matched_receipt_id));
+        // v61.4: налоги за выбранный диапазон (IGIC 420 + IRPF 111) — тем же расчётом, что и автозаполнение форм
+        const qRangeTax = computeTaxRange(qRangeKeys[0], qRangeKeys[1]);
         // v60.1: локальный фильтр по контрагенту (клик по строке или поисковая строка)
         const qCpQ = qCpSearch.trim().toLowerCase();
         const qOutVis = qCpQ ? qOut.filter(m => String(m.counterparty || m.concept || '').toLowerCase().includes(qCpQ)) : qOut;
@@ -7971,6 +7973,21 @@ ${bodyHtml}
                   {' · '}📤 расход: <b style={{ color: '#c0392b' }}>−{formatAmount(qOutSum, 'EUR')}</b>
                   {' · '}📄 подтверждено: <b style={{ color: '#1e8449' }}>{formatAmount(qInvSum, 'EUR')}</b>
                 </span>
+                {/* v61.4: отдельная заметная плашка итогов + налоги за диапазон (всегда видна, не теряется в шапке) */}
+                <div style={{ flex: '1 1 100%', display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'baseline',
+                  background: '#f5f5f7', border: '1px solid #e0e0e0', borderRadius: 8, padding: '8px 12px', marginTop: 2 }}>
+                  <span style={{ fontSize: 13 }}>📥 приход: <b style={{ color: '#27ae60' }}>+{formatAmount(qIncSum, 'EUR')}</b></span>
+                  <span style={{ fontSize: 13 }}>📤 расход: <b style={{ color: '#c0392b' }}>−{formatAmount(qOutSum, 'EUR')}</b></span>
+                  <span style={{ fontSize: 13 }}>📄 подтверждено фактурами: <b style={{ color: '#1e8449' }}>{formatAmount(qInvSum, 'EUR')}</b></span>
+                  <span style={{ fontSize: 13 }}>🧾 IGIC (mod.420): <b style={{ color: '#8e44ad' }}>{formatAmount(Math.max(0, qRangeTax.total420), 'EUR')}</b>
+                    {qRangeTax.total420 < 0 && <span style={{ fontSize: 11, color: '#7f8c8d' }}> ({formatAmount(Math.abs(qRangeTax.total420), 'EUR')} к компенсации)</span>}
+                  </span>
+                  <span style={{ fontSize: 13 }}>🧾 IRPF (mod.111): <b style={{ color: '#8e44ad' }}>{formatAmount(qRangeTax.total111, 'EUR')}</b></span>
+                  {(qRangeTax.totalRecargo > 0 || qRangeTax.totalIntereses > 0) && (
+                    <span style={{ fontSize: 12, color: '#c0392b' }}>⚠ recargo {formatAmount(qRangeTax.totalRecargo, 'EUR')} · пени {formatAmount(qRangeTax.totalIntereses, 'EUR')}</span>
+                  )}
+                  <span style={{ fontSize: 14 }}>💰 К оплате за период: <b style={{ color: '#1d1d1f' }}>{formatAmount(qRangeTax.grandTotal, 'EUR')}</b></span>
+                </div>
                 <input value={qCpSearch} onChange={e => setQCpSearch(e.target.value)} placeholder="🔍 Фильтр по контрагенту… (или кликните по нему в строке)"
                   style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13, flex: '1 1 220px', maxWidth: 340 }} />
                 {qCpSearch && (
