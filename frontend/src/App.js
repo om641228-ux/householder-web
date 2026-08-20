@@ -1244,6 +1244,10 @@ function DocsTab({ user, token }) {
         ) : (
           <React.Fragment>
             <span style={{ fontSize: 12, color: '#1d1d1f', fontWeight: 600 }}>Выбрано: {selectedUrls.length}</span>
+            <button onClick={() => setDocsSelected(Object.fromEntries(itemsSorted.map(it => [docMediaOf(it).url, true])))} title="Выделить все файлы на экране"
+              style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>☑ Все</button>
+            <button onClick={() => setDocsSelected({})} title="Снять выделение"
+              style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>☐ Снять</button>
             <select defaultValue="" onChange={e => {
               const v = e.target.value;
               e.target.value = '';
@@ -4666,6 +4670,25 @@ function App() {
     }
   };
 
+  // v60.2: массово отметить/снять «есть фактура» для списка платежей (одним запросом)
+  const bulkInvoiceFlag = async (list, nv) => {
+    const ids = list.filter(m => !!m.has_invoice !== nv).map(m => m.id);
+    if (!ids.length) return;
+    if (!window.confirm(nv ? `Отметить «есть фактура» у ${ids.length} платежей?` : `Снять галку «есть фактура» у ${ids.length} платежей?`)) return;
+    setBankMovements(prev => prev.map(x => ids.includes(x.id) ? { ...x, has_invoice: nv } : x));
+    try {
+      const res = await fetch(`${API_URL}/api/bank-movement-invoice-flag?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ movement_ids: ids, has_invoice: nv })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    } catch (err) {
+      setBankMovements(prev => prev.map(x => ids.includes(x.id) ? { ...x, has_invoice: !nv } : x)); // откат
+      alert('Массовая отметка не сохранилась: ' + err.message);
+    }
+  };
+
   // Квартальные границы: '2026-2T' → [2026-04-01, 2026-06-30]
   const taxQuarterRange = (key) => {
     const [y, qs] = String(key).split('-');
@@ -6586,7 +6609,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v60.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v60.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7882,6 +7905,10 @@ ${bodyHtml}
                   <button onClick={() => setQCpSearch('')} title="Сбросить фильтр"
                     style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>✕ {qCpSearch} · показано {qOutVis.length} из {qOut.length}</button>
                 )}
+                <button onClick={() => bulkInvoiceFlag(qOutVis, true)} title={`Отметить «есть фактура» у всех показанных платежей (${qOutVis.length})`}
+                  style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #1e8449', background: '#eafaf1', color: '#1e8449', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>☑ Отметить все{qCpSearch ? ` (${qOutVis.length})` : ''}</button>
+                <button onClick={() => bulkInvoiceFlag(qOutVis, false)} title={`Снять галку у всех показанных платежей (${qOutVis.length})`}
+                  style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', color: '#1d1d1f', fontSize: 12, cursor: 'pointer' }}>☐ Снять все</button>
               </div>
               {qOut.length === 0 && <p style={{ color: '#7f8c8d', fontSize: 13 }}>Нет исходящих платежей за этот диапазон — загрузите выписку банка на вкладке «Загрузка» (🏦 Выписка банка).</p>}
               {qOutVis.map(m => {

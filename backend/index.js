@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v60-2026-08-20', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v60.2-2026-08-20', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -5008,8 +5008,17 @@ app.post('/api/unlink-bank-movement', requireAuth, async (req, res) => {
 // Требует supabase-migration-v21.sql (колонка bank_movements.has_invoice)
 app.post('/api/bank-movement-invoice-flag', requireAuth, async (req, res) => {
   try {
-    const { movement_id, has_invoice } = req.body || {};
-    if (!movement_id) return res.status(400).json({ error: 'Нужен movement_id' });
+    const { movement_id, movement_ids, has_invoice } = req.body || {};
+    // v60.2: массовая установка/снятие галки «есть фактура» (movement_ids[], до 2000)
+    if (Array.isArray(movement_ids) && movement_ids.length) {
+      const ids = movement_ids.slice(0, 2000);
+      const { error } = await supabaseAdmin.from('bank_movements')
+        .update({ has_invoice: !!has_invoice })
+        .in('id', ids);
+      if (error) throw error;
+      return res.json({ success: true, updated: ids.length });
+    }
+    if (!movement_id) return res.status(400).json({ error: 'Нужен movement_id (или массив movement_ids)' });
     const { error } = await supabaseAdmin.from('bank_movements')
       .update({ has_invoice: !!has_invoice })
       .eq('id', movement_id);
