@@ -810,7 +810,18 @@ const DOC_FOLDERS = {
 };
 const docKindOf = (f) => /^image\//.test(f.type || '') ? 'photo' : /^video\//.test(f.type || '') ? 'video' : /^audio\//.test(f.type || '') ? 'audio'
   : (f.type === 'application/pdf' || /^text\//.test(f.type || '') || /\.(pdf|txt|md|csv)$/i.test(f.name || '')) ? 'doc' : 'file';
-const docMediaOf = (entry) => (entry && typeof entry === 'object') ? entry : { url: entry, kind: 'photo', name: '' };
+// v59.2: страховка от кракозябры в именах на клиенте (латиница-маскировка UTF-8)
+const fixDocName = (name) => {
+  if (!name || typeof name !== 'string' || !/[ÐÑÃâ]/.test(name)) return name;
+  try {
+    const fixed = decodeURIComponent(escape(name));
+    return /[\u0400-\u04FF]/.test(fixed) ? fixed : name;
+  } catch (e) { return name; }
+};
+const docMediaOf = (entry) => {
+  const m = (entry && typeof entry === 'object') ? entry : { url: entry, kind: 'photo', name: '' };
+  return (m && m.name) ? { ...m, name: fixDocName(m.name) } : m;
+};
 // v59: вытащить дату документа из распознанного текста (dd.mm.yyyy / dd/mm/yyyy / yyyy-mm-dd)
 function parseDocDateFromText(text) {
   if (!text) return null;
@@ -6511,7 +6522,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v59.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v59.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

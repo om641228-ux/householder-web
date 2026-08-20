@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v59-2026-08-19', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v59.2-2026-08-20', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -4031,6 +4031,9 @@ function fixUtf8Name(name) {
   } catch (_) { return name; }
 }
 
+// v59.2: чиним кракозябру в именах для ЛЮБОГО ответа docs API (GET/POST/PATCH/DELETE)
+const fixDocsAttachments = (arr) => (Array.isArray(arr) ? arr : []).map(it => (it && typeof it === 'object' && it.name) ? { ...it, name: fixUtf8Name(it.name) } : it);
+
 // ========== ДОКУМЕНТЫ (v40): разделы home/auto/personal, файлы любых типов ==========
 const DOC_CATEGORIES = ['home', 'auto', 'personal'];
 const DOCS_MIGRATION_HINT = 'Если ошибка про отсутствие таблицы — выполни supabase-migration-v25-docs.sql в SQL Editor проекта householder (Supabase)';
@@ -4045,7 +4048,7 @@ app.get('/api/docs', requireAuth, async (req, res) => {
       if (!sections[r.category]) return;
       const arr = Array.isArray(r.attachments) ? r.attachments : [];
       // v57.5: старые записи с кракозяброй в name чиним на лету (без миграции данных)
-      sections[r.category] = arr.map(it => (it && typeof it === 'object' && it.name) ? { ...it, name: fixUtf8Name(it.name) } : it);
+      sections[r.category] = fixDocsAttachments(arr); // v59.2: общий хелпер
     });
     res.json({ sections });
   } catch (e) {
@@ -4093,7 +4096,7 @@ app.post('/api/docs/:category/files', requireAuth, crmMediaMulter('files'), asyn
       .upsert({ category: cat, attachments: [...cur, ...items], updated_at: new Date().toISOString() }, { onConflict: 'category' })
       .select().single();
     if (error) throw error;
-    res.json({ category: cat, attachments: Array.isArray(data.attachments) ? data.attachments : [] });
+    res.json({ category: cat, attachments: fixDocsAttachments(data.attachments) }); // v59.2: имена без кракозябры во всех ответах
   } catch (e) {
     res.status(500).json({ error: e.message, hint: DOCS_MIGRATION_HINT });
   }
@@ -4204,7 +4207,7 @@ app.patch('/api/docs/:category/files', requireAuth, async (req, res) => {
       .upsert({ category: cat, attachments: next, updated_at: new Date().toISOString() }, { onConflict: 'category' })
       .select().single();
     if (error) throw error;
-    res.json({ category: cat, attachments: Array.isArray(data.attachments) ? data.attachments : [] });
+    res.json({ category: cat, attachments: fixDocsAttachments(data.attachments) }); // v59.2: имена без кракозябры во всех ответах
   } catch (e) {
     res.status(500).json({ error: e.message, hint: DOCS_MIGRATION_HINT });
   }
@@ -4228,7 +4231,7 @@ app.delete('/api/docs/:category/files', requireAuth, async (req, res) => {
       .upsert({ category: cat, attachments: next, updated_at: new Date().toISOString() }, { onConflict: 'category' })
       .select().single();
     if (error) throw error;
-    res.json({ category: cat, attachments: Array.isArray(data.attachments) ? data.attachments : [] });
+    res.json({ category: cat, attachments: fixDocsAttachments(data.attachments) }); // v59.2: имена без кракозябры во всех ответах
   } catch (e) {
     res.status(500).json({ error: e.message, hint: DOCS_MIGRATION_HINT });
   }
