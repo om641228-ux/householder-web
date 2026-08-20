@@ -6710,7 +6710,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v63 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v63.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8072,10 +8072,13 @@ ${bodyHtml}
                       ✕ вариант {pmSlotView}: показано {qOutSlot.length} — сбросить
                     </button>
                   )}
-                  {pmSelIds.length > 0 && (
-                    <button onClick={() => setPmSelected({})} title="Снять выбор"
-                      style={{ padding: '3px 10px', borderRadius: 999, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>☐ снять выбор</button>
-                  )}
+                  <button onClick={() => setPmSelected(prev => { const nx = { ...prev }; qOutVis.forEach(m => { nx[String(m.id)] = true; }); return nx; })}
+                    title={`Выбрать все показанные платежи (${qOutVis.length}) — для сохранения в вариант 1..5`}
+                    style={{ padding: '3px 10px', borderRadius: 999, border: '1px solid #1d4ed8', background: '#fff', color: '#1d4ed8', fontSize: 12, fontWeight: 800, cursor: 'pointer' }}>
+                    ☑ выбрать все ({qOutVis.length})
+                  </button>
+                  <button onClick={() => setPmSelected({})} title="Снять выделение со всех платежей"
+                    style={{ padding: '3px 10px', borderRadius: 999, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>☐ снять выделение</button>
                 </div>
                 <input value={qCpSearch} onChange={e => setQCpSearch(e.target.value)} placeholder="🔍 Фильтр по контрагенту… (или кликните по нему в строке)"
                   style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13, flex: '1 1 220px', maxWidth: 340 }} />
