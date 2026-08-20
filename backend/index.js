@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v59.2-2026-08-20', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v60-2026-08-20', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -4802,11 +4802,9 @@ async function runBankMatching(ownerId, iban) {
   return { matched, candidates: movements.length };
 }
 
-// Импорт выписки .xlsx (Ruralvía): парсинг → upsert по (iban, entry_number) → автопривязка
-app.post('/api/import-bank-statement', requireAuth, upload.single('statement'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: 'Нет файла выписки (.xlsx)' });
-    const wb = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true });
+// v60: общий импорт ОДНОЙ выписки (buffer .xlsx Ruralvía) → {account, iban, totalInFile, imported, skipped, autoMatched, unmatchedPayments}
+async function importOneStatement(buffer, userId) {
+  const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
     const ws = wb.Sheets[wb.SheetNames[0]];
     const grid = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
 
@@ -4821,7 +4819,7 @@ app.post('/api/import-bank-statement', requireAuth, upload.single('statement'), 
     const hdrIdx = grid.findIndex(row => Array.isArray(row)
       && row.some(c => /fecha de la operaci/i.test(String(c || '')))
       && row.some(c => /importe/i.test(String(c || ''))));
-    if (hdrIdx < 0) return res.status(400).json({ error: 'Не найден заголовок таблицы («Fecha de la operación» / «Importe») — похоже, это не выписка формата Ruralvía' });
+    if (hdrIdx < 0) throw new Error('Не найден заголовок таблицы («Fecha de la operación» / «Importe») — похоже, это не выписка формата Ruralvía');
     const hdr = grid[hdrIdx].map(c => String(c || '').trim().toLowerCase());
     const col = (re) => hdr.findIndex(h => re.test(h));
     const cOp = col(/fecha de la operaci/), cVal = col(/fecha valor/), cTipo = col(/tipo/),
@@ -4838,7 +4836,7 @@ app.post('/api/import-bank-statement', requireAuth, upload.single('statement'), 
       if (!opDate || !isFinite(amount) || !tipo) continue;
       const { prefix, concept } = parseMovementConcept(tipo);
       rows.push({
-        owner_id: req.user?.id || null,
+        owner_id: userId || null,
         iban, account_name: accountName,
         operation_date: opDate,
         value_date: excelDateToIso(cVal >= 0 ? row[cVal] : null),
@@ -4850,7 +4848,7 @@ app.post('/api/import-bank-statement', requireAuth, upload.single('statement'), 
         import_batch: batchId
       });
     }
-    if (!rows.length) return res.status(400).json({ error: 'В файле не найдено ни одного движения' });
+    if (!rows.length) throw new Error('В файле не найдено ни одного движения');
 
     // ДОГРУЗКА: сравниваем с уже загруженными движениями этого счёта и вставляем ТОЛЬКО новые.
     // Ключ 1: (iban, entry_number = Nro. Apunte). Ключ 2 (если апунте нет): дата + сумма + concept.
@@ -4875,12 +4873,49 @@ app.post('/api/import-bank-statement', requireAuth, upload.single('statement'), 
       written += chunk.length;
     }
 
-    const matchRes = await runBankMatching(req.user?.id, iban);
+    const matchRes = await runBankMatching(userId, iban);
     console.log(`Выписка ${accountName || iban}: новых ${written}, пропущено дублей ${skipped}, автопривязка ${matchRes.matched}/${matchRes.candidates}`);
-    res.json({
-      success: true, imported: written, skipped, totalInFile: rows.length, account: accountName, iban,
+    return {
+      imported: written, skipped, totalInFile: rows.length, account: accountName, iban,
       autoMatched: matchRes.matched, unmatchedPayments: matchRes.candidates - matchRes.matched
-    });
+    };
+}
+
+// Импорт ОДНОЙ выписки .xlsx (Ruralvía): парсинг → догрузка без дублей → автопривязка
+app.post('/api/import-bank-statement', requireAuth, upload.single('statement'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Нет файла выписки (.xlsx)' });
+    const r = await importOneStatement(req.file.buffer, req.user?.id);
+    res.json({ success: true, ...r });
+  } catch (e) {
+    res.status(500).json({ error: withDbSchemaHint(e.message) });
+  }
+});
+
+// v60: Импорт НЕСКОЛЬКИХ выписок разом (поле statements, до 30 файлов) —
+// каждый файл сравнивается с базой и с уже обработанными файлами пачки (дубликаты пропускаются).
+// Ответ: { success, totals:{files, imported, skipped, autoMatched}, files:[{name, account, iban, totalInFile, imported, skipped, autoMatched} | {name, error}] }
+app.post('/api/import-bank-statements', requireAuth, upload.array('statements', 30), async (req, res) => {
+  try {
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ error: 'Нет файлов: передайте поле statements (multipart/form-data)' });
+    const results = [];
+    const totals = { files: 0, imported: 0, skipped: 0, autoMatched: 0 };
+    for (const f of files) {
+      const name = fixUtf8Name(f.originalname || 'statement.xlsx');
+      try {
+        const r = await importOneStatement(f.buffer, req.user?.id); // последовательно: догрузка видит предыдущие файлы пачки
+        results.push({ name, ...r });
+        totals.files++;
+        totals.imported += r.imported;
+        totals.skipped += r.skipped;
+        totals.autoMatched += r.autoMatched;
+      } catch (e) {
+        console.error(`Выписка «${name}»:`, e.message);
+        results.push({ name, error: e.message });
+      }
+    }
+    res.json({ success: true, totals, files: results });
   } catch (e) {
     res.status(500).json({ error: withDbSchemaHint(e.message) });
   }

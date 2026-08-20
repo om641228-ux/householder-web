@@ -4537,20 +4537,44 @@ function App() {
     } catch (e) { alert('Не сохранилось в календарь: ' + e.message); }
   };
 
-  // Импорт выписки банка (.xlsx Ruralvía) → автопривязка фактур к платежам
+  // v60: Импорт выписок банка (.xlsx Ruralvía) — можно СРАЗУ НЕСКОЛЬКО файлов.
+  // Каждая выписка сравнивается с базой и с остальными файлами пачки: дубликаты пропускаются,
+  // отчёт по каждому файлу (новые/дубли/автопривязка) показывается панелью под кнопками.
+  const [bankImportReport, setBankImportReport] = useState(null); // {totals, files:[…]}
   const handleStatementSelect = async (e) => {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files || []);
     e.target.value = '';
-    if (!file) return;
+    if (!files.length) return;
     setLoading(true);
+    setBankImportReport(null);
     try {
       const formData = new FormData();
-      formData.append('statement', file);
-      const res = await fetch(`${API_URL}/api/import-bank-statement?token=${token}`, { method: 'POST', body: formData });
+      files.forEach(f => formData.append('statements', f));
+      const res = await fetch(`${API_URL}/api/import-bank-statements?token=${token}`, { method: 'POST', body: formData });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      const skipLine = data.skipped ? `\n⏭ Пропущено уже загруженных: ${data.skipped}` : '';
-      alert(`🏦 Выписка обработана (${data.account || data.iban || 'счёт'})\n\n📥 Новых движений: ${data.imported}${skipLine}\n✅ Привязано автоматически: ${data.autoMatched}\n⚪ Платежей без пары: ${data.unmatchedPayments}\n\nОткройте вкладку «📊 Анализ» — там все движения и привязки.`);
+      if (!res.ok) {
+        // fallback: старый сервер без multi-endpoint — грузим по одному через старый маршрут
+        if (res.status === 404 && files.length) {
+          const results = [];
+          for (const f of files) {
+            try {
+              const fd1 = new FormData();
+              fd1.append('statement', f);
+              const r1 = await fetch(`${API_URL}/api/import-bank-statement?token=${token}`, { method: 'POST', body: fd1 });
+              const d1 = await r1.json().catch(() => ({}));
+              if (!r1.ok) throw new Error(d1.error || `HTTP ${r1.status}`);
+              results.push({ name: f.name, ...d1 });
+            } catch (e1) { results.push({ name: f.name, error: e1.message }); }
+          }
+          const ok = results.filter(r => !r.error);
+          setBankImportReport({
+            totals: { files: ok.length, imported: ok.reduce((a, r) => a + (r.imported || 0), 0), skipped: ok.reduce((a, r) => a + (r.skipped || 0), 0), autoMatched: ok.reduce((a, r) => a + (r.autoMatched || 0), 0) },
+            files: results
+          });
+        } else throw new Error(data.error || `HTTP ${res.status}`);
+      } else {
+        setBankImportReport({ totals: data.totals, files: data.files || [] });
+      }
       loadReceipts(); // статусы оплаты привязанных фактур изменились на «Оплачено»
       loadBankMovements();
     } catch (err) {
@@ -6405,8 +6429,8 @@ ${bodyHtml}
             <label htmlFor="folder-input" className="btn-folder" onClick={pickFolderNative}>
               📁 Распознать папку
             </label>
-            <label htmlFor="statement-input" className="btn-folder" style={{ background: '#16a085' }} title="Excel-выписка банка (.xlsx): фактуры автоматически привяжутся к платежам">
-              🏦 Выписка банка
+            <label htmlFor="statement-input" className="btn-folder" style={{ background: '#16a085' }} title="Excel-выписки банка (.xlsx), можно несколько сразу: дубликаты пропускаются, фактуры автоматически привяжутся к платежам">
+              🏦 Выписки банка
             </label>
             <div className="toolbar-controls">
               <div className="control-group compact">
@@ -6462,7 +6486,33 @@ ${bodyHtml}
               а файлы внутри не кликабельны (с accept/macOS диалог превращался в выбор файлов).
               Фильтрация по типу всё равно есть в handleFolderSelect */}
           <input type="file" id="folder-input" webkitdirectory="" directory="" onChange={handleFolderSelect} style={{ display: 'none' }} />
-          <input type="file" id="statement-input" accept=".xlsx,.xls" onChange={handleStatementSelect} style={{ display: 'none' }} />
+          <input type="file" id="statement-input" accept=".xlsx,.xls" multiple onChange={handleStatementSelect} style={{ display: 'none' }} />
+
+          {bankImportReport && (
+            <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: '10px 14px', margin: '10px 0', fontSize: 13 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <b>🏦 Импорт выписок: файлов {bankImportReport.totals.files} · новых {bankImportReport.totals.imported} · дублей пропущено {bankImportReport.totals.skipped} · привязано {bankImportReport.totals.autoMatched}</b>
+                <button onClick={() => setBankImportReport(null)} style={{ border: 'none', background: '#f0f0f2', borderRadius: '50%', width: 24, height: 24, cursor: 'pointer', fontSize: 11 }}>✕</button>
+              </div>
+              {bankImportReport.files.map((f, i) => (
+                <div key={i} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', padding: '4px 0', borderTop: i ? '1px solid #f0f0f2' : 'none', alignItems: 'baseline' }}>
+                  <span style={{ minWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📄 {f.name}</span>
+                  {f.error ? (
+                    <span style={{ color: '#e74c3c' }}>❌ {f.error}</span>
+                  ) : (
+                    <React.Fragment>
+                      <span style={{ color: '#8e8e93' }}>{f.account || f.iban || 'счёт'}</span>
+                      <span>строк: <b>{f.totalInFile}</b></span>
+                      <span style={{ color: '#34c759' }}>новых: <b>{f.imported}</b></span>
+                      <span style={{ color: f.skipped ? '#e67e22' : '#8e8e93' }}>дублей: <b>{f.skipped}</b></span>
+                      <span style={{ color: '#0071e3' }}>привязано: <b>{f.autoMatched}</b></span>
+                    </React.Fragment>
+                  )}
+                </div>
+              ))}
+              <div style={{ fontSize: 12, color: '#8e8e93', marginTop: 6 }}>Все движения и привязки — во вкладке «📊 Анализ».</div>
+            </div>
+          )}
 
           <div className="recognize-bar">
             <button
@@ -6524,7 +6574,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v59.3 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v60 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

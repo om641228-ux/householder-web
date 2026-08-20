@@ -1580,3 +1580,17 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Класс `.docs-active-tab` с `!important` (синий фон #0071e3, белый текст, тень) — на активных разделах (Дома/Авто/Личное) и папках (Все/Duqe/…).
 - Главное меню: `.tabs-inline button.active` с `!important` — активная вкладка (Загрузка/Чеки/Анализ/Налоги/CRM/Документы) тоже подсвечена синим.
 - Проверки: esbuild OK; eslint — 3 прежних warning. Redeploy: только householder-web.
+
+## v60 (2026-08-20) — Мульти-импорт выписок банка с отчётом о дубликатах
+**Запрос:** «Сделай удобную выгрузку добавление - сравнение с дубликатами выписок из банка» + 6 файлов movimientos-33…38.xlsx (Ruralvía; 35 и 36 пересекаются по Nro. Apunte 1943–1947).
+
+**Backend (index.js, build v60-2026-08-20):**
+- Парсинг выписки вынесен в `importOneStatement(buffer, userId)` (догрузка без дублей по entry_number / дата+сумма+concept + автопривязка — без изменений логики).
+- Старый `POST /api/import-bank-statement` сохранён (та же форма ответа).
+- Новый `POST /api/import-bank-statements` (поле statements[], до 30 файлов): файлы обрабатываются ПОСЛЕДОВАТЕЛЬНО → дубликаты между файлами пачки и базой пропускаются; ответ {totals, files:[{name, account, iban, totalInFile, imported, skipped, autoMatched|error}]}.
+
+**Frontend (App.js, label · v60 ·):**
+- Кнопка «🏦 Выписки банка» принимает несколько файлов (multiple).
+- Вместо alert — панель-отчёт под кнопками: итоги (файлов/новых/дублей/привязано) + по каждому файлу: строк, новых (зелёным), дублей (оранжевым), привязано (синим), либо ❌ ошибка.
+- Fallback: если сервер старый (404) — файлы грузятся по одному через старый маршрут.
+- Проверки: node --check OK; esbuild OK; eslint — 3 прежних warning. Redeploy: householder-api + householder-web.
