@@ -4676,15 +4676,33 @@ function App() {
     if (!ids.length) return;
     if (!window.confirm(nv ? `Отметить «есть фактура» у ${ids.length} платежей?` : `Снять галку «есть фактура» у ${ids.length} платежей?`)) return;
     setBankMovements(prev => prev.map(x => ids.includes(x.id) ? { ...x, has_invoice: nv } : x));
+    const rollback = () => setBankMovements(prev => prev.map(x => ids.includes(x.id) ? { ...x, has_invoice: !nv } : x));
     try {
       const res = await fetch(`${API_URL}/api/bank-movement-invoice-flag?token=${token}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ movement_ids: ids, has_invoice: nv })
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (!res.ok) {
+        // v60.3: старый сервер без bulk — шлём по одному платежу (старый формат movement_id)
+        if (res.status === 400 || res.status === 404 || res.status === 500) {
+          let failed = 0;
+          for (const id of ids) {
+            try {
+              const r1 = await fetch(`${API_URL}/api/bank-movement-invoice-flag?token=${token}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ movement_id: id, has_invoice: nv })
+              });
+              if (!r1.ok) failed++;
+            } catch (e1) { failed++; }
+          }
+          if (failed) { rollback(); throw new Error(`не сохранилось ${failed} из ${ids.length} — обновите householder-api (redeploy)`); }
+          return;
+        }
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
     } catch (err) {
-      setBankMovements(prev => prev.map(x => ids.includes(x.id) ? { ...x, has_invoice: !nv } : x)); // откат
+      rollback();
       alert('Массовая отметка не сохранилась: ' + err.message);
     }
   };
@@ -6609,7 +6627,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v60.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v60.3 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
