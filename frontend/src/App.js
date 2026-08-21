@@ -6935,7 +6935,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v67.9.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v67.9.3 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8281,14 +8281,15 @@ ${bodyHtml}
                 <span style={{ fontSize: 13, color: '#7f8c8d' }}>{qFrom} … {qTo} · исходящих: {qOut.length} · в расходах: {qOut.filter(isConfirmedExpense).length}</span>
                 <span style={{ fontSize: 13, whiteSpace: 'nowrap' }}>
                   📥 приход: <b style={{ color: '#27ae60' }}>+{formatAmount(qIncSum, 'EUR')}</b>
-                  {' · '}📤 расход: <b style={{ color: '#c0392b' }}>−{formatAmount(qOutSum, 'EUR')}</b>
+                  {' · '}📤 расход: <b style={{ color: '#c0392b' }}>−{formatAmount(qOut.filter(m => !isManualMvt(m)).reduce((a, m) => a + Math.abs(Number(m.amount) || 0), 0), 'EUR')}</b>
+                  {qOut.some(isManualMvt) && <span title="Ручные платежи, добавленные из карточек фактур — их нет в банковской выписке"> · ✍ ручные: <b style={{ color: '#7d3c98' }}>−{formatAmount(qOut.filter(isManualMvt).reduce((a, m) => a + Math.abs(Number(m.amount) || 0), 0), 'EUR')}</b></span>}
                   {' · '}📄 подтверждено: <b style={{ color: '#1e8449' }}>{formatAmount(qInvSum, 'EUR')}</b>
                 </span>
                 {/* v61.4: отдельная заметная плашка итогов + налоги за диапазон (всегда видна, не теряется в шапке) */}
                 <div style={{ flex: '1 1 100%', display: 'flex', gap: 18, flexWrap: 'wrap', alignItems: 'baseline',
                   background: '#f5f5f7', border: '1px solid #e0e0e0', borderRadius: 8, padding: '8px 12px', marginTop: 2 }}>
                   <span style={{ fontSize: 13 }}>📥 приход: <b style={{ color: '#27ae60' }}>+{formatAmount(qIncSum, 'EUR')}</b></span>
-                  <span style={{ fontSize: 13 }}>📤 расход: <b style={{ color: '#c0392b' }}>−{formatAmount(qOutSum, 'EUR')}</b></span>
+                  <span style={{ fontSize: 13 }}>📤 расход: <b style={{ color: '#c0392b' }}>−{formatAmount(qOut.filter(m => !isManualMvt(m)).reduce((a, m) => a + Math.abs(Number(m.amount) || 0), 0), 'EUR')}</b>{qOut.some(isManualMvt) && <span style={{ fontSize: 11, color: '#7d3c98' }}> (+✍ ручные {formatAmount(qOut.filter(isManualMvt).reduce((a, m) => a + Math.abs(Number(m.amount) || 0), 0), 'EUR')})</span>}</span>
                   <span style={{ fontSize: 13 }}>📄 подтверждено (расходы): <b style={{ color: '#1e8449' }}>{formatAmount(qInvSum, 'EUR')}</b>
                     {qAutoSum > 0 && <span style={{ fontSize: 11, color: '#7f8c8d' }}> (в т.ч. 🏛 налоги/соцстрах/зарплаты авто: {formatAmount(qAutoSum, 'EUR')})</span>}
                   </span>
