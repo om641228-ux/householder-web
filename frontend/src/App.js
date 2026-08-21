@@ -6841,7 +6841,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v67.4 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v67.5 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7960,16 +7960,23 @@ ${bodyHtml}
         // v61.5: справочная статистика банка (перенесена из «Анализа»)
         const qBankMatched = bankMovements.filter(m => m.matched_receipt_id).length;
         const qBankUnmatchedOut = bankMovements.filter(m => Number(m.amount) < 0 && !m.matched_receipt_id).length;
+        // v67.5: суммы затрат по категориям (вся выписка, только исходящие платежи)
+        const qOutAll = bankMovements.filter(m => Number(m.amount) < 0);
+        const qSumOf = (list) => list.reduce((a, m) => a + Math.abs(Number(m.amount) || 0), 0);
+        const qCatLinked = qOutAll.filter(m => !!m.matched_receipt_id);                      // привязанные фактуры
+        const qCatAuto = qOutAll.filter(m => !m.matched_receipt_id && autoDeductOf(m));      // налог-автовычет
+        const qCatFlag = qOutAll.filter(m => !m.matched_receipt_id && !autoDeductOf(m) && m.has_invoice); // помечены галкой (без привязанных)
+        const qCatNone = qOutAll.filter(m => !m.matched_receipt_id && !autoDeductOf(m) && !m.has_invoice); // без фактур
         const qBankUnpaidBills = receipts.filter(r => ['bill', 'invoice'].includes(r.document_type) && !r.bank_movement_id && r.payment_status !== 'paid').length;
-        // v67.4: плашки статистики — АКТИВНЫЕ фильтры (клик — включить, повторный клик — сбросить)
-        const qBankStat = (label, value, color, chipKey) => {
+        // v67.4/v67.5: плашки статистики — АКТИВНЫЕ фильтры, показывают СУММЫ по категориям (клик — включить, повторный клик — сбросить)
+        const qBankStat = (label, sumVal, count, color, chipKey) => {
           const active = chipKey ? qBankChip === chipKey : qBankChip === null;
           return (
             <div key={label} onClick={() => setQBankChip(prev => (chipKey && prev !== chipKey) ? chipKey : null)}
-              title={chipKey ? 'Нажмите — отфильтровать платежи по этому признаку' : 'Сбросить фильтр по признаку'}
+              title={chipKey ? `Нажмите — отфильтровать платежи: ${label}` : 'Сбросить фильтр по признаку'}
               style={{ flex: '0 0 auto', display: 'flex', alignItems: 'baseline', gap: 6, background: active ? 'linear-gradient(180deg,#eef4ff,#dbe7fd)' : 'linear-gradient(180deg,#ffffff,#ececf0)', border: active ? '2px solid #1d4ed8' : '1px solid #d2d2d7', borderRadius: 999, padding: '3px 12px', whiteSpace: 'nowrap', cursor: 'pointer', userSelect: 'none' }}>
-              <span style={{ fontSize: 16, fontWeight: 800, color }}>{value}</span>
-              <span style={{ fontSize: 12, color: '#6e6e73' }}>{label}</span>
+              <span style={{ fontSize: 15, fontWeight: 800, color }}>{formatAmount(sumVal, 'EUR')}</span>
+              <span style={{ fontSize: 12, color: '#6e6e73' }}>{label} · {count}</span>
             </div>
           );
         };
@@ -7995,18 +8002,11 @@ ${bodyHtml}
         const qSelOf = (m) => pmSlotArm ? pmSlotHas(pmSlotArm, m.id) : !!pmSelected[String(m.id)];
         if (qSelFilter === 'sel') qOutVis = qOutVis.filter(qSelOf);
         else if (qSelFilter === 'unsel') qOutVis = qOutVis.filter(m => !qSelOf(m));
-        // v67.4: фильтр по плашкам — привязанные / без фактуры / похожие на неоплаченные счета
+        // v67.5: фильтр по плашкам-категориям затрат
         if (qBankChip === 'linked') qOutVis = qOutVis.filter(m => !!m.matched_receipt_id);
-        else if (qBankChip === 'nolink') qOutVis = qOutVis.filter(m => !m.matched_receipt_id);
-        else if (qBankChip === 'unpaid') {
-          const unpaidNames = receipts
-            .filter(r => ['bill', 'invoice'].includes(r.document_type) && !r.bank_movement_id && r.payment_status !== 'paid')
-            .map(r => r.store_name || r.store_name_ru || r.provider).filter(Boolean);
-          qOutVis = qOutVis.filter(m => {
-            const mvName = `${m.counterparty || ''} ${m.concept || ''}`;
-            return unpaidNames.some(n => nameSim(mvName, n) >= 0.5);
-          });
-        }
+        else if (qBankChip === 'auto') qOutVis = qOutVis.filter(m => !m.matched_receipt_id && autoDeductOf(m));
+        else if (qBankChip === 'flagged') qOutVis = qOutVis.filter(m => !m.matched_receipt_id && !autoDeductOf(m) && !!m.has_invoice);
+        else if (qBankChip === 'none') qOutVis = qOutVis.filter(m => !m.matched_receipt_id && !autoDeductOf(m) && !m.has_invoice);
         // v64.4: сортировка строк по контрагенту А→Я / Я→А (кнопка у фильтра); внутри контрагента — по дате, новые сверху
         qOutVis.sort((a, b) => {
           const ca = String(a.counterparty || a.concept || '').toLowerCase();
@@ -8137,10 +8137,11 @@ ${bodyHtml}
               {/* v61.5: справочная строка статистики банка — перенесена из «Анализа» в «Налоги» */}
               <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10, overflowX: 'auto', flexWrap: 'nowrap' }}>
                 <span style={{ fontSize: 18, lineHeight: 1, flexShrink: 0 }}>🏦</span>
-                {qBankStat('Движений в выписке', bankMovements.length, '#2c3e50', null)}
-                {qBankStat('Привязано автоматически', qBankMatched, '#27ae60', 'linked')}
-                {qBankStat('Платежи без фактуры', qBankUnmatchedOut, '#e67e22', 'nolink')}
-                {qBankStat('Счета без платежа в банке', qBankUnpaidBills, '#e74c3c', 'unpaid')}
+                {qBankStat('Всего затраты по выписке', qSumOf(qOutAll), qOutAll.length, '#2c3e50', null)}
+                {qBankStat('Фактуры привязанные', qSumOf(qCatLinked), qCatLinked.length, '#27ae60', 'linked')}
+                {qBankStat('Налог-автовычет', qSumOf(qCatAuto), qCatAuto.length, '#1e8449', 'auto')}
+                {qBankStat('Помечены фактуры', qSumOf(qCatFlag), qCatFlag.length, '#8e44ad', 'flagged')}
+                {qBankStat('Без фактур', qSumOf(qCatNone), qCatNone.length, '#e67e22', 'none')}
               </div>
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
                 <h3 style={{ margin: 0 }}>💶 Платежи из банка за выбранный диапазон — отметьте, по каким есть фактура</h3>
