@@ -4643,6 +4643,7 @@ function App() {
   const [qAmtMax, setQAmtMax] = useState('');
   const [qCpSortAsc, setQCpSortAsc] = useState(true); // v64.3: А→Я (true) / Я→А (false)
   const [qSelFilter, setQSelFilter] = useState('all'); // v65: фильтр по галке выбора: all | sel | unsel
+  const [qBankChip, setQBankChip] = useState(null); // v67.4: фильтр по плашкам статистики: null | linked | nolink | unpaid
   const pmSlotHas = (n, id) => (pmSlots[String(n)] || []).includes(String(id));
   const pmSlotToggle = (n, id, on) => savePmSlots(prev => {
     const cur = new Set(prev[String(n)] || []);
@@ -6840,7 +6841,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v67.3 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v67.4 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7960,12 +7961,18 @@ ${bodyHtml}
         const qBankMatched = bankMovements.filter(m => m.matched_receipt_id).length;
         const qBankUnmatchedOut = bankMovements.filter(m => Number(m.amount) < 0 && !m.matched_receipt_id).length;
         const qBankUnpaidBills = receipts.filter(r => ['bill', 'invoice'].includes(r.document_type) && !r.bank_movement_id && r.payment_status !== 'paid').length;
-        const qBankStat = (label, value, color) => (
-          <div key={label} style={{ flex: '0 0 auto', display: 'flex', alignItems: 'baseline', gap: 6, background: 'linear-gradient(180deg,#ffffff,#ececf0)', border: '1px solid #d2d2d7', borderRadius: 999, padding: '3px 12px', whiteSpace: 'nowrap' }}>
-            <span style={{ fontSize: 16, fontWeight: 800, color }}>{value}</span>
-            <span style={{ fontSize: 12, color: '#6e6e73' }}>{label}</span>
-          </div>
-        );
+        // v67.4: плашки статистики — АКТИВНЫЕ фильтры (клик — включить, повторный клик — сбросить)
+        const qBankStat = (label, value, color, chipKey) => {
+          const active = chipKey ? qBankChip === chipKey : qBankChip === null;
+          return (
+            <div key={label} onClick={() => setQBankChip(prev => (chipKey && prev !== chipKey) ? chipKey : null)}
+              title={chipKey ? 'Нажмите — отфильтровать платежи по этому признаку' : 'Сбросить фильтр по признаку'}
+              style={{ flex: '0 0 auto', display: 'flex', alignItems: 'baseline', gap: 6, background: active ? 'linear-gradient(180deg,#eef4ff,#dbe7fd)' : 'linear-gradient(180deg,#ffffff,#ececf0)', border: active ? '2px solid #1d4ed8' : '1px solid #d2d2d7', borderRadius: 999, padding: '3px 12px', whiteSpace: 'nowrap', cursor: 'pointer', userSelect: 'none' }}>
+              <span style={{ fontSize: 16, fontWeight: 800, color }}>{value}</span>
+              <span style={{ fontSize: 12, color: '#6e6e73' }}>{label}</span>
+            </div>
+          );
+        };
         // v60.1: локальный фильтр по контрагенту (клик по строке или поисковая строка)
         const qCpQ = qCpSearch.trim().toLowerCase();
         // v63: активный слот (1..5) → показываем только запомненные в нём платежи
@@ -7988,6 +7995,18 @@ ${bodyHtml}
         const qSelOf = (m) => pmSlotArm ? pmSlotHas(pmSlotArm, m.id) : !!pmSelected[String(m.id)];
         if (qSelFilter === 'sel') qOutVis = qOutVis.filter(qSelOf);
         else if (qSelFilter === 'unsel') qOutVis = qOutVis.filter(m => !qSelOf(m));
+        // v67.4: фильтр по плашкам — привязанные / без фактуры / похожие на неоплаченные счета
+        if (qBankChip === 'linked') qOutVis = qOutVis.filter(m => !!m.matched_receipt_id);
+        else if (qBankChip === 'nolink') qOutVis = qOutVis.filter(m => !m.matched_receipt_id);
+        else if (qBankChip === 'unpaid') {
+          const unpaidNames = receipts
+            .filter(r => ['bill', 'invoice'].includes(r.document_type) && !r.bank_movement_id && r.payment_status !== 'paid')
+            .map(r => r.store_name || r.store_name_ru || r.provider).filter(Boolean);
+          qOutVis = qOutVis.filter(m => {
+            const mvName = `${m.counterparty || ''} ${m.concept || ''}`;
+            return unpaidNames.some(n => nameSim(mvName, n) >= 0.5);
+          });
+        }
         // v64.4: сортировка строк по контрагенту А→Я / Я→А (кнопка у фильтра); внутри контрагента — по дате, новые сверху
         qOutVis.sort((a, b) => {
           const ca = String(a.counterparty || a.concept || '').toLowerCase();
@@ -8118,10 +8137,10 @@ ${bodyHtml}
               {/* v61.5: справочная строка статистики банка — перенесена из «Анализа» в «Налоги» */}
               <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10, overflowX: 'auto', flexWrap: 'nowrap' }}>
                 <span style={{ fontSize: 18, lineHeight: 1, flexShrink: 0 }}>🏦</span>
-                {qBankStat('Движений в выписке', bankMovements.length, '#2c3e50')}
-                {qBankStat('Привязано автоматически', qBankMatched, '#27ae60')}
-                {qBankStat('Платежи без фактуры', qBankUnmatchedOut, '#e67e22')}
-                {qBankStat('Счета без платежа в банке', qBankUnpaidBills, '#e74c3c')}
+                {qBankStat('Движений в выписке', bankMovements.length, '#2c3e50', null)}
+                {qBankStat('Привязано автоматически', qBankMatched, '#27ae60', 'linked')}
+                {qBankStat('Платежи без фактуры', qBankUnmatchedOut, '#e67e22', 'nolink')}
+                {qBankStat('Счета без платежа в банке', qBankUnpaidBills, '#e74c3c', 'unpaid')}
               </div>
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
                 <h3 style={{ margin: 0 }}>💶 Платежи из банка за выбранный диапазон — отметьте, по каким есть фактура</h3>
