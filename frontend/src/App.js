@@ -4446,7 +4446,21 @@ function App() {
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       await loadBankMovements();
       await loadReceipts();
-      alert(`🏦 Платёж ${formatAmount(amt, 'EUR')} добавлен в выписку и привязан к фактуре.\nОн появится во вкладках «Анализ» и «Налоги».`);
+      // v67.8: предлагаем перейти в «Налоги» к добавленной строке (подсветка + прокрутка)
+      const go = window.confirm(`🏦 Платёж ${formatAmount(amt, 'EUR')} добавлен в выписку и привязан к фактуре.\n\nOK — перейти в «Налоги» к этой строке`);
+      if (go && data.movement_id) {
+        const y = opDate.slice(0, 4);
+        const q = Math.floor((parseInt(opDate.slice(5, 7), 10) - 1) / 3) + 1;
+        setTaxQFrom(`${y}-${q}T`); setTaxQTo(`${y}-${q}T`);
+        setQBankChip(null); setQCpSearch(''); setQSelFilter('all');
+        setHlMvtId(String(data.movement_id));
+        setActiveTab('taxes');
+        setTimeout(() => {
+          const el = document.getElementById(`mvt-row-${data.movement_id}`);
+          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 700);
+        setTimeout(() => setHlMvtId(null), 8000);
+      }
     } catch (e) {
       alert('Не удалось добавить в выписку: ' + e.message);
     }
@@ -4658,6 +4672,7 @@ function App() {
     setActiveTab('analysis');
   };
   const [qCpSearch, setQCpSearch] = useState(''); // v60.1: фильтр по контрагенту в блоке «Платежи из банка» (Налоги)
+  const [hlMvtId, setHlMvtId] = useState(null); // v67.8: подсветка строки платежа после перехода из карточки фактуры
   // v63: слоты запоминания выбранных платежей (1..5) — сохранить выбор / вывести сохранённый (localStorage)
   const [pmSelected, setPmSelected] = useState({}); // id → true (текущий выбор галками в строках)
   const [pmSlots, setPmSlots] = useState(() => { try { return JSON.parse(localStorage.getItem('bankPaySlots') || '{}'); } catch { return {}; } });
@@ -6874,7 +6889,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v67.7 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v67.8 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8346,7 +8361,7 @@ ${bodyHtml}
                 const linked = m.matched_receipt_id ? receipts.find(r => String(r.id) === String(m.matched_receipt_id)) : null;
                 const autoK = autoDeductKind(m); // v62.1: налоги/соцстрах/зарплаты — подтверждены автоматически
                 return (
-                  <div key={m.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f0f0f0', fontSize: 13, flexWrap: 'wrap', background: (pmSlotArm ? pmSlotHas(pmSlotArm, m.id) : pmSelected[String(m.id)]) ? '#eef4ff' : autoK ? '#f6fef9' : 'transparent', borderRadius: (autoK || pmSelected[String(m.id)] || (pmSlotArm && pmSlotHas(pmSlotArm, m.id))) ? 6 : 0 }}>
+                  <div key={m.id} id={`mvt-row-${m.id}`} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f0f0f0', fontSize: 13, flexWrap: 'wrap', background: hlMvtId === String(m.id) ? '#fff3bf' : (pmSlotArm ? pmSlotHas(pmSlotArm, m.id) : pmSelected[String(m.id)]) ? '#eef4ff' : autoK ? '#f6fef9' : 'transparent', boxShadow: hlMvtId === String(m.id) ? '0 0 0 2px #f0c36d' : 'none', borderRadius: (autoK || pmSelected[String(m.id)] || hlMvtId === String(m.id) || (pmSlotArm && pmSlotHas(pmSlotArm, m.id))) ? 6 : 0 }}>
                     <input type="checkbox" checked={pmSlotArm ? pmSlotHas(pmSlotArm, m.id) : !!pmSelected[String(m.id)]}
                       onChange={() => {
                         if (pmSlotArm) pmSlotToggle(pmSlotArm, m.id, !pmSlotHas(pmSlotArm, m.id));

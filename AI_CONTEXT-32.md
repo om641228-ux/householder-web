@@ -1779,3 +1779,6 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 ## v67.7 (2026-08-21)
 - Добавление фактуры в выписку банка ИЗ КАРТОЧКИ ФАКТУРЫ: кнопка «🏦 В выписку» рядом со статусом оплаты (payNode). Спрашивает сумму (по умолчанию total_amount) и дату (по умолчанию дата фактуры), создаёт платёжное движение (amount<0, prefix='manual', account_name='Ручное добавление') СРАЗУ привязанное к фактуре (matched_receipt_id, match_status='manual', 100), затем recomputeReceiptPayment (paid/underpaid по покрытию — поддерживает разбитую оплату несколькими платежами). После — перезагрузка движений и фактур; платёж виден в «Анализе» и «Налогах» (участвует в подтверждённых расходах и расчёте IGIC/IRPF/IS).
 - Backend: POST /api/bank-movements/manual {receipt_id, operation_date, amount, counterparty?, concept?}; валидации; health build v67.7-2026-08-21. ТРЕБУЕТ redeploy householder-api.
+
+## v67.8 (2026-08-21)
+- После «🏦 В выписку»: вместо alert — confirm с переходом: OK → вкладка «Налоги», диапазон кварталов устанавливается на квартал платежа (setTaxQFrom/setTaxQTo «YYYY-qT»), фильтры сбрасываются (qBankChip/qCpSearch/qSelFilter), строка платежа подсвечена жёлтым (#fff3bf + рамка, id=`mvt-row-<id>`), плавная прокрутка к ней через 700мс, подсветка гаснет через 8с (state hlMvtId).
