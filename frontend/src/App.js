@@ -4430,11 +4430,22 @@ function App() {
   const deleteManualMvt = async (m) => {
     if (!window.confirm(`Удалить ручной платёж «${m.counterparty || m.concept || ''}» ${formatAmount(Math.abs(Number(m.amount) || 0), 'EUR')} от ${m.operation_date ? formatDate(m.operation_date) : '—'}?\nФактура останется, привязка будет снята. Строки банковской выписки это не затрагивает.`)) return;
     try {
-      const res = await fetch(`${API_URL}/api/bank-movements/manual/${m.id}?token=${token}`, { method: 'DELETE' });
+      let res = await fetch(`${API_URL}/api/bank-movements/manual/${m.id}?token=${token}`, { method: 'DELETE' });
+      if (res.status === 404 || res.status === 405) {
+        // v68.0.1: старый API без DELETE — удаляем через unlink (сервер v67.9.5+ удаляет ручные строки целиком)
+        res = await fetch(`${API_URL}/api/unlink-bank-movement?token=${token}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ movement_id: m.id })
+        });
+      }
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      await loadBankMovements();
+      const mvts = await loadBankMovements();
       await loadReceipts();
+      // Проверяем факт удаления — если строка на месте, сервер старый (нужен redeploy householder-api)
+      if (mvts && mvts.some(x => String(x.id) === String(m.id))) {
+        alert('⚠ Строка НЕ удалена на сервере. Переложите householder-api (redeploy до v67.9.5+) и повторите.');
+      }
     } catch (e) { alert('Не удалось удалить ручной платёж: ' + e.message); }
   };
 
@@ -4723,9 +4734,12 @@ function App() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      await loadBankMovements();
+      const mvts = await loadBankMovements();
       await loadReceipts();
       if (data.deleted) alert('✍ Ручной платёж удалён полностью (его не было в банковской выписке). Фактура осталась в списке чеков.');
+      else if (mvts && mvts.some(x => String(x.id) === String(movementId) && (x.prefix === 'manual' || x.account_name === 'Ручное добавление'))) {
+        alert('⚠ Ручная строка осталась на сервере — переложите householder-api (redeploy до v67.9.5+), тогда отвязка будет удалять её целиком.');
+      }
     } catch (err) { alert('Ошибка отвязки: ' + err.message); }
   };
 
@@ -6984,7 +6998,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v68 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v68.0.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v67.9.5-2026-08-22', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v68.0.1-2026-08-22', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -5086,7 +5086,11 @@ app.delete('/api/bank-movements/manual/:id', requireAuth, async (req, res) => {
     const { data: mv } = await supabaseAdmin.from('bank_movements')
       .select('id, prefix, account_name, matched_receipt_id').eq('id', req.params.id).single();
     if (!mv) return res.status(404).json({ error: 'Движение не найдено' });
-    if (mv.prefix !== 'manual' && mv.account_name !== 'Ручное добавление') {
+    const { data: full } = await supabaseAdmin.from('bank_movements')
+      .select('iban, entry_number, import_batch').eq('id', req.params.id).single();
+    const looksManual = mv.prefix === 'manual' || mv.account_name === 'Ручное добавление'
+      || (full && !full.iban && full.entry_number == null && !full.import_batch);
+    if (!looksManual) {
       return res.status(403).json({ error: 'Удалять можно только ручные платежи — строки банковской выписки не трогаем' });
     }
     const oldReceipt = mv.matched_receipt_id;
@@ -5105,11 +5109,12 @@ app.post('/api/unlink-bank-movement', requireAuth, async (req, res) => {
     const { movement_id } = req.body || {};
     if (!movement_id) return res.status(400).json({ error: 'Нужен movement_id' });
     const { data: mv } = await supabaseAdmin.from('bank_movements')
-      .select('id, matched_receipt_id, prefix, account_name').eq('id', movement_id).single();
+      .select('id, matched_receipt_id, prefix, account_name, iban, entry_number, import_batch').eq('id', movement_id).single();
     if (!mv) return res.status(404).json({ error: 'Движение не найдено' });
     const oldReceipt = mv.matched_receipt_id;
-    // v67.9.5: ручной платёж — это НЕ строка банковской выписки; отвязка = удаление строки целиком
-    if (mv.prefix === 'manual' || mv.account_name === 'Ручное добавление') {
+    // v67.9.5/v68.0.1: ручной платёж — это НЕ строка банковской выписки; отвязка = удаление строки целиком.
+    // Признак ручной: явный prefix/account_name ИЛИ нет ни IBAN, ни Nro.Apunte, ни пакета импорта.
+    if (mv.prefix === 'manual' || mv.account_name === 'Ручное добавление' || (!mv.iban && mv.entry_number == null && !mv.import_batch)) {
       const { error: de } = await supabaseAdmin.from('bank_movements').delete().eq('id', movement_id);
       if (de) throw de;
       if (oldReceipt) await recomputeReceiptPayment(oldReceipt);
