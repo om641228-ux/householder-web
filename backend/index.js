@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v67-2026-08-21', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v67.2-2026-08-21', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -4778,6 +4778,7 @@ async function runBankMatching(ownerId, iban) {
     const conceptDigits = conceptText.replace(/\D/g, '');
     const scored = [];
     for (const r of receipts || []) {
+      if (r.bank_movement_id || r._taken) continue; // уже привязана в этом прогоне
       const rAmt = Math.abs(Number(r.total_amount));
       if (!isFinite(rAmt) || Math.abs(rAmt - amt) > 0.011) continue; // сумма — обязательные ворота
       let score = 50;
@@ -4804,19 +4805,46 @@ async function runBankMatching(ownerId, iban) {
     const confident = best && (best.strong
       || (best.score >= 80 && (!second || best.score - second.score >= 10))
       || (best.sim >= 0.55 && (!second || best.score - second.score >= 5)));
-    if (confident) {
+    // v67.2: сумма не совпала — автопривязка по НАЗВАНИЮ, только если кандидат УНИКАЛЕН (sim >= 0.7).
+    // Повторяющиеся платежи одному поставщику (eni, naturgy...) дают несколько одинаковых sim -> НЕ привязываем.
+    let namePick = null;
+    if (!confident) {
+      const nameCands = [];
+      for (const r of receipts || []) {
+        if (r.bank_movement_id || r._taken) continue;
+        const sim = Math.max(
+          counterpartySim(conceptText, r.store_name),
+          counterpartySim(conceptText, r.store_name_ru),
+          counterpartySim(conceptText, r.provider)
+        );
+        if (sim >= 0.7) nameCands.push({ r, sim });
+      }
+      nameCands.sort((a, b) => b.sim - a.sim);
+      if (nameCands.length && (!nameCands[1] || nameCands[0].sim - nameCands[1].sim >= 0.05)) namePick = nameCands[0];
+    }
+    if (confident || namePick) {
+      const pick = confident ? best : { r: namePick.r, score: Math.round(namePick.sim * 100), strong: false, sim: namePick.sim };
+      const byName = !confident;
       const now = new Date().toISOString();
       const { error: ue1 } = await supabaseAdmin.from('bank_movements')
-        .update({ matched_receipt_id: best.r.id, match_status: 'auto', match_score: best.score, matched_at: now })
+        .update({ matched_receipt_id: pick.r.id, match_status: byName ? 'auto_name_delta' : 'auto', match_score: pick.score, matched_at: now })
         .eq('id', mv.id);
       if (ue1) { console.error('match: обновление движения не удалось:', ue1.message); continue; }
+      // Статус оплаты: если сумма отличается — считаем покрытие по всем привязанным платежам
+      let payStatus = 'paid';
+      if (byName) {
+        const { data: linked } = await supabaseAdmin.from('bank_movements')
+          .select('amount').eq('matched_receipt_id', pick.r.id);
+        const paidSum = (linked || []).reduce((acc, l) => acc + Math.abs(Number(l.amount) || 0), 0);
+        payStatus = paidSum + 0.011 >= Math.abs(Number(pick.r.total_amount) || 0) ? 'paid' : 'underpaid';
+      }
       const { error: ue2 } = await supabaseAdmin.from('receipts')
-        .update({ bank_movement_id: mv.id, payment_status: 'paid', paid_date: mv.operation_date })
-        .eq('id', best.r.id);
+        .update({ bank_movement_id: mv.id, payment_status: payStatus, paid_date: mv.operation_date })
+        .eq('id', pick.r.id);
       if (ue2) console.error('match: обновление фактуры не удалось:', ue2.message);
-      best.r.bank_movement_id = mv.id; // в этом прогоне фактура уже занята
+      pick.r.bank_movement_id = mv.id; pick.r._taken = true; // в этом прогоне фактура уже занята
       matched++;
-      console.log(`match: «${mv.concept}» ${mv.amount} ↔ чек #${best.r.id} (${best.score} баллов)`);
+      console.log(`match${byName ? ' (по названию, Δ!)' : ''}: «${mv.concept}» ${mv.amount} ↔ чек #${pick.r.id} (${pick.score} баллов)`);
     }
   }
   return { matched, candidates: movements.length };

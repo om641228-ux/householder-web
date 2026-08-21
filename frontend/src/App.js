@@ -4772,7 +4772,10 @@ function App() {
   };
 
   // v67.1: модалка привязки платежа к фактуре — ОБЩАЯ для вкладок «Анализ» и «Налоги»
-  const linkPickerModal = linkPicker && (() => {
+  // v67.2: ленивый рендер через функцию — иначе const-IIFE выполнялся до объявления formatAmount/formatDate (TDZ -> белый экран)
+  const renderLinkPicker = () => {
+    if (!linkPicker) return null;
+    return (() => {
                   const mvAmt = Math.abs(Number(linkPicker.amount) || 0);
                   const lq = linkSearch.trim().toLowerCase();
                   const mvName = `${linkPicker.counterparty || ''} ${linkPicker.concept || ''}`;
@@ -4843,7 +4846,8 @@ function App() {
                       </div>
                     </div>
                   );
-  })();
+    })();
+  };
 
   // Вид авто-вычета для бейджа в строке платежа (v62.1)
   const autoDeductKind = (m) => {
@@ -6831,7 +6835,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v67.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v67.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7913,7 +7917,7 @@ ${bodyHtml}
                     </div>
                   </div>
                 )}
-                {linkPickerModal}
+                {renderLinkPicker()}
               </>
             );
           })()}
@@ -8484,7 +8488,7 @@ ${bodyHtml}
                 </div>
               );
             })()}
-          {linkPickerModal}
+          {renderLinkPicker()}
           </div>
         );
       })()}
