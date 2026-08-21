@@ -4445,12 +4445,16 @@ function App() {
   const loadBankMovements = async () => {
     setBankLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/bank-movements?token=${token}`);
+      // v67.3: таймаут 20с — раньше при зависшем запросе спиннер «Загрузка движений…» крутился бесконечно
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 20000);
+      const res = await fetch(`${API_URL}/api/bank-movements?token=${token}`, { signal: controller.signal });
+      clearTimeout(timeout);
       const data = await res.json().catch(() => ({}));
       if (res.ok) { setBankMovements(data.movements || []); return data.movements || []; }
       else console.error('bank-movements:', data.error);
       return null;
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error(e); return null; }
     finally { setBankLoading(false); }
   };
 
@@ -4694,9 +4698,10 @@ function App() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      alert(`🔁 Автопривязка выполнена\n\n✅ Новых совпадений: ${data.autoMatched}\n⚪ Осталось без пары: ${data.unmatchedPayments}`);
-      await loadBankMovements();
+      // v67.3: сначала перезагружаем данные, потом alert (Safari блокирует JS на alert — выглядело как «зависло»)
+      const mvts = await loadBankMovements();
       await loadReceipts();
+      alert(`🔁 Автопривязка выполнена\n\n✅ Новых совпадений: ${data.autoMatched}\n⚪ Осталось без пары: ${data.unmatchedPayments}` + (mvts === null ? '\n\n⚠ Движения не перезагрузились (таймаут/сервер) — нажмите «🔄 Обновить»' : ''));
     } catch (err) { alert('Ошибка автопривязки: ' + err.message); }
     finally { setBankLoading(false); }
   };
@@ -6835,7 +6840,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v67.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v67.3 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8120,7 +8125,10 @@ ${bodyHtml}
               </div>
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
                 <h3 style={{ margin: 0 }}>💶 Платежи из банка за выбранный диапазон — отметьте, по каким есть фактура</h3>
-                <button onClick={loadBankMovements} style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #ccc', background: '#fff', cursor: 'pointer' }}>🔄 Обновить движения</button>
+                <button disabled={bankLoading} onClick={async () => { const r = await loadBankMovements(); if (r === null) alert('⚠ Движения не загрузились (таймаут или ошибка сервера) — проверьте, что householder-api переложен (redeploy), и попробуйте ещё раз.'); }}
+                  style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #ccc', background: '#fff', cursor: bankLoading ? 'wait' : 'pointer' }}>{bankLoading ? '⏳ Загрузка…' : '🔄 Обновить движения'}</button>
+                <button disabled={bankLoading} onClick={rematchBank} title="Обновить движения и автоматически привязать фактуры (по сумме и по названию)"
+                  style={{ padding: '5px 10px', borderRadius: 6, border: 'none', background: '#8e44ad', color: '#fff', fontWeight: 700, cursor: bankLoading ? 'wait' : 'pointer' }}>🔁 Привязать фактуры</button>
                 <span style={{ fontSize: 13, color: '#7f8c8d' }}>{qFrom} … {qTo} · исходящих: {qOut.length} · в расходах: {qOut.filter(isConfirmedExpense).length}</span>
                 <span style={{ fontSize: 13, whiteSpace: 'nowrap' }}>
                   📥 приход: <b style={{ color: '#27ae60' }}>+{formatAmount(qIncSum, 'EUR')}</b>
