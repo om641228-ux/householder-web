@@ -4502,7 +4502,7 @@ function App() {
   };
 
   // Загрузить движения банковской выписки (вкладка «Анализ»)
-  const loadBankMovements = async () => {
+  const loadBankMovements = useCallback(async () => {
     setBankLoading(true);
     try {
       // v67.3: таймаут 20с — раньше при зависшем запросе спиннер «Загрузка движений…» крутился бесконечно
@@ -4516,7 +4516,12 @@ function App() {
       return null;
     } catch (e) { console.error(e); return null; }
     finally { setBankLoading(false); }
-  };
+  }, [token]);
+
+  // v67.9 fix: движения банка грузим сразу при входе — метка «привязан к банку» есть на карточках чеков
+  useEffect(() => {
+    if (user && token) loadBankMovements();
+  }, [user, token, loadBankMovements]);
 
   // Плановые платежи (v41): ручные записи календаря обязательных платежей
   const loadPlannedPayments = async () => {
@@ -6542,6 +6547,26 @@ ${bodyHtml}
                       {r.bank_movement_id && <span title="Привязано к движению по банковской выписке" style={{ marginLeft: 6, color: '#27ae60' }}>🏦 по выписке</span>}
                     </p>
                   ) : null;
+                  // v67.9: метка «привязан к банку» ВНУТРИ карточки — клик ведёт в «Налоги» к платежу
+                  const bankNode = (() => {
+                    const links = bankMovements.filter(mv => String(mv.matched_receipt_id || '') === String(r.id));
+                    if (!links.length && !r.bank_movement_id) return null;
+                    const paidSum = links.reduce((a, mv) => a + Math.abs(Number(mv.amount) || 0), 0);
+                    const lastDate = links.map(mv => mv.operation_date).filter(Boolean).sort().pop() || null;
+                    return (
+                      <p key="banklink"><strong>Банк:</strong>{' '}
+                        {links.length > 0 ? (
+                          <span onClick={() => gotoTaxesMovement(links[0].id, links[0].operation_date)}
+                            title="Нажмите — переход в «Налоги» к этому платежу"
+                            style={{ display: 'inline-block', fontSize: 12.5, fontWeight: 700, color: '#1d4ed8', background: '#eef4ff', border: '1px solid #1d4ed8', borderRadius: 10, padding: '2px 10px', cursor: 'pointer' }}>
+                            🏦 привязан к банку · {formatAmount(paidSum, 'EUR')}{links.length > 1 ? ` · ${links.length} плат.` : ''}{lastDate ? ` · ${formatDate(lastDate)}` : ''}
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: 12.5, color: '#27ae60', fontWeight: 700 }}>🏦 по выписке</span>
+                        )}
+                      </p>
+                    );
+                  })();
                   const deltaNode = ['receipt', 'invoice', 'bill'].includes(dt) ? (() => {
                     const itemsTotal = calculateItemsTotal(r.items);
                     const total = parseFloat(r.total_amount) || 0;
@@ -6582,7 +6607,7 @@ ${bodyHtml}
                       row('provider', 'Поставщик', r.provider),
                       row('buyer', 'Покупатель', r.party_b),
                       row('sum', 'Суть документа', r.summary),
-                      payNode, paidNode, deltaNode,
+                      payNode, paidNode, bankNode, deltaNode,
                       row('contract', '№ договора', r.contract_number),
                       periodNode('Период'),
                       methodNode, ownerNode
@@ -6631,7 +6656,7 @@ ${bodyHtml}
                       row('type', 'Тип', DOC_TYPE_LABELS[r.document_type] || r.document_type || '🧾 Чек'),
                       row('object', 'Объект', r.object || '—'),
                       row('subtype', 'Подтип', r.subtype ? (SUBTYPE_LABELS[r.subtype] || r.subtype) : null),
-                      payNode, paidNode,
+                      payNode, paidNode, bankNode,
                       row('provider', 'Поставщик', r.provider),
                       row('partyA', 'Сторона А', ['bank', 'tax', 'tax_form', 'annual_accounts'].includes(dt) ? r.party_a : null),
                       row('partyB', dt === 'bill' ? 'Титулар' : 'Сторона Б', ['bank', 'tax', 'tax_form', 'annual_accounts', 'bill'].includes(dt) ? r.party_b : null),
@@ -6907,7 +6932,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v67.9 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v67.9.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
