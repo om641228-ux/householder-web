@@ -4723,6 +4723,7 @@ function App() {
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       await loadBankMovements();
       await loadReceipts();
+      if (data.deleted) alert('✍ Ручной платёж удалён полностью (его не было в банковской выписке). Фактура осталась в списке чеков.');
     } catch (err) { alert('Ошибка отвязки: ' + err.message); }
   };
 
@@ -6897,7 +6898,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v67.9.4 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v67.9.5 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8424,7 +8425,7 @@ ${bodyHtml}
                               Δ не совпадает
                             </span>
                           )}
-                          <button onClick={() => { if (window.confirm('Отвязать платёж от этой фактуры?')) unlinkMovement(m.id); }} title="Отвязать платёж от фактуры"
+                          <button onClick={() => { const man = isManualMvt(m); if (window.confirm(man ? 'Это РУЧНОЙ платёж (в выписке банка его нет) — он будет УДАЛЁН целиком, фактура останется. Продолжить?' : 'Отвязать платёж от этой фактуры?')) unlinkMovement(m.id); }} title="Отвязать платёж от фактуры (ручной платёж будет удалён)"
                             style={{ fontSize: 11, border: '1px solid #e74c3c', color: '#e74c3c', background: '#fff', borderRadius: 6, padding: '3px 7px', cursor: 'pointer' }}>✖</button>
                         </span>
                       )
@@ -8742,6 +8743,5 @@ ${bodyHtml}
     </div>
   );
 }
-////
-///
+
 export default App;

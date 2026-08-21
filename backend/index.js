@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v67.9.4-2026-08-21', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v67.9.5-2026-08-22', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -5105,9 +5105,16 @@ app.post('/api/unlink-bank-movement', requireAuth, async (req, res) => {
     const { movement_id } = req.body || {};
     if (!movement_id) return res.status(400).json({ error: 'Нужен movement_id' });
     const { data: mv } = await supabaseAdmin.from('bank_movements')
-      .select('id, matched_receipt_id').eq('id', movement_id).single();
+      .select('id, matched_receipt_id, prefix, account_name').eq('id', movement_id).single();
     if (!mv) return res.status(404).json({ error: 'Движение не найдено' });
     const oldReceipt = mv.matched_receipt_id;
+    // v67.9.5: ручной платёж — это НЕ строка банковской выписки; отвязка = удаление строки целиком
+    if (mv.prefix === 'manual' || mv.account_name === 'Ручное добавление') {
+      const { error: de } = await supabaseAdmin.from('bank_movements').delete().eq('id', movement_id);
+      if (de) throw de;
+      if (oldReceipt) await recomputeReceiptPayment(oldReceipt);
+      return res.json({ success: true, deleted: true });
+    }
     const { error } = await supabaseAdmin.from('bank_movements')
       .update({ matched_receipt_id: null, match_status: 'unmatched', match_score: null, matched_at: null })
       .eq('id', movement_id);
