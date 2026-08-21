@@ -4424,6 +4424,18 @@ function App() {
     }
   };
 
+  // v67.9.4: удалить ручной платёж (выписка — главный документ, ручных строк быть не должно)
+  const deleteManualMvt = async (m) => {
+    if (!window.confirm(`Удалить ручной платёж «${m.counterparty || m.concept || ''}» ${formatAmount(Math.abs(Number(m.amount) || 0), 'EUR')} от ${m.operation_date ? formatDate(m.operation_date) : '—'}?\nФактура останется, привязка будет снята. Строки банковской выписки это не затрагивает.`)) return;
+    try {
+      const res = await fetch(`${API_URL}/api/bank-movements/manual/${m.id}?token=${token}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      await loadBankMovements();
+      await loadReceipts();
+    } catch (e) { alert('Не удалось удалить ручной платёж: ' + e.message); }
+  };
+
   // v67.9: переход во вкладку «Налоги» к конкретной строке платежа (подсветка + прокрутка)
   const gotoTaxesMovement = (mvId, opDate) => {
     if (!mvId) return;
@@ -4440,51 +4452,6 @@ function App() {
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 700);
     setTimeout(() => setHlMvtId(null), 8000);
-  };
-
-  // v67.7: добавить фактуру в выписку банка — создаётся платёжное движение, сразу привязанное к фактуре
-  const addReceiptToBank = async (receipt) => {
-    if (!receipt) return;
-    if (window.__addToBankBusy) return; // v67.9.2: защита от двойного клика — не плодим дубли платежей
-    window.__addToBankBusy = true;
-    setTimeout(() => { window.__addToBankBusy = false; }, 4000);
-    const defAmt = Math.abs(Number(receipt.total_amount) || 0);
-    const amtStr = window.prompt(`Сумма платежа по фактуре «${receipt.store_name || 'Без названия'}», EUR:`, defAmt ? defAmt.toFixed(2) : '');
-    if (amtStr == null) return;
-    const amt = Math.abs(Number(String(amtStr).replace(/\s/g, '').replace(',', '.')));
-    if (!isFinite(amt) || amt <= 0) { alert('Некорректная сумма'); return; }
-    const defDate = receipt.receipt_date || new Date().toISOString().slice(0, 10);
-    const dateStr = window.prompt('Дата платежа (ГГГГ-ММ-ДД):', defDate);
-    if (dateStr == null) return;
-    const opDate = dateStr.trim().slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(opDate)) { alert('Дата в формате ГГГГ-ММ-ДД'); return; }
-    try {
-      const res = await fetch(`${API_URL}/api/bank-movements/manual?token=${token}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ receipt_id: receipt.id, operation_date: opDate, amount: amt, counterparty: receipt.store_name || receipt.provider || '' })
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      await loadBankMovements();
-      await loadReceipts();
-      // v67.8: предлагаем перейти в «Налоги» к добавленной строке (подсветка + прокрутка)
-      const go = window.confirm(`🏦 Платёж ${formatAmount(amt, 'EUR')} добавлен в выписку и привязан к фактуре.\n\nOK — перейти в «Налоги» к этой строке`);
-      if (go && data.movement_id) {
-        const y = opDate.slice(0, 4);
-        const q = Math.floor((parseInt(opDate.slice(5, 7), 10) - 1) / 3) + 1;
-        setTaxQFrom(`${y}-${q}T`); setTaxQTo(`${y}-${q}T`);
-        setQBankChip(null); setQCpSearch(''); setQSelFilter('all');
-        setHlMvtId(String(data.movement_id));
-        setActiveTab('taxes');
-        setTimeout(() => {
-          const el = document.getElementById(`mvt-row-${data.movement_id}`);
-          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }, 700);
-        setTimeout(() => setHlMvtId(null), 8000);
-      }
-    } catch (e) {
-      alert('Не удалось добавить в выписку: ' + e.message);
-    }
   };
 
   const bulkChangePaymentStatus = async (value) => {
@@ -6538,11 +6505,6 @@ ${bodyHtml}
                         <option value="">— не указан —</option>
                         {Object.entries(PAYMENT_STATUS_META).map(([v, m]) => <option key={v} value={v}>{m.label}</option>)}
                       </select>
-                      {/* v67.7: добавить эту фактуру в выписку банка (ручной платёж с привязкой) */}
-                      <button onClick={() => addReceiptToBank(r)} title="Добавить платёж по этой фактуре в выписку банка (вкладки «Анализ»/«Налоги») — движение создаётся уже привязанным"
-                        style={{ marginLeft: 8, padding: '3px 10px', borderRadius: 10, border: '1px solid #1d4ed8', background: '#eef4ff', color: '#1d4ed8', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>
-                        🏦 В выписку
-                      </button>
                     </p>
                   );
                   const paidNode = r.paid_date ? (
@@ -6935,7 +6897,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v67.9.3 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v67.9.4 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8466,7 +8428,13 @@ ${bodyHtml}
                             style={{ fontSize: 11, border: '1px solid #e74c3c', color: '#e74c3c', background: '#fff', borderRadius: 6, padding: '3px 7px', cursor: 'pointer' }}>✖</button>
                         </span>
                       )
-                      : <button onClick={() => { setLinkSearch(''); setLinkPicker(m); }} title="Привязать платёж к фактуре"
+                      : isManualMvt(m) ? (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ fontSize: 11, fontWeight: 800, color: '#7d3c98', border: '1px solid #7d3c98', borderRadius: 999, padding: '1px 7px', background: '#f5eef8' }}>✍ ручной</span>
+                          <button onClick={() => deleteManualMvt(m)} title="Удалить ручной платёж (в выписке банка его нет — это ошибочная строка)"
+                            style={{ fontSize: 11, border: '1px solid #e74c3c', color: '#e74c3c', background: '#fff', borderRadius: 6, padding: '3px 7px', cursor: 'pointer' }}>🗑 удалить</button>
+                        </span>
+                      ) : <button onClick={() => { setLinkSearch(''); setLinkPicker(m); }} title="Привязать платёж к фактуре"
                         style={{ fontSize: 12, color: '#0071e3', border: '1px solid #0071e3', background: '#fff', borderRadius: 6, padding: '3px 8px', cursor: 'pointer', fontWeight: 700 }}>🔗 привязать</button>}
                   </div>
                 );

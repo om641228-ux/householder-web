@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v67.9.2-2026-08-21', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v67.9.4-2026-08-21', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -5073,6 +5073,27 @@ app.post('/api/bank-movements/manual', requireAuth, async (req, res) => {
     if (error) throw error;
     await recomputeReceiptPayment(receipt_id);
     res.json({ success: true, movement_id: ins.id });
+  } catch (e) {
+    res.status(500).json({ error: withDbSchemaHint(e.message) });
+  }
+});
+
+// v67.9.4: удаление РУЧНОГО платежа (созданного ошибочно «из карточки фактуры»).
+// Выписка банка — главный документ: ручных строк в ней быть не должно.
+// Удаляет только движения prefix='manual', фактуру отвязывает и пересчитывает статус.
+app.delete('/api/bank-movements/manual/:id', requireAuth, async (req, res) => {
+  try {
+    const { data: mv } = await supabaseAdmin.from('bank_movements')
+      .select('id, prefix, account_name, matched_receipt_id').eq('id', req.params.id).single();
+    if (!mv) return res.status(404).json({ error: 'Движение не найдено' });
+    if (mv.prefix !== 'manual' && mv.account_name !== 'Ручное добавление') {
+      return res.status(403).json({ error: 'Удалять можно только ручные платежи — строки банковской выписки не трогаем' });
+    }
+    const oldReceipt = mv.matched_receipt_id;
+    const { error } = await supabaseAdmin.from('bank_movements').delete().eq('id', mv.id);
+    if (error) throw error;
+    if (oldReceipt) await recomputeReceiptPayment(oldReceipt);
+    res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: withDbSchemaHint(e.message) });
   }
