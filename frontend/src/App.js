@@ -4445,6 +4445,9 @@ function App() {
   // v67.7: добавить фактуру в выписку банка — создаётся платёжное движение, сразу привязанное к фактуре
   const addReceiptToBank = async (receipt) => {
     if (!receipt) return;
+    if (window.__addToBankBusy) return; // v67.9.2: защита от двойного клика — не плодим дубли платежей
+    window.__addToBankBusy = true;
+    setTimeout(() => { window.__addToBankBusy = false; }, 4000);
     const defAmt = Math.abs(Number(receipt.total_amount) || 0);
     const amtStr = window.prompt(`Сумма платежа по фактуре «${receipt.store_name || 'Без названия'}», EUR:`, defAmt ? defAmt.toFixed(2) : '');
     if (amtStr == null) return;
@@ -6932,7 +6935,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v67.9.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v67.9.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8065,13 +8068,16 @@ ${bodyHtml}
         // v61.5: справочная статистика банка (перенесена из «Анализа»)
         const qBankMatched = bankMovements.filter(m => m.matched_receipt_id).length;
         const qBankUnmatchedOut = bankMovements.filter(m => Number(m.amount) < 0 && !m.matched_receipt_id).length;
-        // v67.5: суммы затрат по категориям (вся выписка, только исходящие платежи)
-        const qOutAll = bankMovements.filter(m => Number(m.amount) < 0);
+        // v67.5/v67.9.2: суммы затрат по категориям. «Всего по выписке» = ТОЛЬКО строки банковской выписки
+        // (ручные платежи «из карточки фактуры» — отдельная плашка, иначе общая сумма расхода завышалась)
+        const isManualMvt = (m) => m.prefix === 'manual' || m.account_name === 'Ручное добавление';
+        const qOutStmt = bankMovements.filter(m => Number(m.amount) < 0 && !isManualMvt(m));
+        const qCatManual = bankMovements.filter(m => Number(m.amount) < 0 && isManualMvt(m));
         const qSumOf = (list) => list.reduce((a, m) => a + Math.abs(Number(m.amount) || 0), 0);
-        const qCatLinked = qOutAll.filter(m => !!m.matched_receipt_id);                      // привязанные фактуры
-        const qCatAuto = qOutAll.filter(m => !m.matched_receipt_id && autoDeductOf(m));      // налог-автовычет
-        const qCatFlag = qOutAll.filter(m => !m.matched_receipt_id && !autoDeductOf(m) && m.has_invoice); // помечены галкой (без привязанных)
-        const qCatNone = qOutAll.filter(m => !m.matched_receipt_id && !autoDeductOf(m) && !m.has_invoice); // без фактур
+        const qCatLinked = qOutStmt.filter(m => !!m.matched_receipt_id);                      // привязанные фактуры
+        const qCatAuto = qOutStmt.filter(m => !m.matched_receipt_id && autoDeductOf(m));      // налог-автовычет
+        const qCatFlag = qOutStmt.filter(m => !m.matched_receipt_id && !autoDeductOf(m) && m.has_invoice); // помечены галкой (без привязанных)
+        const qCatNone = qOutStmt.filter(m => !m.matched_receipt_id && !autoDeductOf(m) && !m.has_invoice); // без фактур
         const qBankUnpaidBills = receipts.filter(r => ['bill', 'invoice'].includes(r.document_type) && !r.bank_movement_id && r.payment_status !== 'paid').length;
         // v67.4/v67.5: плашки статистики — АКТИВНЫЕ фильтры, показывают СУММЫ по категориям (клик — включить, повторный клик — сбросить)
         const qBankStat = (label, sumVal, count, color, chipKey) => {
@@ -8128,6 +8134,7 @@ ${bodyHtml}
         else if (qBankChip === 'auto') qOutVis = qOutVis.filter(m => !m.matched_receipt_id && autoDeductOf(m));
         else if (qBankChip === 'flagged') qOutVis = qOutVis.filter(m => !m.matched_receipt_id && !autoDeductOf(m) && !!m.has_invoice);
         else if (qBankChip === 'none') qOutVis = qOutVis.filter(m => !m.matched_receipt_id && !autoDeductOf(m) && !m.has_invoice);
+        else if (qBankChip === 'manual') qOutVis = qOutVis.filter(isManualMvt);
         // v64.4: сортировка строк по контрагенту А→Я / Я→А (кнопка у фильтра); внутри контрагента — по дате, новые сверху
         qOutVis.sort((a, b) => {
           const ca = String(a.counterparty || a.concept || '').toLowerCase();
@@ -8258,7 +8265,8 @@ ${bodyHtml}
               {/* v61.5: справочная строка статистики банка — перенесена из «Анализа» в «Налоги» */}
               <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10, overflowX: 'auto', flexWrap: 'nowrap' }}>
                 <span style={{ fontSize: 18, lineHeight: 1, flexShrink: 0 }}>🏦</span>
-                {qBankStat('Всего затраты по выписке', qSumOf(qOutAll), qOutAll.length, '#2c3e50', null)}
+                {qBankStat('Всего затраты по выписке', qSumOf(qOutStmt), qOutStmt.length, '#2c3e50', null)}
+                {qCatManual.length > 0 && qBankStat('✍ Ручные платежи (не из выписки)', qSumOf(qCatManual), qCatManual.length, '#7d3c98', 'manual')}
                 {qBankStat('Фактуры привязанные', qSumOf(qCatLinked), qCatLinked.length, '#27ae60', 'linked')}
                 {qBankStat('Налог-автовычет', qSumOf(qCatAuto), qCatAuto.length, '#1e8449', 'auto')}
                 {qBankStat('Помечены фактуры', qSumOf(qCatFlag), qCatFlag.length, '#8e44ad', 'flagged')}

@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v67.7-2026-08-21', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v67.9.2-2026-08-21', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -5064,6 +5064,11 @@ app.post('/api/bank-movements/manual', requireAuth, async (req, res) => {
       match_score: 100,
       matched_at: new Date().toISOString()
     };
+    // v67.9.2: защита от дублей — тот же ручной платёж (фактура+дата+сумма) уже есть
+    const { data: dup } = await supabaseAdmin.from('bank_movements')
+      .select('id').eq('matched_receipt_id', receipt_id).eq('operation_date', opDate)
+      .eq('amount', -amt).eq('prefix', 'manual').limit(1);
+    if (dup && dup.length) return res.json({ success: true, movement_id: dup[0].id, duplicate: true });
     const { data: ins, error } = await supabaseAdmin.from('bank_movements').insert(row).select('id').single();
     if (error) throw error;
     await recomputeReceiptPayment(receipt_id);
