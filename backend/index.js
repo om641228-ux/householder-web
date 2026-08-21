@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v60.2-2026-08-20', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v67-2026-08-21', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -4795,12 +4795,15 @@ async function runBankMatching(ownerId, iban) {
       const strong = [r.invoice_number, r.contract_number].filter(Boolean)
         .some(n => { const d = String(n).replace(/\D/g, ''); return d.length >= 5 && conceptDigits.includes(d); });
       if (strong) score += 40;
-      scored.push({ r, score: Math.min(100, score), strong });
+      scored.push({ r, score: Math.min(100, score), strong, sim });
     }
     scored.sort((a, b) => b.score - a.score);
     const best = scored[0];
     const second = scored[1];
-    const confident = best && (best.strong || (best.score >= 80 && (!second || best.score - second.score >= 10)));
+    // v67: достаточно и «точная сумма + похожее название» (sim ≥ 0.55) — случай «cerrajeria mundo llave» ↔ «Mundo Llave» (51 день → без бонуса за дату)
+    const confident = best && (best.strong
+      || (best.score >= 80 && (!second || best.score - second.score >= 10))
+      || (best.sim >= 0.55 && (!second || best.score - second.score >= 5)));
     if (confident) {
       const now = new Date().toISOString();
       const { error: ue1 } = await supabaseAdmin.from('bank_movements')

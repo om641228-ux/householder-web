@@ -4762,6 +4762,15 @@ function App() {
   const AUTO_DEDUCT_RE = /seg\s*gr?al|seguridad\s+social|tgss|tesorer[ií]a|tes\.?\s*gral|agencia\s+tributaria|a\.?e\.?a\.?t|hacienda|tributos?|a\.?t\.?c\b|impuesto|modelo\s*\d|igic|irpf|\bis\b.*sociedad|aut[óo]nomo|mutua|n[óo]mina|salario|sueldo|payroll|cotizaci/i;
   const autoDeductOf = (m) => AUTO_DEDUCT_RE.test(String(m.counterparty || '') + ' ' + String(m.concept || ''));
   const isConfirmedExpense = (m) => !!(m.has_invoice || m.matched_receipt_id) || autoDeductOf(m);
+  // v67: схожесть названий контрагент/магазин (доля общих слов) — для рекомендаций привязки
+  const nameTokens = (t) => String(t || '').toLowerCase().replace(/[^a-zа-яё0-9\s]/gi, ' ').split(/\s+/).filter(w => w.length >= 3);
+  const nameSim = (a, b) => {
+    const ta = new Set(nameTokens(a)), tb = new Set(nameTokens(b));
+    if (!ta.size || !tb.size) return 0;
+    let inter = 0; ta.forEach(w => { if (tb.has(w)) inter++; });
+    return inter / Math.max(ta.size, tb.size);
+  };
+
   // Вид авто-вычета для бейджа в строке платежа (v62.1)
   const autoDeductKind = (m) => {
     const t = (String(m.counterparty || '') + ' ' + String(m.concept || '')).toLowerCase();
@@ -6748,7 +6757,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v66 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v67 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7833,15 +7842,49 @@ ${bodyHtml}
                 {linkPicker && (() => {
                   const mvAmt = Math.abs(Number(linkPicker.amount) || 0);
                   const lq = linkSearch.trim().toLowerCase();
-                  const candidates = receipts
+                  const mvName = `${linkPicker.counterparty || ''} ${linkPicker.concept || ''}`;
+                  // v67: скоринг кандидатов — по НАЗВАНИЮ и по СУММЕ (сумма может не совпадать: показываем Δ)
+                  const scored = receipts
                     .filter(r => !lq || [r.store_name, r.store_name_ru, r.provider, r.invoice_number, r.contract_number, r.total_amount]
                       .some(v => String(v == null ? '' : v).toLowerCase().includes(lq)))
-                    .map(r => ({ r, exact: Math.abs(Math.abs(Number(r.total_amount) || 0) - mvAmt) < 0.01 }))
-                    .sort((a, b) =>
-                      (b.exact - a.exact) ||
-                      ((a.r.payment_status === 'paid' ? 1 : 0) - (b.r.payment_status === 'paid' ? 1 : 0)) ||
-                      (Math.abs(Math.abs(Number(a.r.total_amount) || 0) - mvAmt) - Math.abs(Math.abs(Number(b.r.total_amount) || 0) - mvAmt)))
-                    .slice(0, 50);
+                    .map(r => {
+                      const rAmt = Math.abs(Number(r.total_amount) || 0);
+                      const diff = Math.abs(rAmt - mvAmt);
+                      const exact = diff < 0.01;
+                      const sim = Math.max(nameSim(mvName, r.store_name), nameSim(mvName, r.store_name_ru), nameSim(mvName, r.provider));
+                      const score = (exact ? 100 : 0) + Math.round(sim * 100) + (diff <= Math.max(1, mvAmt * 0.02) ? 40 : diff <= Math.max(5, mvAmt * 0.1) ? 20 : 0) - (r.payment_status === 'paid' ? 15 : 0);
+                      return { r, exact, sim, diff, score };
+                    })
+                    .sort((a, b) => b.score - a.score);
+                  const recommended = scored.filter(c => c.exact || c.sim >= 0.34 || c.score >= 60).slice(0, 5);
+                  const recIds = new Set(recommended.map(c => c.r.id));
+                  const candidates = scored.filter(c => !recIds.has(c.r.id)).slice(0, 50);
+                  // Привязка с несовпадающей суммой — с пометкой: оставить или отвязать
+                  const linkWithCheck = async (receipt, exact, diff) => {
+                    if (!exact) {
+                      const ok = window.confirm(`⚠ Сумма НЕ совпадает:\nплатёж ${formatAmount(mvAmt, 'EUR')} ≠ фактура ${formatAmount(receipt.total_amount, receipt.currency || 'EUR')}\nразница Δ ${formatAmount(diff, 'EUR')}\n\nПривязать с пометкой о разнице? (OK — оставить привязку, Отмена — не привязывать)`);
+                      if (!ok) return;
+                    }
+                    await linkMovement(linkPicker.id, receipt.id);
+                  };
+                  const rowOf = ({ r, exact, sim, diff }) => (
+                    <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 8px', borderRadius: 8, marginBottom: 4, background: exact ? '#e4f7e9' : '#fafafa', border: exact ? '1px solid #27ae60' : '1px solid #eee' }}>
+                      <span style={{ flex: '1 1 auto', minWidth: 0, overflowWrap: 'break-word', fontSize: 14 }}>
+                        <b>{r.store_name || r.store_name_ru || 'Без названия'}</b>
+                        {exact && <span style={{ marginLeft: 6, fontSize: 11, color: '#27ae60', fontWeight: 700 }}>сумма совпадает</span>}
+                        {!exact && <span style={{ marginLeft: 6, fontSize: 11, color: '#e67e22', fontWeight: 700 }}>Δ {formatAmount(diff, 'EUR')}</span>}
+                        {sim >= 0.34 && <span style={{ marginLeft: 6, fontSize: 11, color: '#2471a3', fontWeight: 700 }}>похоже по названию</span>}
+                        <span style={{ marginLeft: 8, fontSize: 12, color: '#7f8c8d' }}>{formatDate(r.receipt_date)}</span>
+                        {r.payment_status && PAYMENT_STATUS_META[r.payment_status] && (
+                          <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: PAYMENT_STATUS_META[r.payment_status].color }}>{PAYMENT_STATUS_META[r.payment_status].short} {PAYMENT_STATUS_META[r.payment_status].label}</span>
+                        )}
+                      </span>
+                      <span style={{ flex: '0 0 auto', fontWeight: 700, fontSize: 13 }}>{formatAmount(r.total_amount, r.currency || 'EUR')}</span>
+                      <button disabled={linkSaving} onClick={() => linkWithCheck(r, exact, diff)} style={{ flex: '0 0 auto', border: 'none', background: exact ? '#27ae60' : '#e67e22', color: '#fff', borderRadius: 8, padding: '5px 12px', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
+                        {linkSaving ? '…' : exact ? 'Привязать' : 'Привязать с Δ'}
+                      </button>
+                    </div>
+                  );
                   return (
                     <div className="modal-overlay" onClick={() => !linkSaving && setLinkPicker(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
                       <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 12, padding: 18, width: '100%', maxWidth: 560, maxHeight: '80vh', overflowY: 'auto' }}>
@@ -7854,22 +7897,15 @@ ${bodyHtml}
                           </div>
                         </div>
                         <input autoFocus value={linkSearch} onChange={e => setLinkSearch(e.target.value)} placeholder="Поиск фактуры: название, поставщик, № фактуры, сумма…" style={{ width: '100%', boxSizing: 'border-box', padding: '7px 10px', borderRadius: 6, border: '1px solid #ddd', marginBottom: 10 }} />
-                        {candidates.length === 0 && <p style={{ color: '#95a5a6' }}>Фактуры не найдены.</p>}
-                        {candidates.map(({ r, exact }) => (
-                          <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 8px', borderRadius: 8, marginBottom: 4, background: exact ? '#e4e4e8' : '#fafafa', border: exact ? '1px solid #8e8e93' : '1px solid #eee' }}>
-                            <span style={{ flex: '1 1 auto', minWidth: 0, overflowWrap: 'break-word', fontSize: 14 }}>
-                              <b>{r.store_name || r.store_name_ru || 'Без названия'}</b>{exact && <span style={{ marginLeft: 6, fontSize: 11, color: '#27ae60', fontWeight: 700 }}>сумма совпадает</span>}
-                              <span style={{ marginLeft: 8, fontSize: 12, color: '#7f8c8d' }}>{formatDate(r.receipt_date)}</span>
-                              {r.payment_status && PAYMENT_STATUS_META[r.payment_status] && (
-                                <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700, color: PAYMENT_STATUS_META[r.payment_status].color }}>{PAYMENT_STATUS_META[r.payment_status].short} {PAYMENT_STATUS_META[r.payment_status].label}</span>
-                              )}
-                            </span>
-                            <span style={{ flex: '0 0 auto', fontWeight: 700, fontSize: 13 }}>{formatAmount(r.total_amount, r.currency || 'EUR')}</span>
-                            <button disabled={linkSaving} onClick={() => linkMovement(linkPicker.id, r.id)} style={{ flex: '0 0 auto', border: 'none', background: '#27ae60', color: '#fff', borderRadius: 8, padding: '5px 12px', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>
-                              {linkSaving ? '…' : 'Привязать'}
-                            </button>
+                        {recommended.length > 0 && (
+                          <div style={{ border: '1px solid #f0c36d', background: '#fffaf0', borderRadius: 10, padding: '8px 8px 2px', marginBottom: 10 }}>
+                            <div style={{ fontSize: 12, fontWeight: 800, color: '#b9770e', marginBottom: 6 }}>⭐ Рекомендации — по названию и по сумме:</div>
+                            {recommended.map(rowOf)}
                           </div>
-                        ))}
+                        )}
+                        {candidates.length === 0 && recommended.length === 0 && <p style={{ color: '#95a5a6' }}>Фактуры не найдены.</p>}
+                        {candidates.length > 0 && <div style={{ fontSize: 12, color: '#8e8e93', margin: '4px 0 6px' }}>Все фактуры:</div>}
+                        {candidates.map(rowOf)}
                         <button onClick={() => setLinkPicker(null)} disabled={linkSaving} style={{ marginTop: 10, width: '100%', padding: '8px', borderRadius: 8, border: '1px solid #ddd', background: '#fff', cursor: 'pointer' }}>Отмена</button>
                       </div>
                     </div>
@@ -8252,7 +8288,19 @@ ${bodyHtml}
                       style={{ flex: '1 1 220px', cursor: 'pointer', color: '#0071e3', borderBottom: '1px dashed #0071e3' }}>{m.counterparty || m.concept || '—'}</span>
                     <span style={{ minWidth: 100, textAlign: 'right', fontWeight: 700, color: '#c0392b' }}>{formatAmount(Math.abs(Number(m.amount)), 'EUR')}</span>
                     {linked
-                      ? <button onClick={() => openReceiptById(linked.id)} style={{ fontSize: 12, border: '1px solid #27ae60', color: '#1e8449', background: '#eafaf1', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>🔗 {(linked.store_name || 'фактура')} · {formatAmount(linked.total_amount, linked.currency || 'EUR')}</button>
+                      ? (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <button onClick={() => openReceiptById(linked.id)} style={{ fontSize: 12, border: '1px solid #27ae60', color: '#1e8449', background: '#eafaf1', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>🔗 {(linked.store_name || 'фактура')} · {formatAmount(linked.total_amount, linked.currency || 'EUR')}</button>
+                          {Math.abs(Math.abs(Number(linked.total_amount) || 0) - Math.abs(Number(m.amount) || 0)) >= 0.01 && (
+                            <span title={`Сумма фактуры отличается от платежа на ${formatAmount(Math.abs(Math.abs(Number(linked.total_amount) || 0) - Math.abs(Number(m.amount) || 0)), 'EUR')} — проверьте привязку`}
+                              style={{ fontSize: 11, fontWeight: 800, color: '#e67e22', border: '1px solid #e67e22', borderRadius: 999, padding: '1px 7px', background: '#fdf2e3' }}>
+                              Δ не совпадает
+                            </span>
+                          )}
+                          <button onClick={() => { if (window.confirm('Отвязать платёж от этой фактуры?')) unlinkMovement(m.id); }} title="Отвязать платёж от фактуры"
+                            style={{ fontSize: 11, border: '1px solid #e74c3c', color: '#e74c3c', background: '#fff', borderRadius: 6, padding: '3px 7px', cursor: 'pointer' }}>✖</button>
+                        </span>
+                      )
                       : <span style={{ fontSize: 12, color: '#b2babb' }}>не привязан</span>}
                   </div>
                 );
