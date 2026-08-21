@@ -4424,6 +4424,24 @@ function App() {
     }
   };
 
+  // v67.9: переход во вкладку «Налоги» к конкретной строке платежа (подсветка + прокрутка)
+  const gotoTaxesMovement = (mvId, opDate) => {
+    if (!mvId) return;
+    if (opDate && /^\d{4}-\d{2}-\d{2}/.test(opDate)) {
+      const y = opDate.slice(0, 4);
+      const q = Math.floor((parseInt(opDate.slice(5, 7), 10) - 1) / 3) + 1;
+      setTaxQFrom(`${y}-${q}T`); setTaxQTo(`${y}-${q}T`);
+    }
+    setQBankChip(null); setQCpSearch(''); setQSelFilter('all');
+    setHlMvtId(String(mvId));
+    setActiveTab('taxes');
+    setTimeout(() => {
+      const el = document.getElementById(`mvt-row-${mvId}`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 700);
+    setTimeout(() => setHlMvtId(null), 8000);
+  };
+
   // v67.7: добавить фактуру в выписку банка — создаётся платёжное движение, сразу привязанное к фактуре
   const addReceiptToBank = async (receipt) => {
     if (!receipt) return;
@@ -6889,7 +6907,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v67.8 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v67.9 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7381,6 +7399,10 @@ ${bodyHtml}
                   // Δ имеет смысл только для документов со строками товаров (чек/фактура/счёт);
                   // у договоров, полисов и выписок суммы нет строк — Δ не показываем
                   const hasDiff = diff > 0.01 && ['receipt', 'invoice', 'bill'].includes(receipt.document_type || 'receipt');
+                  // v67.9: привязка к банку — платежи выписки, привязанные к этой фактуре
+                  const bankLinks = bankMovements.filter(mv => String(mv.matched_receipt_id || '') === String(receipt.id));
+                  const bankPaidSum = bankLinks.reduce((a, mv) => a + Math.abs(Number(mv.amount) || 0), 0);
+                  const bankLastDate = bankLinks.map(mv => mv.operation_date).filter(Boolean).sort().pop() || null;
                   // Заголовок группы, когда меняется год-месяц
                   const gk = groupKeyOf(receipt);
                   const prevGk = idx > 0 ? groupKeyOf(paginatedReceipts[idx - 1]) : null;
@@ -7442,6 +7464,16 @@ ${bodyHtml}
                         {formatAmount(receipt.total_amount, receipt.currency)}
                         {hasDiff && <span style={{ fontSize: 12, color: '#e74c3c', marginLeft: 6 }}>(Δ {diff})</span>}
                       </p>
+                      {/* v67.9: метка привязки к банку — клик открывает «Налоги» на строке платежа */}
+                      {bankLinks.length > 0 && (
+                        <p style={{ margin: '2px 0' }}>
+                          <span onClick={() => gotoTaxesMovement(bankLinks[0].id, bankLinks[0].operation_date)}
+                            title={`Привязан к выписке: оплачено ${formatAmount(bankPaidSum, 'EUR')} по ${bankLinks.length} плат.${bankLastDate ? ', последний ' + formatDate(bankLastDate) : ''} — нажмите, чтобы перейти в «Налоги» к платежу`}
+                            style={{ display: 'inline-block', fontSize: 11.5, fontWeight: 700, color: '#1d4ed8', background: '#eef4ff', border: '1px solid #1d4ed8', borderRadius: 10, padding: '2px 9px', cursor: 'pointer' }}>
+                            🏦 привязан к банку · {formatAmount(bankPaidSum, 'EUR')}{bankLinks.length > 1 ? ` · ${bankLinks.length} плат.` : ''}{bankLastDate ? ` · ${formatDate(bankLastDate)}` : ''}
+                          </span>
+                        </p>
+                      )}
                       <p className="items-count"> {receipt.items?.length || 0} товаров</p>
                       {receipt.object && (
                         <p style={{ fontSize: 12, color: '#7f8c8d', margin: '4px 0' }}>
