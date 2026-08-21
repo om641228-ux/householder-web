@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v67.2-2026-08-21', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v67.7-2026-08-21', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -5027,6 +5027,47 @@ app.post('/api/link-bank-movement', requireAuth, async (req, res) => {
     if (mv.matched_receipt_id && mv.matched_receipt_id !== receipt_id) await recomputeReceiptPayment(mv.matched_receipt_id);
     await recomputeReceiptPayment(receipt_id);
     res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: withDbSchemaHint(e.message) });
+  }
+});
+
+// v67.7: ручное добавление фактуры в выписку банка (из карточки фактуры).
+// Создаёт платёжное движение (amount<0) и СРАЗУ привязывает его к фактуре.
+// Поддерживает разбитую оплату: можно добавить несколько платежей к одной фактуре.
+app.post('/api/bank-movements/manual', requireAuth, async (req, res) => {
+  try {
+    const { receipt_id, operation_date, amount, counterparty, concept } = req.body || {};
+    if (!receipt_id) return res.status(400).json({ error: 'Нужен receipt_id' });
+    const amt = Math.abs(Number(amount));
+    if (!isFinite(amt) || amt <= 0) return res.status(400).json({ error: 'Некорректная сумма' });
+    const opDate = String(operation_date || '').slice(0, 10) || new Date().toISOString().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(opDate)) return res.status(400).json({ error: 'Дата в формате ГГГГ-ММ-ДД' });
+    const { data: rc } = await supabaseAdmin.from('receipts')
+      .select('id, store_name, store_name_ru, provider, total_amount, invoice_number').eq('id', receipt_id).single();
+    if (!rc) return res.status(404).json({ error: 'Фактура не найдена' });
+    const row = {
+      owner_id: req.user?.id || null,
+      iban: null,
+      account_name: 'Ручное добавление',
+      operation_date: opDate,
+      value_date: opDate,
+      prefix: 'manual',
+      concept: concept || `Оплата фактуры ${rc.invoice_number || ''} ${rc.store_name || ''}`.trim(),
+      counterparty: (counterparty || rc.store_name || rc.provider || '').slice(0, 120) || null,
+      amount: -amt,
+      balance: null,
+      entry_number: null,
+      import_batch: null,
+      matched_receipt_id: receipt_id,
+      match_status: 'manual',
+      match_score: 100,
+      matched_at: new Date().toISOString()
+    };
+    const { data: ins, error } = await supabaseAdmin.from('bank_movements').insert(row).select('id').single();
+    if (error) throw error;
+    await recomputeReceiptPayment(receipt_id);
+    res.json({ success: true, movement_id: ins.id });
   } catch (e) {
     res.status(500).json({ error: withDbSchemaHint(e.message) });
   }

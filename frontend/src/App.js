@@ -4424,6 +4424,34 @@ function App() {
     }
   };
 
+  // v67.7: добавить фактуру в выписку банка — создаётся платёжное движение, сразу привязанное к фактуре
+  const addReceiptToBank = async (receipt) => {
+    if (!receipt) return;
+    const defAmt = Math.abs(Number(receipt.total_amount) || 0);
+    const amtStr = window.prompt(`Сумма платежа по фактуре «${receipt.store_name || 'Без названия'}», EUR:`, defAmt ? defAmt.toFixed(2) : '');
+    if (amtStr == null) return;
+    const amt = Math.abs(Number(String(amtStr).replace(/\s/g, '').replace(',', '.')));
+    if (!isFinite(amt) || amt <= 0) { alert('Некорректная сумма'); return; }
+    const defDate = receipt.receipt_date || new Date().toISOString().slice(0, 10);
+    const dateStr = window.prompt('Дата платежа (ГГГГ-ММ-ДД):', defDate);
+    if (dateStr == null) return;
+    const opDate = dateStr.trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(opDate)) { alert('Дата в формате ГГГГ-ММ-ДД'); return; }
+    try {
+      const res = await fetch(`${API_URL}/api/bank-movements/manual?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ receipt_id: receipt.id, operation_date: opDate, amount: amt, counterparty: receipt.store_name || receipt.provider || '' })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      await loadBankMovements();
+      await loadReceipts();
+      alert(`🏦 Платёж ${formatAmount(amt, 'EUR')} добавлен в выписку и привязан к фактуре.\nОн появится во вкладках «Анализ» и «Налоги».`);
+    } catch (e) {
+      alert('Не удалось добавить в выписку: ' + e.message);
+    }
+  };
+
   const bulkChangePaymentStatus = async (value) => {
     if (selectedReceiptIds.size === 0) return;
     const v = value === '__clear' ? null : (value || null); // __clear — пункт «Очистить статус»
@@ -6469,6 +6497,11 @@ ${bodyHtml}
                         <option value="">— не указан —</option>
                         {Object.entries(PAYMENT_STATUS_META).map(([v, m]) => <option key={v} value={v}>{m.label}</option>)}
                       </select>
+                      {/* v67.7: добавить эту фактуру в выписку банка (ручной платёж с привязкой) */}
+                      <button onClick={() => addReceiptToBank(r)} title="Добавить платёж по этой фактуре в выписку банка (вкладки «Анализ»/«Налоги») — движение создаётся уже привязанным"
+                        style={{ marginLeft: 8, padding: '3px 10px', borderRadius: 10, border: '1px solid #1d4ed8', background: '#eef4ff', color: '#1d4ed8', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>
+                        🏦 В выписку
+                      </button>
                     </p>
                   );
                   const paidNode = r.paid_date ? (
@@ -6841,7 +6874,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v67.5 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v67.7 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7991,7 +8024,23 @@ ${bodyHtml}
         const qCpList = [...new Set(qOut.map(m => String(m.counterparty || m.concept || '').trim()).filter(Boolean))]
           .sort((a, b) => qCpSortAsc ? a.localeCompare(b, 'es', { sensitivity: 'base' }) : b.localeCompare(a, 'es', { sensitivity: 'base' }));
         let qOutVis = qOutSlot.filter(m => {
-          if (qCpQ && !String(m.counterparty || m.concept || '').toLowerCase().includes(qCpQ)) return false;
+          if (qCpQ) {
+            // v67.6: поиск по всем столбцам — контрагент, концепт, дата, сумма, привязанная фактура
+            const linked = m.matched_receipt_id ? receipts.find(r => String(r.id) === String(m.matched_receipt_id)) : null;
+            const amt = Math.abs(Number(m.amount) || 0);
+            const hay = [
+              m.counterparty, m.concept,
+              m.operation_date, m.operation_date ? formatDate(m.operation_date) : '',
+              String(amt), amt.toFixed(2), formatAmount(amt, 'EUR'),
+              linked ? (linked.store_name || '') : '', linked ? (linked.store_name_ru || '') : '',
+              linked ? (linked.provider || '') : '', linked ? String(linked.total_amount || '') : '',
+              linked && linked.invoice_number ? String(linked.invoice_number) : '',
+              autoDeductOf(m) ? 'налог авто-вычет autodeducir' : '',
+              m.has_invoice ? 'есть фактура в расходах' : ''
+            ].join(' ').toLowerCase().replace(/[\s.,\u00a0]+/g, ' ');
+            const needle = qCpQ.replace(/[\s.,\u00a0]+/g, ' ');
+            if (!hay.includes(needle)) return false;
+          }
           if (qDateFilter.trim() && !String(m.operation_date || '').includes(qDateFilter.trim())) return false;
           const amt = Math.abs(Number(m.amount) || 0);
           if (!Number.isNaN(qAmtMinN) && qAmtMin !== '' && amt < qAmtMinN) return false;
@@ -8281,7 +8330,7 @@ ${bodyHtml}
                   <option value="">⇅ контрагент {qCpSortAsc ? 'А–Я' : 'Я–А'} ({qCpList.length})</option>
                   {qCpList.map(cp => <option key={cp} value={cp}>{cp}</option>)}
                 </select>
-                <input value={qCpSearch} onChange={e => setQCpSearch(e.target.value)} placeholder="🔍 Фильтр по контрагенту… (или кликните по нему в строке)"
+                <input value={qCpSearch} onChange={e => setQCpSearch(e.target.value)} placeholder="🔍 Поиск по всем столбцам: контрагент, дата, сумма, фактура…"
                   style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13, flex: '1 1 220px', maxWidth: 340 }} />
                 {qCpSearch && (
                   <button onClick={() => setQCpSearch('')} title="Сбросить фильтр"
