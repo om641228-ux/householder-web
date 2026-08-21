@@ -1036,6 +1036,18 @@ function DocsTab({ user, token }) {
     setHiddenFolders(prev => ({ ...prev, [docSection]: [...new Set([...(prev[docSection] || []), fn])] }));
   };
 
+  // v66: переименование папки из структуры загрузки (item.path) — через префикс пути
+  const renameDocsSubfolder = async (fn) => {
+    const full = curDocPath ? curDocPath + '/' + fn : fn;
+    const to = (window.prompt(`Переименовать папку «${fn}» в:`, fn) || '').trim().slice(0, 60).replace(/^\/+|\/+$/g, '');
+    if (!to || to === fn) return;
+    const fullTo = curDocPath ? curDocPath + '/' + to : to;
+    try {
+      await docsFolderOp({ pathRename: { from: full, to: fullTo } });
+      if (curDocPath) setDocPath(prev => ({ ...prev, [docSection]: curDocPath }));
+    } catch (e) { alert('Не переименовалось: ' + e.message); }
+  };
+
   // v59: мультивыбор — переместить в папку / удалить группой
   const selectedUrls = Object.keys(docsSelected).filter(u => docsSelected[u]);
   const moveSelectedDocs = async (folder) => {
@@ -1298,10 +1310,14 @@ function DocsTab({ user, token }) {
               </span>
             ))}
             {subFolders.map(fn => (
-              <button key={fn} onClick={() => setDocPath(prev => ({ ...prev, [docSection]: curDocPath ? curDocPath + '/' + fn : fn }))}
-                style={{ padding: '5px 12px', borderRadius: 10, border: '1px solid #d0d0d5', background: '#f5f5f7', color: '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer' }}>
-                📁 {fn} ({seenSub[fn]})
-              </button>
+              <span key={fn} style={{ display: 'inline-flex', alignItems: 'center' }}>
+                <button onClick={() => setDocPath(prev => ({ ...prev, [docSection]: curDocPath ? curDocPath + '/' + fn : fn }))}
+                  style={{ padding: '5px 12px', borderRadius: 10, border: '1px solid #d0d0d5', background: '#f5f5f7', color: '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer' }}>
+                  📁 {fn} ({seenSub[fn]})
+                </button>
+                <button onClick={() => renameDocsSubfolder(fn)} title={`Переименовать папку «${fn}» (все файлы внутри сохранят структуру)`}
+                  style={{ marginLeft: 2, width: 20, height: 20, borderRadius: '50%', border: '1px solid #d0d0d5', background: '#fff', color: '#1d1d1f', fontSize: 10, cursor: 'pointer', padding: 0, lineHeight: '18px' }}>✎</button>
+              </span>
             ))}
           </div>
         )}
@@ -6732,7 +6748,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v65.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v66 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

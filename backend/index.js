@@ -4167,6 +4167,23 @@ app.patch('/api/docs/:category/files', requireAuth, async (req, res) => {
         return o;
       });
       if (!cnt) return res.status(404).json({ error: 'Файлы не найдены в разделе' });
+    } else if (body.pathRename && typeof body.pathRename.from === 'string') {
+      // v66: переименование папки внутри загруженной СТРУКТУРЫ (item.path): префикс from → to
+      const from = body.pathRename.from.trim().slice(0, 200).replace(/^\/+|\/+$/g, '');
+      const to = String(body.pathRename.to || '').trim().slice(0, 200).replace(/^\/+|\/+$/g, '');
+      if (!from || !to) return res.status(400).json({ error: 'Передайте pathRename {from, to}' });
+      if (from === to) return res.status(400).json({ error: 'Имя не изменилось' });
+      let rcnt = 0;
+      next = cur.map(it => {
+        if (!objIt(it) || typeof it.path !== 'string') return it;
+        const ip = it.path.replace(/^\/+|\/+$/g, '');
+        if (ip === from || ip.startsWith(from + '/')) {
+          rcnt++;
+          return { ...it, path: to + ip.slice(from.length) };
+        }
+        return it;
+      });
+      if (!rcnt) return res.status(404).json({ error: 'Папка структуры не найдена' });
     } else if (body.folderRename && typeof body.folderRename.from === 'string') {
       // v59: переименование подпапки
       const from = body.folderRename.from.trim().slice(0, 40);

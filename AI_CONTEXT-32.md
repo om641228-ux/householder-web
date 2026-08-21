@@ -1739,3 +1739,9 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Фильтр «выбранные/не выбранные» проверен: работает по галке ВЫБОРА (при активном варианте — по членству в нём), не по галке «есть фактура».
 - Метка · v65.1 ·. Backend не тронут. esbuild OK; eslint — 3 прежних warning.
 - Деплой: householder-web.
+
+## v66 — переименование папок структуры (item.path)
+- Папки, пришедшие из загрузки папкой (v57.9, item.path — напр. «Новая папка», «1», «2»), раньше не переименовывались (✎ был только у folder-полей).
+- Backend: PATCH /api/docs/:category/files — новая ветка {pathRename:{from,to}}: префикс пути from→to у всех items (path === from или startsWith(from + '/')), 404 если не найдена. Ответ через fixDocsAttachments.
+- Frontend: renameDocsSubfolder(fn) — полный путь = curDocPath + '/' + fn; кнопка ✎ у каждого чипа подпапки в строке навигации.
+- Метка App.js · v66 ·. Деплой: householder-web И householder-api (backend менялся!).
