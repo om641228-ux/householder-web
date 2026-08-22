@@ -1405,57 +1405,54 @@ function DocsTab({ user, token }) {
         ))}
       </div>
       {(
-        <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-          <span style={{ fontSize: 12, color: '#8e8e93', marginRight: 2 }}>Папка:</span>
-          <button onClick={createDocsFolder} title="Создать новую папку"
-            style={{ padding: '5px 12px', borderRadius: 980, border: '1px dashed #0071e3', background: '#fff', color: '#0071e3', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>＋ Папка</button>
-          {['All', ...topFoldersAll].map(fn => {
-            const cnt = fn === 'All' ? allItems.length : treeCountOf(fn);
-            const on = fn === 'All' ? !curDocPath : (curDocPath === fn || curDocPath.startsWith(fn + '/'));
+        <div style={{ marginBottom: 12 }}>
+          {/* v69.3: ДЕРЕВО папок — вложенные выводятся ПОД основной папкой с отступом */}
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: topFoldersAll.length ? 6 : 0 }}>
+            <span style={{ fontSize: 12, color: '#8e8e93', marginRight: 2 }}>Папка:</span>
+            <button onClick={createDocsFolder} title="Создать новую папку (внутри открытой — вложенную)"
+              style={{ padding: '5px 12px', borderRadius: 980, border: '1px dashed #0071e3', background: '#fff', color: '#0071e3', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>＋ Папка</button>
+            <button className={!curDocPath ? 'docs-active-tab' : ''} onClick={() => { setDocFolder(prev => ({ ...prev, [docSection]: 'All' })); setDocPath(prev => ({ ...prev, [docSection]: '' })); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
+              style={{ padding: '5px 14px', borderRadius: 980, border: !curDocPath ? '2px solid #0071e3' : '1px solid #d0d0d5', background: !curDocPath ? '#0071e3' : '#fff', color: !curDocPath ? '#fff' : '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer', boxShadow: !curDocPath ? '0 2px 8px rgba(0,113,227,0.35)' : 'none' }}>
+              🗂 Все ({allItems.length})
+            </button>
+          </div>
+          {topFoldersAll.map(fn => {
+            const on = curDocPath === fn || curDocPath.startsWith(fn + '/');
+            const isFolderField = dynFolders.includes(fn);
             return (
-              <span key={fn} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
-                <button className={on ? 'docs-active-tab' : ''} onClick={() => { setDocFolder(prev => ({ ...prev, [docSection]: 'All' })); setDocPath(prev => ({ ...prev, [docSection]: fn === 'All' ? '' : fn })); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
-                  style={{ padding: '5px 14px', borderRadius: 980, border: on ? '2px solid #0071e3' : '1px solid #d0d0d5', background: on ? '#0071e3' : '#fff', color: on ? '#fff' : '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer', boxShadow: on ? '0 2px 8px rgba(0,113,227,0.35)' : 'none' }}>
-                  {fn === 'All' ? '🗂 Все' : `📁 ${fn}`} ({cnt})
-                </button>
-                {fn !== 'All' && !dynFolders.includes(fn) && topTreeFolders.includes(fn) && (
-                  <React.Fragment>
-                    <button onClick={() => renameTreeFolder(fn)} title={`Переименовать папку «${fn}»`}
-                      style={{ marginLeft: 2, width: 20, height: 20, borderRadius: '50%', border: '1px solid #d0d0d5', background: '#fff', color: '#1d1d1f', fontSize: 10, cursor: 'pointer', padding: 0, lineHeight: '18px' }}>✎</button>
-                    <button onClick={() => deleteTreeFolder(fn)} title={`Удалить папку «${fn}» (файлы поднимутся в корень)`}
-                      style={{ marginLeft: 2, width: 20, height: 20, borderRadius: '50%', border: '1px solid #d0d0d5', background: '#fff', color: '#e74c3c', fontSize: 10, cursor: 'pointer', padding: 0, lineHeight: '18px' }}>✕</button>
-                  </React.Fragment>
-                )}
-                {fn !== 'All' && dynFolders.includes(fn) && (
-                  <React.Fragment>
-                    <button onClick={() => renameDocsFolder(fn)} title={`Переименовать папку «${fn}»`}
-                      style={{ marginLeft: 2, width: 20, height: 20, borderRadius: '50%', border: '1px solid #d0d0d5', background: '#fff', color: '#1d1d1f', fontSize: 10, cursor: 'pointer', padding: 0, lineHeight: '18px' }}>✎</button>
-                    <button onClick={() => deleteDocsFolder(fn)} title={`Удалить папку «${fn}» (файлы останутся)`}
-                      style={{ marginLeft: 2, width: 20, height: 20, borderRadius: '50%', border: '1px solid #d0d0d5', background: '#fff', color: '#e74c3c', fontSize: 10, cursor: 'pointer', padding: 0, lineHeight: '18px' }}>✕</button>
-                  </React.Fragment>
-                )}
-                {fn !== 'All' && treeDescendantsOf(fn).map(rel => {
+              <div key={fn} style={{ marginBottom: 2 }}>
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <button className={on ? 'docs-active-tab' : ''} onClick={() => { setDocFolder(prev => ({ ...prev, [docSection]: 'All' })); setDocPath(prev => ({ ...prev, [docSection]: fn })); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
+                    style={{ padding: '5px 14px', borderRadius: 980, border: on ? '2px solid #0071e3' : '1px solid #d0d0d5', background: on ? '#0071e3' : '#fff', color: on ? '#fff' : '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer', boxShadow: on ? '0 2px 8px rgba(0,113,227,0.35)' : 'none' }}>
+                    📁 {fn} ({treeCountOf(fn)})
+                  </button>
+                  <button onClick={() => isFolderField ? renameDocsFolder(fn) : renameTreeFolder(fn)} title={`Переименовать папку «${fn}»`}
+                    style={{ width: 20, height: 20, borderRadius: '50%', border: '1px solid #d0d0d5', background: '#fff', color: '#1d1d1f', fontSize: 10, cursor: 'pointer', padding: 0, lineHeight: '18px' }}>✎</button>
+                  <button onClick={() => isFolderField ? deleteDocsFolder(fn) : deleteTreeFolder(fn)} title={`Удалить папку «${fn}» (файлы НЕ удалятся)`}
+                    style={{ width: 20, height: 20, borderRadius: '50%', border: '1px solid #d0d0d5', background: '#fff', color: '#e74c3c', fontSize: 10, cursor: 'pointer', padding: 0, lineHeight: '18px' }}>✕</button>
+                </div>
+                {treeDescendantsOf(fn).map(rel => {
                   const full = fn + '/' + rel;
                   const parentName = full.split('/').slice(0, -1).join('/');
                   const short = rel.split('/').pop();
                   const depth = rel.split('/').length;
                   const con = curDocPath === full || curDocPath.startsWith(full + '/');
                   return (
-                    <span key={`tree-${full}`} style={{ display: 'inline-flex', alignItems: 'center' }}>
+                    <div key={`tree-${full}`} style={{ display: 'flex', gap: 4, alignItems: 'center', paddingLeft: 14 + Math.min(depth - 1, 4) * 22, marginTop: 3, borderLeft: '2px solid #e3e6ea', marginLeft: 10 }}>
                       <button className={con ? 'docs-active-tab' : ''}
                         onClick={() => { setDocFolder(prev => ({ ...prev, [docSection]: 'All' })); setDocPath(prev => ({ ...prev, [docSection]: full })); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
                         title={`Вложенная папка «${full}» — файлов: ${treeCountOf(full)}`}
-                        style={{ marginLeft: 4, padding: '4px 12px', borderRadius: 980, border: con ? '2px solid #0071e3' : '1px dashed #b9b9bf', background: con ? '#0071e3' : '#f5f5f7', color: con ? '#fff' : '#3a3a3c', fontWeight: 600, fontSize: 11.5, cursor: 'pointer' }}>
-                        {'↳'.repeat(Math.min(depth, 3))} {short} <span style={{ fontSize: 9, fontWeight: 500, color: con ? '#d4e7ff' : '#8e8e93' }}>вложенная в {parentName}</span> ({treeCountOf(full)})
+                        style={{ padding: '3px 12px', borderRadius: 980, border: con ? '2px solid #0071e3' : '1px dashed #b9b9bf', background: con ? '#0071e3' : '#f5f5f7', color: con ? '#fff' : '#3a3a3c', fontWeight: 600, fontSize: 11.5, cursor: 'pointer' }}>
+                        ↳ 📁 {short} <span style={{ fontSize: 9, fontWeight: 500, color: con ? '#d4e7ff' : '#8e8e93' }}>вложенная в {parentName}</span> ({treeCountOf(full)})
                       </button>
                       <button onClick={() => renameTreeFolder(full)} title={`Переименовать «${full}»`}
-                        style={{ marginLeft: 2, width: 18, height: 18, borderRadius: '50%', border: '1px solid #d0d0d5', background: '#fff', color: '#1d1d1f', fontSize: 9, cursor: 'pointer', padding: 0, lineHeight: '16px' }}>✎</button>
+                        style={{ width: 18, height: 18, borderRadius: '50%', border: '1px solid #d0d0d5', background: '#fff', color: '#1d1d1f', fontSize: 9, cursor: 'pointer', padding: 0, lineHeight: '16px' }}>✎</button>
                       <button onClick={() => deleteTreeFolder(full)} title={`Удалить «${full}» (файлы поднимутся к родителю)`}
-                        style={{ marginLeft: 2, width: 18, height: 18, borderRadius: '50%', border: '1px solid #d0d0d5', background: '#fff', color: '#e74c3c', fontSize: 9, cursor: 'pointer', padding: 0, lineHeight: '16px' }}>✕</button>
-                    </span>
+                        style={{ width: 18, height: 18, borderRadius: '50%', border: '1px solid #d0d0d5', background: '#fff', color: '#e74c3c', fontSize: 9, cursor: 'pointer', padding: 0, lineHeight: '16px' }}>✕</button>
+                    </div>
                   );
                 })}
-              </span>
+              </div>
             );
           })}
         </div>
@@ -7385,7 +7382,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v69.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v69.3 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
