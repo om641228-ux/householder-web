@@ -928,7 +928,6 @@ function DocsTab({ user, token }) {
         return basePath ? (rel ? basePath + '/' + rel : basePath) : rel;
       });
       if (pathsArr.some(p => p)) fd.append('paths', JSON.stringify(pathsArr));
-      const beforeUrls = new Set((sections[cat] || []).map(it => docMediaOf(it).url));
       // v68.4: загрузка через XHR — проценты по байтам + возможность прервать (кнопка «Остановить»)
       setDocsUpload(prev => prev ? { ...prev, phase: 'upload', percent: 0, done: 0, currentFile: '' } : prev);
       const data = await new Promise((resolve, reject) => {
@@ -956,26 +955,8 @@ function DocsTab({ user, token }) {
       setDocsUpload(prev => prev ? { ...prev, percent: 100, done: files.length } : prev);
       setSections(prev => ({ ...prev, [cat]: data.attachments || [] }));
       setDocsError(null);
-      // v57.7: АВТО-распознавание загруженных фото/PDF — оригинал+перевод сохраняются в карточке файла
-      const fresh = (data.attachments || []).filter(it => {
-        const mm = docMediaOf(it);
-        return !beforeUrls.has(mm.url) && (mm.kind === 'photo' || mm.kind === 'doc');
-      });
-      if (fresh.length) setDocsUpload(prev => prev ? { ...prev, phase: 'ocr', percent: 0, done: 0, total: fresh.length, currentFile: '' } : prev);
-      for (let fi = 0; fi < fresh.length; fi++) {
-        if (docsStopRef.current) break;
-        const it = fresh[fi];
-        try {
-          const mm = docMediaOf(it);
-          setDocsUpload(prev => prev ? { ...prev, done: fi, currentFile: mm.name, percent: Math.round(fi / fresh.length * 100) } : prev);
-          const pages = await recognizeFilePages(mm);
-          const docDate = parseDocDateFromText((pages.pages || []).map(p => p.original || '').join('\n')); // v59
-          await saveDocOcr(cat, mm.url, pages.pages || pages, docDate);
-          setDocsUpload(prev => prev ? { ...prev, done: fi + 1, percent: Math.round((fi + 1) / fresh.length * 100) } : prev);
-          console.log(`Документы: текст «${mm.name}» распознан и сохранён (${(pages.pages || pages).length} стр.${docDate ? ', дата ' + docDate : ''})`);
-        } catch (e2) { console.error('Авто-распознавание пропущено:', e2.message); }
-      }
-      if (docsStopRef.current) console.log('Загрузка документов остановлена пользователем');
+      // v68.5: АВТО-распознавание при загрузке УБРАНО — файлы просто сохраняются на сервер.
+      // OCR/перевод запускается вручную из карточки файла (кнопка 📝 / recognizeFilePages + saveDocOcr).
     } catch (e) {
       if (e.message === 'ABORTED') console.log('Загрузка документов остановлена пользователем');
       else alert('Не загрузился файл: ' + e.message);
@@ -1379,13 +1360,10 @@ function DocsTab({ user, token }) {
             <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>
               {docsUpload.phase === 'prepare' && '⚙️ Подготовка файлов…'}
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
-              {docsUpload.phase === 'ocr' && '📝 Распознавание текста…'}
             </div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
-              {docsUpload.phase === 'ocr'
-                ? `Обработано ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`
-                : `Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
+              {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
             </div>
             {docsUpload.currentFile && (
               <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{docsUpload.currentFile}</div>
@@ -7159,7 +7137,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v68.4 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v68.5 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
