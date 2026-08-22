@@ -874,6 +874,15 @@ function DocsTab({ user, token }) {
   const [customFolders, setCustomFoldersRaw] = useState(() => {
     try { return JSON.parse(localStorage.getItem('docsCustomFolders') || '{}'); } catch (e) { return {}; }
   });
+  // v68.9.2: реестр пустых папок ДЕРЕВА (созданных вручную) — видны до первой загрузки файлов в них
+  const [customTree, setCustomTreeRaw] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('docsCustomTree') || '{}'); } catch (e) { return {}; }
+  });
+  const setCustomTree = (up) => setCustomTreeRaw(prev => {
+    const next = typeof up === 'function' ? up(prev) : up;
+    try { localStorage.setItem('docsCustomTree', JSON.stringify(next)); } catch (e) {}
+    return next;
+  });
   const setHiddenFolders = (up) => setHiddenFoldersRaw(prev => {
     const next = typeof up === 'function' ? up(prev) : up;
     try { localStorage.setItem('docsHiddenFolders', JSON.stringify(next)); } catch (e) {}
@@ -1059,6 +1068,15 @@ function DocsTab({ user, token }) {
   };
   // v68.6: создать пустую папку (реестр в localStorage) и сразу перейти в неё
   const createDocsFolder = () => {
+    // v68.9.2: если открыта ветка дерева (например Oleg) — папка создаётся ВНУТРИ неё
+    if (curDocPath) {
+      const nm = (window.prompt(`Новая подпапка в «${curDocPath}» (имя):`) || '').trim().slice(0, 60).replace(/^[\/]+|[\/]+$/g, '');
+      if (!nm) return;
+      const full = curDocPath + '/' + nm;
+      setCustomTree(prev => ({ ...prev, [docSection]: [...new Set([...(prev[docSection] || []), full])] }));
+      setDocPath(prev => ({ ...prev, [docSection]: full }));
+      return;
+    }
     const nm = (window.prompt('Имя новой папки:') || '').trim().slice(0, 40);
     if (!nm) return;
     if (dynFolders.includes(nm)) { alert(`Папка «${nm}» уже есть`); return; }
@@ -1262,6 +1280,18 @@ function DocsTab({ user, token }) {
     seenSub[first]++;
     return false;
   });
+  // v68.9.2: подпапки из реестра пустых папок дерева — видны сразу после создания
+  (customTree[docSection] || []).forEach(p => {
+    const q = String(p || '').replace(/^\/+|\/+$/g, '');
+    if (!q) return;
+    let rel = null;
+    if (curDocPath) {
+      if (q.startsWith(curDocPath + '/')) rel = q.slice(curDocPath.length + 1);
+    } else rel = q;
+    if (rel === null || rel === '' ) return;
+    const first = rel.split('/')[0];
+    if (!seenSub[first]) { seenSub[first] = 0; subFolders.push(first); }
+  });
   // v59: сортировка — по дате документа или по дате распознавания/загрузки
   const sortKeyOf = (it) => {
     const mm = docMediaOf(it);
@@ -1281,7 +1311,7 @@ function DocsTab({ user, token }) {
   // v68.7: все пути дерева структуры (item.path) — для перемещения в существующие папки дерева
   const allTreePaths = [...new Set(allItems.map(it => dirOfDocPath(docMediaOf(it).path)).filter(Boolean))].sort();
   // v68.9: папки дерева первого уровня — чипами в строке «Папка:» (единый вид во всех вкладках)
-  const topTreeFolders = [...new Set(allTreePaths.map(p => p.split('/')[0]))].sort();
+  const topTreeFolders = [...new Set([...allTreePaths, ...(customTree[docSection] || [])].map(p => String(p).replace(/^\/+|\/+$/g, '')).filter(Boolean).map(p => p.split('/')[0]))].sort();
   // v68.8: папки и деревья ДРУГИХ разделов — для перемещения между вкладками
   const dirOfPath = dirOfDocPath;
   const otherSections = DOC_SECTIONS.filter(sec => sec.key !== docSection).map(sec => {
@@ -1404,7 +1434,7 @@ function DocsTab({ user, token }) {
               <option value="__new">＋ Новая папка…</option>
               <option value="__none">🚫 Без папки</option>
               {allTreePaths.length > 0 && <option value="" disabled>── Дерево папок ──</option>}
-              {allTreePaths.map(tp => <option key={tp} value={`path::${tp}`}>🌳 {tp}</option>)}
+              {[...new Set([...allTreePaths, ...(customTree[docSection] || [])])].sort().map(tp => <option key={tp} value={`path::${tp}`}>🌳 {tp}</option>)}
               <option value="__newpath">🌳＋ Новая подпапка в текущей ветке…</option>
               {otherSections.map(os => (
                 <React.Fragment key={os.key}>
@@ -7276,7 +7306,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v68.9.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v68.9.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
