@@ -854,6 +854,9 @@ function DocsTab({ user, token }) {
   const [docSection, setDocSection] = useState('home');
   const [docsError, setDocsError] = useState(null);
   const [docsBusy, setDocsBusy] = useState(false);
+  const [docsUpload, setDocsUpload] = useState(null); // v68.4: {phase:'prepare'|'upload'|'ocr', percent, done, total, currentFile}
+  const docsXhrRef = useRef(null);   // v68.4: активный XHR — для кнопки «Остановить»
+  const docsStopRef = useRef(false); // v68.4: флаг остановки цикла распознавания
   const [docsViewer, setDocsViewer] = useState(null); // {url, kind, name}
   const [docsOcr, setDocsOcr] = useState(null); // v57.6: {loading} | {name, url, pageUrls[], pages[{original,russian}], idx, tab, saved}
   const [docFolder, setDocFolder] = useState({ home: 'All', auto: 'All', personal: 'All' }); // v57.7: выбранная подпапка
@@ -901,9 +904,14 @@ function DocsTab({ user, token }) {
     files = files.filter(f => f.size <= 500 * 1024 * 1024);
     if (!files.length) return;
     setDocsBusy(true);
+    docsStopRef.current = false;
+    setDocsUpload({ phase: 'prepare', percent: 0, done: 0, total: files.length, currentFile: '' });
     try {
       const prepared = [];
-      for (const f of files) {
+      for (let pi = 0; pi < files.length; pi++) {
+        if (docsStopRef.current) throw new Error('ABORTED');
+        const f = files[pi];
+        setDocsUpload(prev => prev ? { ...prev, currentFile: f.name, done: pi } : prev);
         if (docKindOf(f) === 'photo') { prepared.push(await compressImageFile(f)); continue; }
         prepared.push(f);
       }
@@ -921,11 +929,31 @@ function DocsTab({ user, token }) {
       });
       if (pathsArr.some(p => p)) fd.append('paths', JSON.stringify(pathsArr));
       const beforeUrls = new Set((sections[cat] || []).map(it => docMediaOf(it).url));
-      const res = await fetch(`${API_URL}/api/docs/${cat}/files?token=${token}`, { method: 'POST', body: fd });
-      const rawText = await res.text().catch(() => '');
-      let data = {};
-      try { data = JSON.parse(rawText); } catch (e) { data = {}; }
-      if (!res.ok) throw new Error(data.error || (rawText && rawText.length < 300 ? rawText : `HTTP ${res.status}`));
+      // v68.4: загрузка через XHR — проценты по байтам + возможность прервать (кнопка «Остановить»)
+      setDocsUpload(prev => prev ? { ...prev, phase: 'upload', percent: 0, done: 0, currentFile: '' } : prev);
+      const data = await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        docsXhrRef.current = xhr;
+        xhr.open('POST', `${API_URL}/api/docs/${cat}/files?token=${token}`);
+        xhr.upload.onprogress = (ev) => {
+          if (ev.lengthComputable) {
+            const pct = Math.min(100, Math.round(ev.loaded / ev.total * 100));
+            const estDone = Math.min(files.length, Math.floor(ev.loaded / ev.total * files.length));
+            setDocsUpload(prev => prev ? { ...prev, percent: pct, done: estDone } : prev);
+          }
+        };
+        xhr.onload = () => {
+          let d = {};
+          try { d = JSON.parse(xhr.responseText || '{}'); } catch (e) { d = {}; }
+          if (xhr.status >= 200 && xhr.status < 300) resolve(d);
+          else reject(new Error(d.error || (xhr.responseText && xhr.responseText.length < 300 ? xhr.responseText : `HTTP ${xhr.status}`)));
+        };
+        xhr.onerror = () => reject(new Error('сетевая ошибка'));
+        xhr.onabort = () => reject(new Error('ABORTED'));
+        xhr.send(fd);
+      });
+      docsXhrRef.current = null;
+      setDocsUpload(prev => prev ? { ...prev, percent: 100, done: files.length } : prev);
       setSections(prev => ({ ...prev, [cat]: data.attachments || [] }));
       setDocsError(null);
       // v57.7: АВТО-распознавание загруженных фото/PDF — оригинал+перевод сохраняются в карточке файла
@@ -933,18 +961,28 @@ function DocsTab({ user, token }) {
         const mm = docMediaOf(it);
         return !beforeUrls.has(mm.url) && (mm.kind === 'photo' || mm.kind === 'doc');
       });
-      for (const it of fresh) {
+      if (fresh.length) setDocsUpload(prev => prev ? { ...prev, phase: 'ocr', percent: 0, done: 0, total: fresh.length, currentFile: '' } : prev);
+      for (let fi = 0; fi < fresh.length; fi++) {
+        if (docsStopRef.current) break;
+        const it = fresh[fi];
         try {
           const mm = docMediaOf(it);
+          setDocsUpload(prev => prev ? { ...prev, done: fi, currentFile: mm.name, percent: Math.round(fi / fresh.length * 100) } : prev);
           const pages = await recognizeFilePages(mm);
           const docDate = parseDocDateFromText((pages.pages || []).map(p => p.original || '').join('\n')); // v59
           await saveDocOcr(cat, mm.url, pages.pages || pages, docDate);
+          setDocsUpload(prev => prev ? { ...prev, done: fi + 1, percent: Math.round((fi + 1) / fresh.length * 100) } : prev);
           console.log(`Документы: текст «${mm.name}» распознан и сохранён (${(pages.pages || pages).length} стр.${docDate ? ', дата ' + docDate : ''})`);
         } catch (e2) { console.error('Авто-распознавание пропущено:', e2.message); }
       }
+      if (docsStopRef.current) console.log('Загрузка документов остановлена пользователем');
     } catch (e) {
-      alert('Не загрузился файл: ' + e.message);
+      if (e.message === 'ABORTED') console.log('Загрузка документов остановлена пользователем');
+      else alert('Не загрузился файл: ' + e.message);
     } finally {
+      docsXhrRef.current = null;
+      docsStopRef.current = false;
+      setDocsUpload(null);
       setDocsBusy(false);
     }
   };
@@ -1334,6 +1372,34 @@ function DocsTab({ user, token }) {
           {items.length === 0 && subFolders.length === 0 && !docsBusy && <div style={{ fontSize: 13, color: '#8e8e93', alignSelf: 'center' }}>Файлов пока нет — нажмите 📎 (файлы) или 📂 (папку со структурой), чтобы загрузить.</div>}
         </div>
       </div>
+
+      {docsUpload && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: '#fff', borderRadius: 16, padding: '24px 28px', width: 'min(420px, 92vw)', boxShadow: '0 20px 60px rgba(0,0,0,0.35)', textAlign: 'center' }}>
+            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>
+              {docsUpload.phase === 'prepare' && '⚙️ Подготовка файлов…'}
+              {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
+              {docsUpload.phase === 'ocr' && '📝 Распознавание текста…'}
+            </div>
+            <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
+            <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
+              {docsUpload.phase === 'ocr'
+                ? `Обработано ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`
+                : `Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
+            </div>
+            {docsUpload.currentFile && (
+              <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{docsUpload.currentFile}</div>
+            )}
+            <div style={{ height: 10, borderRadius: 6, background: '#e8e8ed', overflow: 'hidden', margin: '10px 0 16px' }}>
+              <div style={{ height: '100%', width: `${docsUpload.percent}%`, borderRadius: 6, background: 'linear-gradient(90deg, #34c759, #0071e3)', transition: 'width 0.25s' }} />
+            </div>
+            <button onClick={() => { docsStopRef.current = true; if (docsXhrRef.current) { try { docsXhrRef.current.abort(); } catch (e) {} } }}
+              style={{ padding: '9px 22px', borderRadius: 980, border: 'none', background: '#ff3b30', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
+              ⏹ Остановить
+            </button>
+          </div>
+        </div>
+      )}
 
       {docsExcel && (
         <div onClick={() => { if (!docsExcel.loading) setDocsExcel(null); }} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', zIndex: 210, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -7093,7 +7159,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v68.3 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v68.4 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
