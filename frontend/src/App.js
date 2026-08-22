@@ -913,64 +913,102 @@ function DocsTab({ user, token }) {
     if (tooBig.length) alert(`Слишком большие файлы (максимум 500 МБ) — пропущены:\n${tooBig.map(f => `${f.name} — ${(f.size / 1024 / 1024).toFixed(0)} МБ`).join('\n')}`);
     files = files.filter(f => f.size <= 500 * 1024 * 1024);
     if (!files.length) return;
+    // v69.5: партии — чтобы сервер не держал весь объём в памяти (16+ ГБ одним запросом = падение)
+    const BATCH_MAX_FILES = 80;
+    const BATCH_MAX_BYTES = 280 * 1024 * 1024;
+    const totalBytes = Math.max(1, files.reduce((a, f) => a + f.size, 0));
+    const estBatches = Math.max(1, Math.ceil(files.length / BATCH_MAX_FILES), Math.ceil(totalBytes / BATCH_MAX_BYTES));
+    const curFolder = docFolder[cat] || 'All';
+    const basePath = (docPath[cat] || '').replace(/^\/+|\/+$/g, '');
+    const relOf = (f) => {
+      let rel = '';
+      if (f.webkitRelativePath) rel = f.webkitRelativePath.split('/').slice(1).join('/');
+      return String(rel || '').replace(/^\/+|\/+$/g, '').slice(0, 200);
+    };
     setDocsBusy(true);
     docsStopRef.current = false;
-    setDocsUpload({ phase: 'prepare', percent: 0, done: 0, total: files.length, currentFile: '' });
+    setDocsUpload({ phase: 'prepare', percent: 0, done: 0, total: files.length, currentFile: '', batch: 0, batches: estBatches });
+    let uploaded = 0;   // файлов уже СОХРАНЕНО на сервере (по завершённым партиям)
+    let bytesDone = 0;  // байты (исходные) завершённых партий — для общего процента
     try {
-      const prepared = [];
+      let batch = []; // [{orig, prep, rel}]
+      let batchOrigBytes = 0;
+      let batchNo = 0;
+      const flush = async () => {
+        if (!batch.length) return;
+        batchNo++;
+        const thisBatch = batch;
+        const thisBytes = Math.max(1, batchOrigBytes);
+        batch = []; batchOrigBytes = 0;
+        const fd = new FormData();
+        thisBatch.forEach(p => fd.append('files', p.prep));
+        if (curFolder !== 'All') fd.append('folder', curFolder); // v57.7: загрузка в выбранную подпапку
+        // v57.9: относительные пути (структура папки) — для файлов ЭТОЙ партии
+        const pathsArr = thisBatch.map(p => (basePath ? (p.rel ? basePath + '/' + p.rel : basePath) : p.rel));
+        if (pathsArr.some(p => p)) fd.append('paths', JSON.stringify(pathsArr));
+        const send = () => new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          docsXhrRef.current = xhr;
+          xhr.open('POST', `${API_URL}/api/docs/${cat}/files?token=${token}`);
+          xhr.upload.onprogress = (ev) => {
+            if (!ev.lengthComputable) return;
+            const frac = Math.min(1, ev.loaded / ev.total);
+            const overall = Math.min(100, Math.round((bytesDone + frac * thisBytes) / totalBytes * 100));
+            const estDone = Math.min(files.length, uploaded + Math.floor(frac * thisBatch.length));
+            // v68.5.1: байты партии ушли целиком → сервер сохраняет; обрывать НЕЛЬЗЯ
+            setDocsUpload(prev => prev ? { ...prev, percent: overall, done: estDone, batch: batchNo, phase: frac >= 1 ? 'save' : 'upload' } : prev);
+          };
+          xhr.onload = () => {
+            let d = {};
+            try { d = JSON.parse(xhr.responseText || '{}'); } catch (e) { d = {}; }
+            if (xhr.status >= 200 && xhr.status < 300) resolve(d);
+            else reject(new Error(d.error || (xhr.responseText && xhr.responseText.length < 300 ? xhr.responseText : `HTTP ${xhr.status}`)));
+          };
+          xhr.onerror = () => reject(new Error('сетевая ошибка'));
+          xhr.onabort = () => reject(new Error('ABORTED'));
+          xhr.send(fd);
+        });
+        // v69.5: одна автоматическая повторная попытка для сбойной партии (кроме ручной остановки)
+        let data = null;
+        let lastErr = null;
+        for (let attempt = 0; attempt < 2 && !data; attempt++) {
+          if (docsStopRef.current) throw new Error('ABORTED');
+          try { data = await send(); }
+          catch (e) {
+            if (e.message === 'ABORTED') throw e;
+            lastErr = e;
+            setDocsUpload(prev => prev ? { ...prev, phase: 'upload', currentFile: `⚠️ партия ${batchNo}: сбой — повторная попытка…` } : prev);
+            await new Promise(r => setTimeout(r, 2500));
+          }
+        }
+        docsXhrRef.current = null;
+        if (!data) throw new Error(`партия ${batchNo}: ${lastErr ? lastErr.message : 'не отправилась'}. Уже загружено и сохранено: ${uploaded} из ${files.length} — они НЕ потеряны.`);
+        uploaded += thisBatch.length;
+        bytesDone += thisBytes;
+        setDocsUpload(prev => prev ? { ...prev, percent: Math.min(100, Math.round(bytesDone / totalBytes * 100)), done: uploaded, batch: batchNo } : prev);
+        setSections(prev => ({ ...prev, [cat]: data.attachments || [] })); // файлы появляются по мере загрузки партий
+        setDocsError(null);
+      };
       for (let pi = 0; pi < files.length; pi++) {
         if (docsStopRef.current) throw new Error('ABORTED');
         const f = files[pi];
-        setDocsUpload(prev => prev ? { ...prev, currentFile: f.name, done: pi } : prev);
-        if (docKindOf(f) === 'photo') { prepared.push(await compressImageFile(f)); continue; }
-        prepared.push(f);
+        setDocsUpload(prev => prev ? { ...prev, phase: 'prepare', currentFile: f.name } : prev);
+        const prep = docKindOf(f) === 'photo' ? await compressImageFile(f) : f;
+        batch.push({ orig: f, prep, rel: relOf(f) });
+        batchOrigBytes += f.size;
+        if (batch.length >= BATCH_MAX_FILES || batchOrigBytes >= BATCH_MAX_BYTES) await flush();
       }
-      const fd = new FormData();
-      prepared.forEach(f => fd.append('files', f));
-      const curFolder = docFolder[cat] || 'All';
-      if (curFolder !== 'All') fd.append('folder', curFolder); // v57.7: загрузка в выбранную подпапку
-      // v57.9: относительные пути файлов (загрузка папки со структурой) — сохраняются в карточке как item.path
-      const basePath = (docPath[cat] || '').replace(/^\/+|\/+$/g, '');
-      const pathsArr = files.map(f => {
-        let rel = '';
-        if (f.webkitRelativePath) rel = f.webkitRelativePath.split('/').slice(1).join('/');
-        rel = String(rel || '').replace(/^\/+|\/+$/g, '').slice(0, 200);
-        return basePath ? (rel ? basePath + '/' + rel : basePath) : rel;
-      });
-      if (pathsArr.some(p => p)) fd.append('paths', JSON.stringify(pathsArr));
-      // v68.4: загрузка через XHR — проценты по байтам + возможность прервать (кнопка «Остановить»)
-      setDocsUpload(prev => prev ? { ...prev, phase: 'upload', percent: 0, done: 0, currentFile: '' } : prev);
-      const data = await new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        docsXhrRef.current = xhr;
-        xhr.open('POST', `${API_URL}/api/docs/${cat}/files?token=${token}`);
-        xhr.upload.onprogress = (ev) => {
-          if (ev.lengthComputable) {
-            const pct = Math.min(100, Math.round(ev.loaded / ev.total * 100));
-            const estDone = Math.min(files.length, Math.floor(ev.loaded / ev.total * files.length));
-            // v68.5.1: байты ушли целиком → сервер сохраняет файлы; обрывать запрос НЕЛЬЗЯ (файлы потеряются)
-            setDocsUpload(prev => prev ? { ...prev, percent: pct, done: estDone, phase: pct >= 100 ? 'save' : 'upload' } : prev);
-          }
-        };
-        xhr.onload = () => {
-          let d = {};
-          try { d = JSON.parse(xhr.responseText || '{}'); } catch (e) { d = {}; }
-          if (xhr.status >= 200 && xhr.status < 300) resolve(d);
-          else reject(new Error(d.error || (xhr.responseText && xhr.responseText.length < 300 ? xhr.responseText : `HTTP ${xhr.status}`)));
-        };
-        xhr.onerror = () => reject(new Error('сетевая ошибка'));
-        xhr.onabort = () => reject(new Error('ABORTED'));
-        xhr.send(fd);
-      });
-      docsXhrRef.current = null;
+      await flush();
       setDocsUpload(prev => prev ? { ...prev, percent: 100, done: files.length } : prev);
-      setSections(prev => ({ ...prev, [cat]: data.attachments || [] }));
-      setDocsError(null);
       // v68.5: АВТО-распознавание при загрузке УБРАНО — файлы просто сохраняются на сервер.
-      // OCR/перевод запускается вручную из карточки файла (кнопка 📝 / recognizeFilePages + saveDocOcr).
     } catch (e) {
-      if (e.message === 'ABORTED') console.log('Загрузка документов остановлена пользователем');
-      else alert('Не загрузился файл: ' + e.message);
+      if (e.message === 'ABORTED') {
+        console.log('Загрузка документов остановлена пользователем');
+        if (uploaded) { alert(`Загрузка остановлена.\nУже загружено и сохранено на сервере: ${uploaded} из ${files.length} файлов — они НЕ потеряны.`); loadDocs(); }
+      } else {
+        alert('Не загрузилось: ' + e.message);
+        if (uploaded) loadDocs();
+      }
     } finally {
       docsXhrRef.current = null;
       docsStopRef.current = false;
@@ -1637,6 +1675,9 @@ function DocsTab({ user, token }) {
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
             </div>
+            {docsUpload.batch > 0 && (
+              <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 2 }}>{`Партия ${docsUpload.batch} из ~${docsUpload.batches || docsUpload.batch} · порционная загрузка (память сервера не перегружается)`}</div>
+            )}
             {docsUpload.currentFile && (
               <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{docsUpload.currentFile}</div>
             )}
@@ -7413,7 +7454,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v69.4 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v69.5 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
