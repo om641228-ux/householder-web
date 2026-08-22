@@ -855,6 +855,7 @@ function DocsTab({ user, token }) {
   const [docsError, setDocsError] = useState(null);
   const [docsBusy, setDocsBusy] = useState(false);
   const [docsUpload, setDocsUpload] = useState(null); // v68.4: {phase:'prepare'|'upload'|'ocr', percent, done, total, currentFile}
+  const [docsMove, setDocsMove] = useState(null); // v68.8.1: {total, target, status:'run'|'ok'|'err', msg}
   const docsXhrRef = useRef(null);   // v68.4: активный XHR — для кнопки «Остановить»
   const docsStopRef = useRef(false); // v68.4: флаг остановки цикла распознавания
   const [docsViewer, setDocsViewer] = useState(null); // {url, kind, name}
@@ -1081,26 +1082,37 @@ function DocsTab({ user, token }) {
   const selectedUrls = Object.keys(docsSelected).filter(u => docsSelected[u]);
   const moveSelectedDocs = async (folder) => {
     if (!selectedUrls.length) return;
+    setDocsMove({ total: selectedUrls.length, target: folder ? `📁 ${folder}` : '🚫 Без папки', status: 'run', msg: '' });
     try {
       await docsFolderOp({ urls: selectedUrls, folder });
+      setDocsMove(prev => prev ? { ...prev, status: 'ok' } : prev);
+      setTimeout(() => setDocsMove(null), 1200);
       setDocsSelected({}); setDocsSelectMode(false);
-    } catch (e) { alert('Не переместилось: ' + e.message); }
+    } catch (e) { setDocsMove(prev => prev ? { ...prev, status: 'err', msg: e.message } : prev); }
   };
   // v68.7: переместить выбранные файлы в папку СТРУКТУРЫ (item.path), '' — в корень дерева
   const moveSelectedDocsToPath = async (p) => {
     if (!selectedUrls.length) return;
+    setDocsMove({ total: selectedUrls.length, target: `🌳 ${p || '(корень дерева)'}`, status: 'run', msg: '' });
     try {
       await docsFolderOp({ urls: selectedUrls, path: p });
+      setDocsMove(prev => prev ? { ...prev, status: 'ok' } : prev);
+      setTimeout(() => setDocsMove(null), 1200);
       setDocsSelected({}); setDocsSelectMode(false);
-    } catch (e) { alert('Не переместилось: ' + e.message); }
+    } catch (e) { setDocsMove(prev => prev ? { ...prev, status: 'err', msg: e.message } : prev); }
   };
   // v68.8: переместить выбранные файлы в ДРУГОЙ раздел (и опционально в его папку/ветку дерева)
   const moveSelectedDocsToSection = async (target, folder, tpath) => {
     if (!selectedUrls.length) return;
+    const secTitle = (DOC_SECTIONS.find(x => x.key === target) || {}).title || target;
+    const dest = tpath ? `${secTitle} · 🌳 ${tpath}` : (folder ? `${secTitle} · 📁 ${folder}` : `${secTitle} · корень`);
+    setDocsMove({ total: selectedUrls.length, target: dest, status: 'run', msg: '' });
     try {
       await docsFolderOp({ urls: selectedUrls, moveTo: { category: target, folder: folder || '', path: tpath || '' } });
+      setDocsMove(prev => prev ? { ...prev, status: 'ok' } : prev);
+      setTimeout(() => setDocsMove(null), 1200);
       setDocsSelected({}); setDocsSelectMode(false);
-    } catch (e) { alert('Не переместилось: ' + e.message); }
+    } catch (e) { setDocsMove(prev => prev ? { ...prev, status: 'err', msg: e.message } : prev); }
   };
   const removeSelectedDocs = async () => {
     if (!selectedUrls.length) return;
@@ -1431,6 +1443,34 @@ function DocsTab({ user, token }) {
           {items.length === 0 && subFolders.length === 0 && !docsBusy && <div style={{ fontSize: 13, color: '#8e8e93', alignSelf: 'center' }}>Файлов пока нет — нажмите 📎 (файлы) или 📂 (папку со структурой), чтобы загрузить.</div>}
         </div>
       </div>
+
+      {docsMove && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 410, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: '#fff', borderRadius: 16, padding: '24px 28px', width: 'min(420px, 92vw)', boxShadow: '0 20px 60px rgba(0,0,0,0.35)', textAlign: 'center' }}>
+            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>
+              {docsMove.status === 'run' && '📁 Перемещение файлов…'}
+              {docsMove.status === 'ok' && '✅ Перемещено!'}
+              {docsMove.status === 'err' && '❌ Не переместилось'}
+            </div>
+            <div style={{ fontSize: 13, color: '#555', marginBottom: 4 }}>Файлов: {docsMove.total}</div>
+            <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{docsMove.target}</div>
+            {docsMove.status === 'run' && (
+              <React.Fragment>
+                <div style={{ height: 10, borderRadius: 6, background: '#e8e8ed', overflow: 'hidden', margin: '6px 0 4px' }}>
+                  <div className="docs-move-ind" style={{ height: '100%', width: '40%', borderRadius: 6, background: 'linear-gradient(90deg, #34c759, #0071e3)' }} />
+                </div>
+                <style>{'@keyframes docsMoveSlide{0%{margin-left:-40%}100%{margin-left:100%}}.docs-move-ind{animation:docsMoveSlide 1s ease-in-out infinite alternate}'}</style>
+              </React.Fragment>
+            )}
+            {docsMove.status === 'err' && (
+              <React.Fragment>
+                <div style={{ fontSize: 12, color: '#e74c3c', marginBottom: 12, whiteSpace: 'pre-wrap' }}>{docsMove.msg}</div>
+                <button onClick={() => setDocsMove(null)} style={{ padding: '8px 22px', borderRadius: 980, border: 'none', background: '#0071e3', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>Понятно</button>
+              </React.Fragment>
+            )}
+          </div>
+        </div>
+      )}
 
       {docsUpload && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -7220,7 +7260,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v68.8 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v68.8.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

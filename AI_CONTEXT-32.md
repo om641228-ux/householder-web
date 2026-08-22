@@ -1862,3 +1862,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Backend PATCH docs: новая операция {urls, moveTo:{category, folder?, path?}} — файлы вырезаются из текущего раздела и добавляются в целевой (folder или path+имя файла; без них — в корень раздела). Health: v68.8-2026-08-22.
 - Фронт: moveSelectedDocsToSection; в «📁 Переместить» добавлены блоки других вкладок «── 🏠 Дома ──»: «📂 в корень раздела», его 📁 папки и 🌳 пути дерева (otherSections из sections/customFolders/DOC_FOLDERS/hiddenFolders).
 - Футер: `· v68.8 ·`. Нужен redeploy ОБОИХ сервисов.
+
+## v68.8.1 (2026-08-22) — Документы: инфо-окно при перемещении
+- Новое состояние docsMove {total, target, status:'run'|'ok'|'err', msg}; модальное окно (zIndex 410, как при загрузке): «📁 Перемещение файлов…» + количество + куда + бегающая полоса; по успеху «✅ Перемещено!» (автозакрытие 1.2с), при ошибке — текст + «Понятно».
+- Обёрнуты все три перемещения: moveSelectedDocs (папка), moveSelectedDocsToPath (дерево), moveSelectedDocsToSection (между вкладками).
+- Футер: `· v68.8.1 ·`.
