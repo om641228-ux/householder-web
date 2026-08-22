@@ -938,7 +938,8 @@ function DocsTab({ user, token }) {
           if (ev.lengthComputable) {
             const pct = Math.min(100, Math.round(ev.loaded / ev.total * 100));
             const estDone = Math.min(files.length, Math.floor(ev.loaded / ev.total * files.length));
-            setDocsUpload(prev => prev ? { ...prev, percent: pct, done: estDone } : prev);
+            // v68.5.1: байты ушли целиком → сервер сохраняет файлы; обрывать запрос НЕЛЬЗЯ (файлы потеряются)
+            setDocsUpload(prev => prev ? { ...prev, percent: pct, done: estDone, phase: pct >= 100 ? 'save' : 'upload' } : prev);
           }
         };
         xhr.onload = () => {
@@ -1360,6 +1361,7 @@ function DocsTab({ user, token }) {
             <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>
               {docsUpload.phase === 'prepare' && '⚙️ Подготовка файлов…'}
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
+              {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
@@ -1371,10 +1373,14 @@ function DocsTab({ user, token }) {
             <div style={{ height: 10, borderRadius: 6, background: '#e8e8ed', overflow: 'hidden', margin: '10px 0 16px' }}>
               <div style={{ height: '100%', width: `${docsUpload.percent}%`, borderRadius: 6, background: 'linear-gradient(90deg, #34c759, #0071e3)', transition: 'width 0.25s' }} />
             </div>
-            <button onClick={() => { docsStopRef.current = true; if (docsXhrRef.current) { try { docsXhrRef.current.abort(); } catch (e) {} } }}
-              style={{ padding: '9px 22px', borderRadius: 980, border: 'none', background: '#ff3b30', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
-              ⏹ Остановить
-            </button>
+            {docsUpload.phase === 'save' ? (
+              <div style={{ fontSize: 13, color: '#8e8e93' }}>⏳ Файлы переданы — сервер сохраняет, прерывать уже нельзя…</div>
+            ) : (
+              <button onClick={() => { docsStopRef.current = true; if (docsXhrRef.current) { try { docsXhrRef.current.abort(); } catch (e) {} } }}
+                style={{ padding: '9px 22px', borderRadius: 980, border: 'none', background: '#ff3b30', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
+                ⏹ Остановить
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -7137,7 +7143,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v68.5 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v68.5.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
