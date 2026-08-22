@@ -1037,7 +1037,7 @@ function DocsTab({ user, token }) {
     if (okMsg) console.log(okMsg);
   };
   const renameDocsFolder = async (fn) => {
-    const to = (window.prompt(`Переименовать папку «${fn}» в:`, fn) || '').trim().slice(0, 40);
+    const to = (window.prompt(`Переименовать папку «${fn}» в:\n(чтобы ВЛОЖИТЬ — введите «Родитель/Имя», например Volvo/3)`, fn) || '').trim().slice(0, 60);
     if (!to || to === fn) return;
     try {
       await docsFolderOp({ folderRename: { from: fn, to } });
@@ -1331,10 +1331,13 @@ function DocsTab({ user, token }) {
   // v68.9: папки дерева первого уровня — чипами в строке «Папка:» (единый вид во всех вкладках)
   const topTreeFolders = [...new Set(treePathsAll.map(p => p.split('/')[0]))].sort();
   // v68.9.3: прямые дети каждой папки первого уровня — для чипов вложенных папок
-  const treeChildrenOf = (tp) => [...new Set(treePathsAll.filter(p => p.startsWith(tp + '/')).map(p => p.slice(tp.length + 1).split('/')[0]))].sort();
+  const treeChildrenOf = (tp) => [...new Set([
+    ...treePathsAll.filter(p => p.startsWith(tp + '/')).map(p => p.slice(tp.length + 1).split('/')[0]),
+    ...dynFolders.filter(f => f.indexOf('/') !== -1 && f.startsWith(tp + '/')).map(f => f.slice(tp.length + 1).split('/')[0])
+  ])].sort();
   const treeCountOf = (tp) => allItems.filter(it => { const d = effDirOf(it); return d === tp || d.startsWith(tp + '/'); }).length;
   // v69: единый список папок верхнего уровня — folder-папки + папки дерева
-  const topFoldersAll = [...dynFolders, ...topTreeFolders.filter(t => !dynFolders.includes(t))];
+  const topFoldersAll = [...dynFolders.filter(f => f.indexOf('/') === -1), ...topTreeFolders.filter(t => !dynFolders.includes(t) && t.indexOf('/') === -1)];
   // v68.8: папки и деревья ДРУГИХ разделов — для перемещения между вкладками
   const dirOfPath = dirOfDocPath;
   const otherSections = DOC_SECTIONS.filter(sec => sec.key !== docSection).map(sec => {
@@ -7329,7 +7332,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v69 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v69.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
