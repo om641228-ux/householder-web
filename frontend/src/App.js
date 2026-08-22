@@ -3156,6 +3156,7 @@ function App() {
   const [sortDir, setSortDir] = useState('desc');
   // Режим поиска дубликатов
   const [showDuplicates, setShowDuplicates] = useState(false);
+  const [copiesFirstOrder, setCopiesFirstOrder] = useState(false); // v68.1: режим «Выбрать все копии» — копии слева, оригинал справа в каждой группе
   // Фокус на группе дубликатов ОДНОЙ выбранной карточки (кнопка «Показать копии»)
   const [dupFocusId, setDupFocusId] = useState(null);
 
@@ -4319,12 +4320,22 @@ function App() {
   };
 
   const bulkDelete = async () => {
-    if (!window.confirm(`Удалить ${selectedReceiptIds.size} чеков?`)) return;
+    // v68.1: защита оригиналов — если в выборке есть копии группы, её оригинал из удаления исключается
+    const sel = new Set(selectedReceiptIds);
+    let keptOriginals = 0;
+    dupGroups.forEach(g => {
+      const orig = g[0];
+      const anyCopySelected = g.slice(1).some(r => sel.has(r.id));
+      if (anyCopySelected && sel.has(orig.id)) { sel.delete(orig.id); keptOriginals++; }
+    });
+    if (!sel.size) { alert('Удалять нечего: оригиналы сохранены.'); return; }
+    const msg = `Удалить ${sel.size} чеков?` + (keptOriginals ? `\n\n🛡 Оригиналы (${keptOriginals}) будут сохранены — удаляются только копии.` : '');
+    if (!window.confirm(msg)) return;
     try {
       const res = await fetch(`${API_URL}/api/bulk-delete?token=${token}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: Array.from(selectedReceiptIds) })
+        body: JSON.stringify({ ids: Array.from(sel) })
       });
       if (res.ok) { setSelectedReceiptIds(new Set()); loadReceipts(); }
       else alert('Ошибка массового удаления');
@@ -6062,6 +6073,20 @@ ${bodyHtml}
     return sortDir === 'asc' ? da - db : db - da;
   });
 
+  // v68.1: в режиме работы с копиями — каждая группа выводится «копии слева, оригинал справа»
+  if (copiesFirstOrder) {
+    const visIds = new Set(visibleReceipts.map(r => r.id));
+    const ordered = [];
+    dupGroups.forEach(g => {
+      const vis = g.filter(r => visIds.has(r.id));
+      if (vis.length > 1) ordered.push(...vis.slice(1), vis[0]); // копии, затем оригинал
+      else ordered.push(...vis);
+    });
+    visibleReceipts.forEach(r => { if (!dupAllIds.has(r.id)) ordered.push(r); });
+    sortedReceipts.length = 0;
+    sortedReceipts.push(...ordered);
+  }
+
   const totalPages = itemsPerPage === 'all' ? 1 : Math.ceil(sortedReceipts.length / itemsPerPage);
   const paginatedReceipts = itemsPerPage === 'all'
     ? sortedReceipts
@@ -6998,7 +7023,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v68.0.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v68.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7344,7 +7369,7 @@ ${bodyHtml}
                 </select>
                 <button className="bulk-btn bulk-btn-gray" style={{ flex: '0 0 auto' }} onClick={deselectAll}>✖ Сбросить</button>
                 {dupFocusId && (
-                  <button className="bulk-btn bulk-btn-gray" style={{ flex: '0 0 auto' }} onClick={() => { setDupFocusId(null); setShowDuplicates(false); }}>👁 Показать все</button>
+                  <button className="bulk-btn bulk-btn-gray" style={{ flex: '0 0 auto' }} onClick={() => { setDupFocusId(null); setShowDuplicates(false); setCopiesFirstOrder(false); }}>👁 Показать все</button>
                 )}
                 {selectedReceiptIds.size === 1 && !showDuplicates && (() => {
                   const rid = Array.from(selectedReceiptIds)[0];
@@ -7423,7 +7448,7 @@ ${bodyHtml}
               </span>
               {dupCopyIds.size > 0 && (
                 <button
-                  onClick={() => setSelectedReceiptIds(new Set(dupCopyIds))}
+                  onClick={() => { setSelectedReceiptIds(new Set(dupCopyIds)); setShowDuplicates(true); setCopiesFirstOrder(true); setCurrentPage(1); }}
                   style={{ background: '#e74c3c', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}
                 >
                   Выбрать все копии
@@ -7497,7 +7522,7 @@ ${bodyHtml}
                   // Заголовок группы, когда меняется год-месяц
                   const gk = groupKeyOf(receipt);
                   const prevGk = idx > 0 ? groupKeyOf(paginatedReceipts[idx - 1]) : null;
-                  const showGroupHeader = gk !== prevGk;
+                  const showGroupHeader = !copiesFirstOrder && gk !== prevGk; // v68.1: в режиме копий заголовки месяцев не показываем
                   const groupCount = showGroupHeader ? paginatedReceipts.filter(r => groupKeyOf(r) === gk).length : 0;
                   return (
                     <React.Fragment key={receipt.id}>
