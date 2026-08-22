@@ -3159,6 +3159,8 @@ function App() {
   const [copiesFirstOrder, setCopiesFirstOrder] = useState(false); // v68.1: режим «Выбрать все копии» — копии слева, оригинал справа в каждой группе
   // Фокус на группе дубликатов ОДНОЙ выбранной карточки (кнопка «Показать копии»)
   const [dupFocusId, setDupFocusId] = useState(null);
+  const [exportProgress, setExportProgress] = useState(null); // v68.2: {done, total, files} — окно прогресса «Загрузить»
+  const exportStopRef = useRef(false);
 
   const [selectedReceiptIds, setSelectedReceiptIds] = useState(new Set());
   const [viewModal, setViewModal] = useState(null);
@@ -4217,6 +4219,9 @@ function App() {
   const handleExport = async () => {
     if (selectedReceiptIds.size === 0) return alert('Выберите чеки');
     const selected = receipts.filter(r => selectedReceiptIds.has(r.id));
+    // v68.2: окно прогресса с кнопкой «Остановить»
+    exportStopRef.current = false;
+    setExportProgress({ done: 0, total: selected.length, files: 0 });
     let dirHandle = null;
     let useFolder = false;
     if (window.showDirectoryPicker) {
@@ -4239,7 +4244,10 @@ function App() {
       formats.push(exportMode);
     }
     let savedCount = 0;
+    let doneCount = 0;
     for (const receipt of selected) {
+      if (exportStopRef.current) break; // ⏹ нажали «Остановить»
+      doneCount++;
       const safeName = (receipt.store_name || 'receipt')
         .replace(/[^a-zA-Z0-9\u0400-\u04FF]/g, '_')
         .substring(0, 40);
@@ -4311,8 +4319,13 @@ function App() {
           }
         }
       }
+      setExportProgress({ done: doneCount, total: selected.length, files: savedCount });
     }
-    if (useFolder) {
+    const stopped = exportStopRef.current;
+    setExportProgress(null);
+    if (stopped) {
+      alert(`⏹ Загрузка остановлена.\nОбработано чеков: ${doneCount} из ${selected.length} · файлов сохранено: ${savedCount}`);
+    } else if (useFolder) {
       alert(`✅ Экспорт завершён! Сохранено файлов/папок: ${savedCount}`);
     } else {
       alert('✅ Скачивание завершено!');
@@ -6386,6 +6399,25 @@ ${bodyHtml}
         </div>
       )}
 
+      {/* v68.2: окно прогресса «Загрузить» — загружено N из M + кнопка Остановить */}
+      {exportProgress && (
+        <div className="modal-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div style={{ background: '#fff', borderRadius: 14, padding: 22, width: '100%', maxWidth: 420, textAlign: 'center' }}>
+            <h3 style={{ marginTop: 0 }}>⬇ Загрузка файлов…</h3>
+            <div style={{ fontSize: 26, fontWeight: 800, color: '#1d4ed8' }}>
+              {exportProgress.done} <span style={{ color: '#8e8e93', fontSize: 16, fontWeight: 600 }}>из {exportProgress.total}</span>
+            </div>
+            <div style={{ fontSize: 13, color: '#6e6e73', marginTop: 4 }}>файлов сохранено: <b>{exportProgress.files}</b></div>
+            <div style={{ height: 10, background: '#ececf0', borderRadius: 6, marginTop: 14, overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${exportProgress.total ? Math.round(exportProgress.done / exportProgress.total * 100) : 0}%`, background: 'linear-gradient(90deg,#34c759,#1d4ed8)', transition: 'width 0.25s' }} />
+            </div>
+            <button onClick={() => { exportStopRef.current = true; }}
+              style={{ marginTop: 16, padding: '9px 22px', borderRadius: 980, border: 'none', background: '#e74c3c', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
+              ⏹ Остановить
+            </button>
+          </div>
+        </div>
+      )}
       {viewModal && (
         <div className="modal-overlay" onClick={() => setViewModal(null)}>
           {renderRcLinkPicker()}
@@ -7023,7 +7055,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v68.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v68.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
