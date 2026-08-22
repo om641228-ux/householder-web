@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v68.8-2026-08-22', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v69.2-2026-08-22', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -4215,15 +4215,18 @@ app.patch('/api/docs/:category/files', requireAuth, async (req, res) => {
       // v66: переименование папки внутри загруженной СТРУКТУРЫ (item.path): префикс from → to
       const from = body.pathRename.from.trim().slice(0, 200).replace(/^\/+|\/+$/g, '');
       const to = String(body.pathRename.to || '').trim().slice(0, 200).replace(/^\/+|\/+$/g, '');
-      if (!from || !to) return res.status(400).json({ error: 'Передайте pathRename {from, to}' });
+      if (!from) return res.status(400).json({ error: 'Передайте pathRename {from, to}' });
       if (from === to) return res.status(400).json({ error: 'Имя не изменилось' });
+      // v69.2: to='' разрешён — ветка поднимается в КОРЕНЬ (удаление папки верхнего уровня)
       let rcnt = 0;
       next = cur.map(it => {
         if (!objIt(it) || typeof it.path !== 'string') return it;
         const ip = it.path.replace(/^\/+|\/+$/g, '');
         if (ip === from || ip.startsWith(from + '/')) {
           rcnt++;
-          return { ...it, path: to + ip.slice(from.length) };
+          const np = (to ? to + ip.slice(from.length) : ip.slice(from.length)).replace(/^\/+/, '');
+          if (!np) { const o = { ...it }; delete o.path; return o; } // v69.2: файл в корне — без path
+          return { ...it, path: np };
         }
         return it;
       });
