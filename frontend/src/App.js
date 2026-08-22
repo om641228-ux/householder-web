@@ -3160,6 +3160,7 @@ function App() {
   // Фокус на группе дубликатов ОДНОЙ выбранной карточки (кнопка «Показать копии»)
   const [dupFocusId, setDupFocusId] = useState(null);
   const [exportProgress, setExportProgress] = useState(null); // v68.2: {done, total, files} — окно прогресса «Загрузить»
+  const [confirmDlg, setConfirmDlg] = useState(null); // v68.3: {title, text, yesLabel, danger, onYes} — подтверждение действий (загрузка/удаление)
   const exportStopRef = useRef(false);
 
   const [selectedReceiptIds, setSelectedReceiptIds] = useState(new Set());
@@ -4216,8 +4217,18 @@ function App() {
     return csv;
   };
 
-  const handleExport = async () => {
+  // v68.3: «Загрузить» — сначала всплывающее подтверждение, действие сразу НЕ выполняется
+  const EXPORT_MODE_LABELS = { all: 'Все (Excel + Фото + Текст)', excel: 'Только Excel', photos: 'Только фото', text: 'Только текст' };
+  const handleExport = () => {
     if (selectedReceiptIds.size === 0) return alert('Выберите чеки');
+    setConfirmDlg({
+      title: '⬇ Загрузка файлов',
+      text: `Загрузить выбранные чеки: ${selectedReceiptIds.size} шт?\nРежим: ${EXPORT_MODE_LABELS[exportMode] || exportMode}\n\nВо время загрузки появится окно со статистикой и кнопкой «Остановить».`,
+      yesLabel: 'Начать загрузку',
+      onYes: () => doExport()
+    });
+  };
+  const doExport = async () => {
     const selected = receipts.filter(r => selectedReceiptIds.has(r.id));
     // v68.2: окно прогресса с кнопкой «Остановить»
     exportStopRef.current = false;
@@ -4332,7 +4343,8 @@ function App() {
     }
   };
 
-  const bulkDelete = async () => {
+  // v68.3: «Удалить» — сначала всплывающее подтверждение (окно с выбором), действие сразу НЕ выполняется
+  const bulkDelete = () => {
     // v68.1: защита оригиналов — если в выборке есть копии группы, её оригинал из удаления исключается
     const sel = new Set(selectedReceiptIds);
     let keptOriginals = 0;
@@ -4342,8 +4354,15 @@ function App() {
       if (anyCopySelected && sel.has(orig.id)) { sel.delete(orig.id); keptOriginals++; }
     });
     if (!sel.size) { alert('Удалять нечего: оригиналы сохранены.'); return; }
-    const msg = `Удалить ${sel.size} чеков?` + (keptOriginals ? `\n\n🛡 Оригиналы (${keptOriginals}) будут сохранены — удаляются только копии.` : '');
-    if (!window.confirm(msg)) return;
+    setConfirmDlg({
+      title: '🗑 Удаление чеков',
+      text: `Удалить ${sel.size} чеков? Действие необратимое.` + (keptOriginals ? `\n\n🛡 Оригиналы (${keptOriginals}) будут сохранены — удаляются только копии.` : ''),
+      yesLabel: `Удалить ${sel.size}`,
+      danger: true,
+      onYes: () => doBulkDelete(sel)
+    });
+  };
+  const doBulkDelete = async (sel) => {
     try {
       const res = await fetch(`${API_URL}/api/bulk-delete?token=${token}`, {
         method: 'POST',
@@ -6399,6 +6418,25 @@ ${bodyHtml}
         </div>
       )}
 
+      {/* v68.3: универсальное всплывающее подтверждение (загрузка / удаление) */}
+      {confirmDlg && (
+        <div className="modal-overlay" onClick={() => setConfirmDlg(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 22, width: '100%', maxWidth: 420, textAlign: 'center' }}>
+            <h3 style={{ marginTop: 0 }}>{confirmDlg.title}</h3>
+            <div style={{ fontSize: 14, color: '#3a3a3c', whiteSpace: 'pre-line', lineHeight: 1.5 }}>{confirmDlg.text}</div>
+            <div style={{ display: 'flex', gap: 10, marginTop: 18, justifyContent: 'center' }}>
+              <button onClick={() => { const cb = confirmDlg.onYes; setConfirmDlg(null); if (cb) cb(); }}
+                style={{ padding: '9px 22px', borderRadius: 980, border: 'none', background: confirmDlg.danger ? '#e74c3c' : '#34c759', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
+                {confirmDlg.yesLabel || 'Да'}
+              </button>
+              <button onClick={() => setConfirmDlg(null)}
+                style={{ padding: '9px 22px', borderRadius: 980, border: '1px solid #c7c7cc', background: '#fff', color: '#1d1d1f', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
+                Отмена
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* v68.2: окно прогресса «Загрузить» — загружено N из M + кнопка Остановить */}
       {exportProgress && (
         <div className="modal-overlay" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
@@ -7055,7 +7093,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v68.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v68.3 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
