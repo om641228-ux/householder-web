@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v68.7.1-2026-08-22', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v68.8-2026-08-22', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -4154,7 +4154,35 @@ app.patch('/api/docs/:category/files', requireAuth, async (req, res) => {
     const objIt = (it) => (it && typeof it === 'object');
     let next = cur;
 
-    if (Array.isArray(body.urls) && typeof body.path === 'string' && typeof body.folder !== 'string') {
+    if (Array.isArray(body.urls) && body.moveTo && typeof body.moveTo.category === 'string') {
+      // v68.8: перемещение группы файлов в ДРУГОЙ раздел (Дома/Авто/Личное), опционально в его папку/ветку дерева
+      const target = String(body.moveTo.category);
+      if (!DOC_CATEGORIES.includes(target)) return res.status(400).json({ error: 'Неизвестный целевой раздел' });
+      if (target === cat) return res.status(400).json({ error: 'Файлы уже в этом разделе' });
+      const tFolder = typeof body.moveTo.folder === 'string' ? body.moveTo.folder.trim().slice(0, 40) : '';
+      const tPath = typeof body.moveTo.path === 'string' ? body.moveTo.path.trim().slice(0, 200).replace(/^\/+|\/+$/g, '') : '';
+      const set = new Set(body.urls.slice(0, 500).map(String));
+      const moved = [];
+      next = cur.filter(it => {
+        if (objIt(it) && set.has(it.url)) { moved.push(it); return false; }
+        return true;
+      });
+      if (!moved.length) return res.status(404).json({ error: 'Файлы не найдены в разделе' });
+      const { data: trow, error: et } = await supabaseAdmin.from('doc_sections').select('*').eq('category', target).maybeSingle();
+      if (et) throw et;
+      const tcur = trow && Array.isArray(trow.attachments) ? trow.attachments : [];
+      const items = moved.map(it => {
+        const o = { ...it };
+        delete o.folder; delete o.path;
+        const fn = String(o.name || '').trim() || decodeURIComponent(String(o.url || '').split('/').pop() || 'file');
+        if (tPath) o.path = tPath + '/' + fn; // path хранится ВКЛЮЧАЯ имя файла (v68.7.1)
+        else if (tFolder) o.folder = tFolder;
+        return o;
+      });
+      const { error: e2 } = await supabaseAdmin.from('doc_sections')
+        .upsert({ category: target, attachments: [...tcur, ...items], updated_at: new Date().toISOString() }, { onConflict: 'category' });
+      if (e2) throw e2;
+    } else if (Array.isArray(body.urls) && typeof body.path === 'string' && typeof body.folder !== 'string') {
       // v68.7: перемещение группы файлов в папку СТРУКТУРЫ (item.path); '' — в корень дерева
       const set = new Set(body.urls.slice(0, 500).map(String));
       const tp = body.path.trim().slice(0, 200).replace(/^\/+|\/+$/g, '');

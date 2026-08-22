@@ -1094,6 +1094,14 @@ function DocsTab({ user, token }) {
       setDocsSelected({}); setDocsSelectMode(false);
     } catch (e) { alert('Не переместилось: ' + e.message); }
   };
+  // v68.8: переместить выбранные файлы в ДРУГОЙ раздел (и опционально в его папку/ветку дерева)
+  const moveSelectedDocsToSection = async (target, folder, tpath) => {
+    if (!selectedUrls.length) return;
+    try {
+      await docsFolderOp({ urls: selectedUrls, moveTo: { category: target, folder: folder || '', path: tpath || '' } });
+      setDocsSelected({}); setDocsSelectMode(false);
+    } catch (e) { alert('Не переместилось: ' + e.message); }
+  };
   const removeSelectedDocs = async () => {
     if (!selectedUrls.length) return;
     if (!window.confirm(`Удалить выбранные файлы (${selectedUrls.length})?`)) return;
@@ -1255,6 +1263,19 @@ function DocsTab({ user, token }) {
     const p = String(docMediaOf(it).path || '').replace(/^\/+|\/+$/g, '');
     return p.indexOf('/') !== -1 ? p.split('/').slice(0, -1).join('/') : '';
   }).filter(Boolean))].sort();
+  // v68.8: папки и деревья ДРУГИХ разделов — для перемещения между вкладками
+  const dirOfPath = (p) => {
+    const q = String(p || '').replace(/^\/+|\/+$/g, '');
+    return q.indexOf('/') !== -1 ? q.split('/').slice(0, -1).join('/') : '';
+  };
+  const otherSections = DOC_SECTIONS.filter(sec => sec.key !== docSection).map(sec => {
+    const list = sections[sec.key] || [];
+    const used = [...new Set(list.map(it => docMediaOf(it).folder).filter(Boolean))];
+    const folders = [...new Set([...(DOC_FOLDERS[sec.key] || []), ...(customFolders[sec.key] || []), ...used])]
+      .filter(f => !(hiddenFolders[sec.key] || []).includes(f));
+    const tree = [...new Set(list.map(it => dirOfPath(docMediaOf(it).path)).filter(Boolean))].sort();
+    return { key: sec.key, title: sec.title, folders, tree };
+  });
   return (
     <div style={{ padding: '12px 15px', maxWidth: 1100, margin: '0 auto' }}>
       <style>{'.docs-active-tab{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important}.docs-active-tab:hover{background:#0066d6 !important}'}</style>
@@ -1341,6 +1362,13 @@ function DocsTab({ user, token }) {
                 if (nm) moveSelectedDocsToPath(curDocPath ? curDocPath + '/' + nm : nm);
               }
               else if (v.startsWith('path::')) moveSelectedDocsToPath(v.slice(6));
+              else if (v.startsWith('sec::')) {
+                const parts = v.split('::');
+                const tKey = parts[1];
+                if (parts[2] === 'root') moveSelectedDocsToSection(tKey, '', '');
+                else if (parts[2] === 'folder') moveSelectedDocsToSection(tKey, parts.slice(3).join('::'), '');
+                else if (parts[2] === 'path') moveSelectedDocsToSection(tKey, '', parts.slice(3).join('::'));
+              }
               else if (v !== '') moveSelectedDocs(v);
             }} style={{ padding: '5px 14px', borderRadius: 980, border: 'none', background: selectedUrls.length ? '#0071e3' : '#f0f0f2', color: selectedUrls.length ? '#fff' : '#8e8e93', fontWeight: 600, fontSize: 12.5, cursor: selectedUrls.length ? 'pointer' : 'not-allowed' }} disabled={!selectedUrls.length}>
               <option value="" disabled>📁 Переместить в папку…</option>
@@ -1350,6 +1378,14 @@ function DocsTab({ user, token }) {
               {allTreePaths.length > 0 && <option value="" disabled>── Дерево папок ──</option>}
               {allTreePaths.map(tp => <option key={tp} value={`path::${tp}`}>🌳 {tp}</option>)}
               <option value="__newpath">🌳＋ Новая подпапка в текущей ветке…</option>
+              {otherSections.map(os => (
+                <React.Fragment key={os.key}>
+                  <option value="" disabled>── {os.title} ──</option>
+                  <option value={`sec::${os.key}::root`}>📂 {os.title} — в корень раздела</option>
+                  {os.folders.map(fn => <option key={fn} value={`sec::${os.key}::folder::${fn}`}>{os.title} · 📁 {fn}</option>)}
+                  {os.tree.map(tp => <option key={tp} value={`sec::${os.key}::path::${tp}`}>{os.title} · 🌳 {tp}</option>)}
+                </React.Fragment>
+              ))}
             </select>
             <button onClick={removeSelectedDocs} disabled={!selectedUrls.length}
               style={{ padding: '5px 14px', borderRadius: 980, border: 'none', background: selectedUrls.length ? '#e74c3c' : '#f0f0f2', color: selectedUrls.length ? '#fff' : '#8e8e93', fontWeight: 600, fontSize: 12.5, cursor: selectedUrls.length ? 'pointer' : 'not-allowed' }}>🗑 Удалить</button>
@@ -7184,7 +7220,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v68.7.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v68.8 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
