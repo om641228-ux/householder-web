@@ -1067,8 +1067,8 @@ function DocsTab({ user, token }) {
     setHiddenFolders(prev => ({ ...prev, [docSection]: [...new Set([...(prev[docSection] || []), fn])] }));
   };
   // v68.6: создать пустую папку (реестр в localStorage) и сразу перейти в неё
-  const createDocsFolder = () => {
-    // v69.2: переименовать папку дерева (любой уровень)
+  // v69.4: rename/delete папок дерева — на УРОВНЕ КОМПОНЕНТА
+  // (в v69.2–v69.3 по ошибке лежали ВНУТРИ createDocsFolder — ✎/✕ у вложенных папок молча падали)
   const renameTreeFolder = async (full) => {
     const segs = full.split('/');
     const parent = segs.slice(0, -1).join('/');
@@ -1103,23 +1103,52 @@ function DocsTab({ user, token }) {
     if (curDocPath === full || curDocPath.startsWith(full + '/')) setDocPath(prev => ({ ...prev, [docSection]: parent }));
     loadDocs();
   };
-  // v69: если открыта ЛЮБАЯ папка (ветка дерева или folder-чип, например Volvo) — папка создаётся ВНУТРИ неё
+
+  // v68.6/v69: создать пустую папку — внутри открытой (вложенную) или в корне раздела
+  // v69.4: секция зафиксирована явно; в диалоге видно РАЗДЕЛ и путь назначения
+  const createDocsFolder = () => {
+    const sec = docSection;
+    const secTitle = (DOC_SECTIONS.find(x => x.key === sec) || {}).title || sec;
+    // v69: если открыта ЛЮБАЯ папка (ветка дерева или folder-чип, например Volvo) — папка создаётся ВНУТРИ неё
     const baseDir = curDocPath || (curDocFolder !== 'All' ? curDocFolder : '');
     if (baseDir) {
-      const nm = (window.prompt(`Новая вложенная папка в «${baseDir}» (имя):`) || '').trim().slice(0, 60).replace(/^[\/]+|[\/]+$/g, '');
+      const nm = (window.prompt(`Новая ВЛОЖЕННАЯ папка\nРаздел: ${secTitle}\nВнутри папки: «${baseDir}»\n\nИмя папки:`) || '').trim().slice(0, 60).replace(/^[\/]+|[\/]+$/g, '');
       if (!nm) return;
       const full = baseDir + '/' + nm;
-      setCustomTree(prev => ({ ...prev, [docSection]: [...new Set([...(prev[docSection] || []), full])] }));
-      setDocFolder(prev => ({ ...prev, [docSection]: 'All' }));
-      setDocPath(prev => ({ ...prev, [docSection]: full }));
+      setCustomTree(prev => ({ ...prev, [sec]: [...new Set([...(prev[sec] || []), full])] }));
+      setDocFolder(prev => ({ ...prev, [sec]: 'All' }));
+      setDocPath(prev => ({ ...prev, [sec]: full }));
       return;
     }
-    const nm = (window.prompt('Имя новой папки:') || '').trim().slice(0, 40);
+    const nm = (window.prompt(`Новая папка в КОРНЕ раздела\nРаздел: ${secTitle}\n\nИмя папки:`) || '').trim().slice(0, 40);
     if (!nm) return;
     if (dynFolders.includes(nm)) { alert(`Папка «${nm}» уже есть`); return; }
-    setCustomFolders(prev => ({ ...prev, [docSection]: [...new Set([...(prev[docSection] || []), nm])] }));
-    setHiddenFolders(prev => ({ ...prev, [docSection]: (prev[docSection] || []).filter(f => f !== nm) }));
-    setDocFolder(prev => ({ ...prev, [docSection]: nm }));
+    setCustomFolders(prev => ({ ...prev, [sec]: [...new Set([...(prev[sec] || []), nm])] }));
+    setHiddenFolders(prev => ({ ...prev, [sec]: (prev[sec] || []).filter(f => f !== nm) }));
+    setDocFolder(prev => ({ ...prev, [sec]: nm }));
+  };
+
+  // v69.4: 🧹 удалить ВСЕ пустые папки-заглушки реестра дерева в текущем разделе (мусор старых версий)
+  // Удаляются только записи реестра без файлов (и без непустых потомков) — сами файлы не затрагиваются.
+  const cleanEmptyTreeFolders = () => {
+    const norm = (p) => String(p || '').replace(/^\/+|\/+$/g, '');
+    const reg = [...new Set((customTree[docSection] || []).map(norm).filter(Boolean))];
+    if (!reg.length) { alert('В этом разделе нет пустых папок-заглушек.'); return; }
+    const removed = new Set();
+    let again = true;
+    while (again) {
+      again = false;
+      for (const p of reg) {
+        if (removed.has(p) || treeCountOf(p) > 0) continue;
+        const busyChild = treePathsAll.some(q => q !== p && q.startsWith(p + '/') && !removed.has(q));
+        if (!busyChild) { removed.add(p); again = true; }
+      }
+    }
+    if (!removed.size) { alert('Пустых папок-заглушек не найдено — во всех есть файлы.'); return; }
+    const secTitle = (DOC_SECTIONS.find(x => x.key === docSection) || {}).title || docSection;
+    if (!window.confirm(`Удалить ПУСТЫЕ папки без файлов в разделе «${secTitle}» (${removed.size})?\n\n${[...removed].join('\n')}\n\nФайлы НЕ затрагиваются.`)) return;
+    setCustomTree(prev => ({ ...prev, [docSection]: (prev[docSection] || []).filter(x => !removed.has(norm(x))) }));
+    if ([...removed].some(r => curDocPath === r || curDocPath.startsWith(r + '/'))) setDocPath(prev => ({ ...prev, [docSection]: '' }));
   };
 
   // v66: переименование папки из структуры загрузки (item.path) — через префикс пути
@@ -1411,6 +1440,8 @@ function DocsTab({ user, token }) {
             <span style={{ fontSize: 12, color: '#8e8e93', marginRight: 2 }}>Папка:</span>
             <button onClick={createDocsFolder} title="Создать новую папку (внутри открытой — вложенную)"
               style={{ padding: '5px 12px', borderRadius: 980, border: '1px dashed #0071e3', background: '#fff', color: '#0071e3', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>＋ Папка</button>
+            <button onClick={cleanEmptyTreeFolders} title="Удалить все ПУСТЫЕ папки без файлов в этом разделе (убрать мусор)"
+              style={{ padding: '5px 10px', borderRadius: 980, border: '1px solid #d0d0d5', background: '#fff', color: '#8e8e93', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>🧹</button>
             <button className={!curDocPath ? 'docs-active-tab' : ''} onClick={() => { setDocFolder(prev => ({ ...prev, [docSection]: 'All' })); setDocPath(prev => ({ ...prev, [docSection]: '' })); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
               style={{ padding: '5px 14px', borderRadius: 980, border: !curDocPath ? '2px solid #0071e3' : '1px solid #d0d0d5', background: !curDocPath ? '#0071e3' : '#fff', color: !curDocPath ? '#fff' : '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer', boxShadow: !curDocPath ? '0 2px 8px rgba(0,113,227,0.35)' : 'none' }}>
               🗂 Все ({allItems.length})
@@ -7382,7 +7413,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v69.3 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v69.4 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
