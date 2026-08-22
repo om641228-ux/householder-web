@@ -1258,10 +1258,22 @@ function DocsTab({ user, token }) {
     if (!q) return '';
     const segs = q.split('/');
     const last = segs[segs.length - 1];
-    return /\.[A-Za-z0-9]{2,5}$/.test(last) ? segs.slice(0, -1).join('/') : q;
+    return /\.[A-Za-z0-9]{1,15}$/.test(last) ? segs.slice(0, -1).join('/') : q;
+  };
+  // v68.9.3: точно — вычитаем ИМЯ файла из конца path (иначе 'Oleg/0E5E....textClipping' считался папкой)
+  const dirOfDocItem = (it) => {
+    const m = docMediaOf(it);
+    const p = String(m.path || '').replace(/^\/+|\/+$/g, '');
+    if (!p) return '';
+    const nm = String(m.name || '').trim();
+    if (nm) {
+      if (p === nm) return '';
+      if (p.endsWith('/' + nm)) return p.slice(0, p.length - nm.length - 1);
+    }
+    return dirOfDocPath(p);
   };
   const relPathOf = (it) => {
-    const dir = dirOfDocPath(docMediaOf(it).path);
+    const dir = dirOfDocItem(it);
     if (curDocPath) {
       if (dir === curDocPath) return ''; // файл прямо в текущей папке
       if (dir.startsWith(curDocPath + '/')) return dir.slice(curDocPath.length + 1); // во вложенной подпапке
@@ -1309,9 +1321,14 @@ function DocsTab({ user, token }) {
   const dynFolders = [...new Set([...(DOC_FOLDERS[docSection] || []), ...(customFolders[docSection] || []), ...usedFolders])]
     .filter(f => !(hiddenFolders[docSection] || []).includes(f));
   // v68.7: все пути дерева структуры (item.path) — для перемещения в существующие папки дерева
-  const allTreePaths = [...new Set(allItems.map(it => dirOfDocPath(docMediaOf(it).path)).filter(Boolean))].sort();
+  const allTreePaths = [...new Set(allItems.map(it => dirOfDocItem(it)).filter(Boolean))].sort();
+  // v68.9.3: все пути дерева (файлы + реестр пустых папок)
+  const treePathsAll = [...new Set([...allTreePaths, ...(customTree[docSection] || [])].map(p => String(p).replace(/^\/+|\/+$/g, '')).filter(Boolean))].sort();
   // v68.9: папки дерева первого уровня — чипами в строке «Папка:» (единый вид во всех вкладках)
-  const topTreeFolders = [...new Set([...allTreePaths, ...(customTree[docSection] || [])].map(p => String(p).replace(/^\/+|\/+$/g, '')).filter(Boolean).map(p => p.split('/')[0]))].sort();
+  const topTreeFolders = [...new Set(treePathsAll.map(p => p.split('/')[0]))].sort();
+  // v68.9.3: прямые дети каждой папки первого уровня — для чипов вложенных папок
+  const treeChildrenOf = (tp) => [...new Set(treePathsAll.filter(p => p.startsWith(tp + '/')).map(p => p.slice(tp.length + 1).split('/')[0]))].sort();
+  const treeCountOf = (tp) => allItems.filter(it => { const d = dirOfDocItem(it); return d === tp || d.startsWith(tp + '/'); }).length;
   // v68.8: папки и деревья ДРУГИХ разделов — для перемещения между вкладками
   const dirOfPath = dirOfDocPath;
   const otherSections = DOC_SECTIONS.filter(sec => sec.key !== docSection).map(sec => {
@@ -1319,7 +1336,7 @@ function DocsTab({ user, token }) {
     const used = [...new Set(list.map(it => docMediaOf(it).folder).filter(Boolean))];
     const folders = [...new Set([...(DOC_FOLDERS[sec.key] || []), ...(customFolders[sec.key] || []), ...used])]
       .filter(f => !(hiddenFolders[sec.key] || []).includes(f));
-    const tree = [...new Set(list.map(it => dirOfPath(docMediaOf(it).path)).filter(Boolean))].sort();
+    const tree = [...new Set(list.map(it => dirOfDocItem(it)).filter(Boolean))].sort();
     return { key: sec.key, title: sec.title, folders, tree };
   });
   return (
@@ -1368,15 +1385,29 @@ function DocsTab({ user, token }) {
             );
           })}
           {topTreeFolders.map(tp => {
-            const tcnt = allItems.filter(it => { const d = dirOfDocPath(docMediaOf(it).path); return d === tp || d.startsWith(tp + '/'); }).length;
+            const tcnt = treeCountOf(tp);
             const ton = curDocPath === tp || curDocPath.startsWith(tp + '/');
             return (
-              <button key={`tree-${tp}`} className={ton ? 'docs-active-tab' : ''}
-                onClick={() => { setDocFolder(prev => ({ ...prev, [docSection]: 'All' })); setDocPath(prev => ({ ...prev, [docSection]: tp })); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
-                title={`Папка структуры «${tp}» — файлов: ${tcnt}`}
-                style={{ padding: '5px 14px', borderRadius: 980, border: ton ? '2px solid #0071e3' : '1px solid #d0d0d5', background: ton ? '#0071e3' : '#fff', color: ton ? '#fff' : '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer', boxShadow: ton ? '0 2px 8px rgba(0,113,227,0.35)' : 'none' }}>
-                📁 {tp} ({tcnt})
-              </button>
+              <React.Fragment key={`tree-${tp}`}>
+                <button className={ton ? 'docs-active-tab' : ''}
+                  onClick={() => { setDocFolder(prev => ({ ...prev, [docSection]: 'All' })); setDocPath(prev => ({ ...prev, [docSection]: tp })); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
+                  title={`Папка структуры «${tp}» — файлов: ${tcnt}`}
+                  style={{ padding: '5px 14px', borderRadius: 980, border: ton ? '2px solid #0071e3' : '1px solid #d0d0d5', background: ton ? '#0071e3' : '#fff', color: ton ? '#fff' : '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer', boxShadow: ton ? '0 2px 8px rgba(0,113,227,0.35)' : 'none' }}>
+                  📁 {tp} ({tcnt})
+                </button>
+                {treeChildrenOf(tp).map(ch => {
+                  const full = tp + '/' + ch;
+                  const con = curDocPath === full || curDocPath.startsWith(full + '/');
+                  return (
+                    <button key={`tree-${full}`} className={con ? 'docs-active-tab' : ''}
+                      onClick={() => { setDocFolder(prev => ({ ...prev, [docSection]: 'All' })); setDocPath(prev => ({ ...prev, [docSection]: full })); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
+                      title={`Вложенная папка «${full}» — файлов: ${treeCountOf(full)}`}
+                      style={{ padding: '4px 12px', borderRadius: 980, border: con ? '2px solid #0071e3' : '1px dashed #b9b9bf', background: con ? '#0071e3' : '#f5f5f7', color: con ? '#fff' : '#3a3a3c', fontWeight: 600, fontSize: 11.5, cursor: 'pointer' }}>
+                      ↳ {ch} <span style={{ fontSize: 9, fontWeight: 500, color: con ? '#d4e7ff' : '#8e8e93' }}>вложенная в {tp}</span> ({treeCountOf(full)})
+                    </button>
+                  );
+                })}
+              </React.Fragment>
             );
           })}
         </div>
@@ -1434,7 +1465,7 @@ function DocsTab({ user, token }) {
               <option value="__new">＋ Новая папка…</option>
               <option value="__none">🚫 Без папки</option>
               {allTreePaths.length > 0 && <option value="" disabled>── Дерево папок ──</option>}
-              {[...new Set([...allTreePaths, ...(customTree[docSection] || [])])].sort().map(tp => <option key={tp} value={`path::${tp}`}>🌳 {tp}</option>)}
+              {treePathsAll.map(tp => <option key={tp} value={`path::${tp}`}>🌳 {tp}</option>)}
               <option value="__newpath">🌳＋ Новая подпапка в текущей ветке…</option>
               {otherSections.map(os => (
                 <React.Fragment key={os.key}>
@@ -7306,7 +7337,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v68.9.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v68.9.3 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
