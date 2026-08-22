@@ -1280,6 +1280,8 @@ function DocsTab({ user, token }) {
     .filter(f => !(hiddenFolders[docSection] || []).includes(f));
   // v68.7: все пути дерева структуры (item.path) — для перемещения в существующие папки дерева
   const allTreePaths = [...new Set(allItems.map(it => dirOfDocPath(docMediaOf(it).path)).filter(Boolean))].sort();
+  // v68.9: папки дерева первого уровня — чипами в строке «Папка:» (единый вид во всех вкладках)
+  const topTreeFolders = [...new Set(allTreePaths.map(p => p.split('/')[0]))].sort();
   // v68.8: папки и деревья ДРУГИХ разделов — для перемещения между вкладками
   const dirOfPath = dirOfDocPath;
   const otherSections = DOC_SECTIONS.filter(sec => sec.key !== docSection).map(sec => {
@@ -1304,7 +1306,7 @@ function DocsTab({ user, token }) {
       )}
       <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
         {DOC_SECTIONS.map(sec => (
-          <button key={sec.key} className={docSection === sec.key ? 'docs-active-tab' : ''} onClick={() => { setDocSection(sec.key); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
+          <button key={sec.key} className={docSection === sec.key ? 'docs-active-tab' : ''} onClick={() => { setDocSection(sec.key); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); setDocPath(prev => ({ ...prev, [sec.key]: '' })); }}
             style={{ padding: '8px 18px', borderRadius: 980, border: docSection === sec.key ? '2px solid #0071e3' : '1px solid #c7c7cc', background: docSection === sec.key ? '#0071e3' : '#fff', color: docSection === sec.key ? '#fff' : '#1d1d1f', fontWeight: 700, fontSize: 14, cursor: 'pointer', boxShadow: docSection === sec.key ? '0 2px 8px rgba(0,113,227,0.35)' : 'none' }}>
             {sec.title} ({(sections[sec.key] || []).length})
           </button>
@@ -1320,7 +1322,7 @@ function DocsTab({ user, token }) {
             const on = curDocFolder === fn;
             return (
               <span key={fn} style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
-                <button className={on ? 'docs-active-tab' : ''} onClick={() => { setDocFolder(prev => ({ ...prev, [docSection]: fn })); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
+                <button className={on ? 'docs-active-tab' : ''} onClick={() => { setDocFolder(prev => ({ ...prev, [docSection]: fn })); setDocPath(prev => ({ ...prev, [docSection]: '' })); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
                   style={{ padding: '5px 14px', borderRadius: 980, border: on ? '2px solid #0071e3' : '1px solid #d0d0d5', background: on ? '#0071e3' : '#fff', color: on ? '#fff' : '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer', boxShadow: on ? '0 2px 8px rgba(0,113,227,0.35)' : 'none' }}>
                   {fn === 'All' ? '🗂 Все' : `📁 ${fn}`} ({cnt})
                 </button>
@@ -1333,6 +1335,18 @@ function DocsTab({ user, token }) {
                   </React.Fragment>
                 )}
               </span>
+            );
+          })}
+          {topTreeFolders.map(tp => {
+            const tcnt = allItems.filter(it => { const d = dirOfDocPath(docMediaOf(it).path); return d === tp || d.startsWith(tp + '/'); }).length;
+            const ton = curDocPath === tp || curDocPath.startsWith(tp + '/');
+            return (
+              <button key={`tree-${tp}`} className={ton ? 'docs-active-tab' : ''}
+                onClick={() => { setDocFolder(prev => ({ ...prev, [docSection]: 'All' })); setDocPath(prev => ({ ...prev, [docSection]: tp })); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
+                title={`Папка структуры «${tp}» — файлов: ${tcnt}`}
+                style={{ padding: '5px 14px', borderRadius: 980, border: ton ? '2px solid #0071e3' : '1px solid #d0d0d5', background: ton ? '#0071e3' : '#fff', color: ton ? '#fff' : '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer', boxShadow: ton ? '0 2px 8px rgba(0,113,227,0.35)' : 'none' }}>
+                📁 {tp} ({tcnt})
+              </button>
             );
           })}
         </div>
@@ -7262,7 +7276,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v68.8.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v68.9 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
