@@ -1024,6 +1024,7 @@ function DocsTab({ user, token }) {
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
     setSections(prev => ({ ...prev, [docSection]: Array.isArray(j.attachments) ? j.attachments : prev[docSection] }));
+    if (body && body.moveTo) loadDocs(); // v68.8.2: при переносе между разделами обновляем ВСЕ вкладки с сервера
     if (okMsg) console.log(okMsg);
   };
   const renameDocsFolder = async (fn) => {
@@ -1231,11 +1232,18 @@ function DocsTab({ user, token }) {
   const folderItems = curDocFolder === 'All' ? allItems : allItems.filter(it => docMediaOf(it).folder === curDocFolder);
   // v57.9: навигация по структуре загруженных папок (item.path)
   const curDocPath = (docPath[docSection] || '').replace(/^\/+|\/+$/g, '');
-  // v68.7.1: ВАЖНО — item.path хранит путь ВКЛЮЧАЯ имя файла ('Kit_foto/IMG_1.jpeg').
-  // Папка файла = путь без последнего сегмента.
+  // v68.8.2: всеядно — path может хранить путь С именем файла ('Kit/IMG_1.jpeg')
+  // или БЕЗ него (legacy 'Kit' от перемещений на старом backend): если последний сегмент
+  // похож на имя файла (есть расширение) — папка без него, иначе весь путь — папка файла.
+  const dirOfDocPath = (p) => {
+    const q = String(p || '').replace(/^\/+|\/+$/g, '');
+    if (!q) return '';
+    const segs = q.split('/');
+    const last = segs[segs.length - 1];
+    return /\.[A-Za-z0-9]{2,5}$/.test(last) ? segs.slice(0, -1).join('/') : q;
+  };
   const relPathOf = (it) => {
-    const p = String(docMediaOf(it).path || '').replace(/^\/+|\/+$/g, '');
-    const dir = p.indexOf('/') !== -1 ? p.split('/').slice(0, -1).join('/') : '';
+    const dir = dirOfDocPath(docMediaOf(it).path);
     if (curDocPath) {
       if (dir === curDocPath) return ''; // файл прямо в текущей папке
       if (dir.startsWith(curDocPath + '/')) return dir.slice(curDocPath.length + 1); // во вложенной подпапке
@@ -1271,15 +1279,9 @@ function DocsTab({ user, token }) {
   const dynFolders = [...new Set([...(DOC_FOLDERS[docSection] || []), ...(customFolders[docSection] || []), ...usedFolders])]
     .filter(f => !(hiddenFolders[docSection] || []).includes(f));
   // v68.7: все пути дерева структуры (item.path) — для перемещения в существующие папки дерева
-  const allTreePaths = [...new Set(allItems.map(it => {
-    const p = String(docMediaOf(it).path || '').replace(/^\/+|\/+$/g, '');
-    return p.indexOf('/') !== -1 ? p.split('/').slice(0, -1).join('/') : '';
-  }).filter(Boolean))].sort();
+  const allTreePaths = [...new Set(allItems.map(it => dirOfDocPath(docMediaOf(it).path)).filter(Boolean))].sort();
   // v68.8: папки и деревья ДРУГИХ разделов — для перемещения между вкладками
-  const dirOfPath = (p) => {
-    const q = String(p || '').replace(/^\/+|\/+$/g, '');
-    return q.indexOf('/') !== -1 ? q.split('/').slice(0, -1).join('/') : '';
-  };
+  const dirOfPath = dirOfDocPath;
   const otherSections = DOC_SECTIONS.filter(sec => sec.key !== docSection).map(sec => {
     const list = sections[sec.key] || [];
     const used = [...new Set(list.map(it => docMediaOf(it).folder).filter(Boolean))];
@@ -7260,7 +7262,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v68.8.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v68.8.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
