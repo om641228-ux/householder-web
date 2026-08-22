@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v68.0.1-2026-08-22', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v68.7-2026-08-22', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -4154,7 +4154,20 @@ app.patch('/api/docs/:category/files', requireAuth, async (req, res) => {
     const objIt = (it) => (it && typeof it === 'object');
     let next = cur;
 
-    if (Array.isArray(body.urls) && typeof body.folder === 'string') {
+    if (Array.isArray(body.urls) && typeof body.path === 'string' && typeof body.folder !== 'string') {
+      // v68.7: перемещение группы файлов в папку СТРУКТУРЫ (item.path); '' — в корень дерева
+      const set = new Set(body.urls.slice(0, 500).map(String));
+      const tp = body.path.trim().slice(0, 200).replace(/^\/+|\/+$/g, '');
+      let cnt = 0;
+      next = cur.map(it => {
+        if (!objIt(it) || !set.has(it.url)) return it;
+        cnt++;
+        const o = { ...it };
+        if (tp) o.path = tp; else delete o.path;
+        return o;
+      });
+      if (!cnt) return res.status(404).json({ error: 'Файлы не найдены в разделе' });
+    } else if (Array.isArray(body.urls) && typeof body.folder === 'string') {
       // v59: перемещение группы файлов в подпапку
       const set = new Set(body.urls.slice(0, 500).map(String));
       const folder = body.folder.trim().slice(0, 40);

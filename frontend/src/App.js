@@ -1055,6 +1055,15 @@ function DocsTab({ user, token }) {
     setCustomFolders(prev => ({ ...prev, [docSection]: (prev[docSection] || []).filter(f => f !== fn) }));
     setHiddenFolders(prev => ({ ...prev, [docSection]: [...new Set([...(prev[docSection] || []), fn])] }));
   };
+  // v68.6: создать пустую папку (реестр в localStorage) и сразу перейти в неё
+  const createDocsFolder = () => {
+    const nm = (window.prompt('Имя новой папки:') || '').trim().slice(0, 40);
+    if (!nm) return;
+    if (dynFolders.includes(nm)) { alert(`Папка «${nm}» уже есть`); return; }
+    setCustomFolders(prev => ({ ...prev, [docSection]: [...new Set([...(prev[docSection] || []), nm])] }));
+    setHiddenFolders(prev => ({ ...prev, [docSection]: (prev[docSection] || []).filter(f => f !== nm) }));
+    setDocFolder(prev => ({ ...prev, [docSection]: nm }));
+  };
 
   // v66: переименование папки из структуры загрузки (item.path) — через префикс пути
   const renameDocsSubfolder = async (fn) => {
@@ -1074,6 +1083,14 @@ function DocsTab({ user, token }) {
     if (!selectedUrls.length) return;
     try {
       await docsFolderOp({ urls: selectedUrls, folder });
+      setDocsSelected({}); setDocsSelectMode(false);
+    } catch (e) { alert('Не переместилось: ' + e.message); }
+  };
+  // v68.7: переместить выбранные файлы в папку СТРУКТУРЫ (item.path), '' — в корень дерева
+  const moveSelectedDocsToPath = async (p) => {
+    if (!selectedUrls.length) return;
+    try {
+      await docsFolderOp({ urls: selectedUrls, path: p });
       setDocsSelected({}); setDocsSelectMode(false);
     } catch (e) { alert('Не переместилось: ' + e.message); }
   };
@@ -1147,10 +1164,11 @@ function DocsTab({ user, token }) {
     const canPreview = m.kind === 'photo' || m.kind === 'video' || isPdfD;
     const isSel = !!docsSelected[m.url]; // v59
     return (
-      <span key={key} style={{ position: 'relative', display: 'inline-block', borderRadius: 8, outline: isSel ? '3px solid #0071e3' : 'none', outlineOffset: 1 }} title={m.name || 'Файл'}
+      <span key={key} style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', width: 96, borderRadius: 8, outline: isSel ? '3px solid #0071e3' : 'none', outlineOffset: 1 }} title={m.name || 'Файл'}
         onClickCapture={docsSelectMode ? (e) => { e.preventDefault(); e.stopPropagation(); setDocsSelected(prev => ({ ...prev, [m.url]: !prev[m.url] })); } : undefined}
         onMouseEnter={() => { if (canPreview && !docsSelectMode) setDocsHover({ url: m.url, kind: isPdfD ? 'pdf' : m.kind, name: m.name || '' }); }}
         onMouseLeave={() => setDocsHover(prev => (prev && prev.url === m.url ? null : prev))}>
+        <span style={{ position: 'relative', display: 'inline-block' }}>
         {docsSelectMode && (
           <span style={{ position: 'absolute', top: -6, left: -6, width: 20, height: 20, borderRadius: '50%', background: isSel ? '#0071e3' : '#fff', border: '2px solid #0071e3', color: '#fff', fontSize: 12, lineHeight: '17px', textAlign: 'center', zIndex: 2 }}>{isSel ? '✓' : ''}</span>
         )}
@@ -1179,8 +1197,9 @@ function DocsTab({ user, token }) {
         {m.ocr && Array.isArray(m.ocr.pages) && m.ocr.pages.length ? (
           <span title="Текст распознан и сохранён — откроется карточка" style={{ position: 'absolute', bottom: -6, right: -6, width: 16, height: 16, borderRadius: '50%', background: '#34c759', color: '#fff', fontSize: 9, lineHeight: '16px', textAlign: 'center', zIndex: 1 }}>Т</span>
         ) : null}
-        {m.name ? <div style={{ position: 'absolute', bottom: -16, left: 0, right: 0, fontSize: 9, color: '#8e8e93', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 72 }}>{m.name}</div> : null}
-        <div style={{ position: 'absolute', bottom: -27, left: 0, right: 0, fontSize: 9, color: m.docDate ? '#1d1d1f' : '#c7c7cc', textAlign: 'center', whiteSpace: 'nowrap', maxWidth: 80, overflow: 'hidden' }}>
+        </span>
+        {m.name ? <div style={{ marginTop: 5, width: 96, fontSize: 10, color: '#555', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</div> : null}
+        <div style={{ marginTop: 1, width: 96, fontSize: 9, color: m.docDate ? '#1d1d1f' : '#c7c7cc', textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden' }}>
           {m.docDate ? `📅 ${fmtDocDate(m.docDate)}` : (m.ts ? `⇪ ${fmtDocDate(new Date(m.ts).toISOString().slice(0, 10))}` : '')}
         </div>
       </span>
@@ -1194,8 +1213,14 @@ function DocsTab({ user, token }) {
   const curDocPath = (docPath[docSection] || '').replace(/^\/+|\/+$/g, '');
   const relPathOf = (it) => {
     let p = String(docMediaOf(it).path || '').replace(/^\/+|\/+$/g, '');
-    if (curDocPath && p.startsWith(curDocPath + '/')) p = p.slice(curDocPath.length + 1);
-    else if (curDocPath) return null; // файл вне текущей ветки
+    // v68.7: старые загрузки могли сохранить ИМЯ файла как path — такой путь считаем корнем
+    if (p && p.indexOf('/') === -1 && /\.[A-Za-z0-9]{2,5}$/.test(p)) p = '';
+    // v68.7: строго — внутри выбранной папки показываем ТОЛЬКО её файлы (и подпапки)
+    if (curDocPath) {
+      if (p === curDocPath) return ''; // файл прямо в текущей папке
+      if (p.startsWith(curDocPath + '/')) return p.slice(curDocPath.length + 1);
+      return null; // файл вне текущей ветки — не показываем
+    }
     return p;
   };
   const subFolders = [];
@@ -1203,8 +1228,8 @@ function DocsTab({ user, token }) {
   const items = folderItems.filter(it => {
     const p = relPathOf(it);
     if (p === null) return false;
-    if (p.indexOf('/') === -1) return true; // файл прямо в текущей папке
-    const first = p.split('/')[0];
+    if (p === '') return true; // v68.7: файл прямо в текущей папке — только пустой относительный путь
+    const first = p.split('/')[0]; // иначе первый сегмент — подпапка дерева
     if (!seenSub[first]) { seenSub[first] = 0; subFolders.push(first); }
     seenSub[first]++;
     return false;
@@ -1225,6 +1250,8 @@ function DocsTab({ user, token }) {
   const usedFolders = [...new Set(allItems.map(it => docMediaOf(it).folder).filter(Boolean))];
   const dynFolders = [...new Set([...(DOC_FOLDERS[docSection] || []), ...(customFolders[docSection] || []), ...usedFolders])]
     .filter(f => !(hiddenFolders[docSection] || []).includes(f));
+  // v68.7: все пути дерева структуры (item.path) — для перемещения в существующие папки дерева
+  const allTreePaths = [...new Set(allItems.map(it => String(docMediaOf(it).path || '').replace(/^\/+|\/+$/g, '')).filter(p => p && !/\.[A-Za-z0-9]{2,5}$/.test(p.split('/').pop())))].sort();
   return (
     <div style={{ padding: '12px 15px', maxWidth: 1100, margin: '0 auto' }}>
       <style>{'.docs-active-tab{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important}.docs-active-tab:hover{background:#0066d6 !important}'}</style>
@@ -1245,9 +1272,11 @@ function DocsTab({ user, token }) {
           </button>
         ))}
       </div>
-      {dynFolders.length > 0 && (
+      {(
         <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
           <span style={{ fontSize: 12, color: '#8e8e93', marginRight: 2 }}>Папка:</span>
+          <button onClick={createDocsFolder} title="Создать новую папку"
+            style={{ padding: '5px 12px', borderRadius: 980, border: '1px dashed #0071e3', background: '#fff', color: '#0071e3', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>＋ Папка</button>
           {['All', ...dynFolders].map(fn => {
             const cnt = fn === 'All' ? allItems.length : allItems.filter(it => docMediaOf(it).folder === fn).length;
             const on = curDocFolder === fn;
@@ -1293,7 +1322,7 @@ function DocsTab({ user, token }) {
               style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>☑ Все</button>
             <button onClick={() => setDocsSelected({})} title="Снять выделение"
               style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>☐ Снять</button>
-            <select defaultValue="" onChange={e => {
+            <select defaultValue="" title="Переместить выбранные файлы в папку" onChange={e => {
               const v = e.target.value;
               e.target.value = '';
               if (v === '__new') {
@@ -1303,12 +1332,21 @@ function DocsTab({ user, token }) {
                   moveSelectedDocs(nm);
                 }
               }
+              else if (v === '__none') moveSelectedDocs('');
+              else if (v === '__newpath') {
+                const nm = (window.prompt(`Новая подпапка в дереве${curDocPath ? ` «${curDocPath}»` : ''} (имя):`) || '').trim().slice(0, 60).replace(/^[\/]+|[\/]+$/g, '');
+                if (nm) moveSelectedDocsToPath(curDocPath ? curDocPath + '/' + nm : nm);
+              }
+              else if (v.startsWith('path::')) moveSelectedDocsToPath(v.slice(6));
               else if (v !== '') moveSelectedDocs(v);
-            }} style={{ padding: '4px 8px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 12, background: '#fff' }}>
-              <option value="" disabled>Переместить в…</option>
+            }} style={{ padding: '5px 14px', borderRadius: 980, border: 'none', background: selectedUrls.length ? '#0071e3' : '#f0f0f2', color: selectedUrls.length ? '#fff' : '#8e8e93', fontWeight: 600, fontSize: 12.5, cursor: selectedUrls.length ? 'pointer' : 'not-allowed' }} disabled={!selectedUrls.length}>
+              <option value="" disabled>📁 Переместить в папку…</option>
               {dynFolders.map(fn => <option key={fn} value={fn}>📁 {fn}</option>)}
               <option value="__new">＋ Новая папка…</option>
-              <option value="">🚫 Без папки</option>
+              <option value="__none">🚫 Без папки</option>
+              {allTreePaths.length > 0 && <option value="" disabled>── Дерево папок ──</option>}
+              {allTreePaths.map(tp => <option key={tp} value={`path::${tp}`}>🌳 {tp}</option>)}
+              <option value="__newpath">🌳＋ Новая подпапка в текущей ветке…</option>
             </select>
             <button onClick={removeSelectedDocs} disabled={!selectedUrls.length}
               style={{ padding: '5px 14px', borderRadius: 980, border: 'none', background: selectedUrls.length ? '#e74c3c' : '#f0f0f2', color: selectedUrls.length ? '#fff' : '#8e8e93', fontWeight: 600, fontSize: 12.5, cursor: selectedUrls.length ? 'pointer' : 'not-allowed' }}>🗑 Удалить</button>
@@ -1341,7 +1379,7 @@ function DocsTab({ user, token }) {
             ))}
           </div>
         )}
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-start', paddingBottom: 32 }}>
+        <div style={{ display: 'flex', gap: 18, rowGap: 34, flexWrap: 'wrap', alignItems: 'flex-start', paddingBottom: 12 }}>
           {itemsSorted.map((entry, i) => docThumb(entry, i))}
           <label title="Добавить файлы любого типа" style={{ width: 72, height: 72, borderRadius: 8, border: '1px dashed #c7c7cc', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: docsBusy ? 'wait' : 'pointer', fontSize: 24, color: '#8e8e93', background: '#f5f5f7' }}>
             {docsBusy ? '⏳' : '📎'}
@@ -7143,7 +7181,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v68.5.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v68.7 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
