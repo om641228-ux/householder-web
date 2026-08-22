@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v68.7-2026-08-22', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v68.7.1-2026-08-22', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -4163,7 +4163,10 @@ app.patch('/api/docs/:category/files', requireAuth, async (req, res) => {
         if (!objIt(it) || !set.has(it.url)) return it;
         cnt++;
         const o = { ...it };
-        if (tp) o.path = tp; else delete o.path;
+        // v68.7.1: path хранится ВКЛЮЧАЯ имя файла — к папке дописываем имя
+        const fn = String(it.name || '').trim() || decodeURIComponent(String(it.url || '').split('/').pop() || 'file');
+        if (tp) o.path = tp + '/' + fn;
+        else o.path = fn; // корень дерева — путь = просто имя файла
         return o;
       });
       if (!cnt) return res.status(404).json({ error: 'Файлы не найдены в разделе' });

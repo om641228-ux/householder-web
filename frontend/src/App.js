@@ -1211,17 +1211,17 @@ function DocsTab({ user, token }) {
   const folderItems = curDocFolder === 'All' ? allItems : allItems.filter(it => docMediaOf(it).folder === curDocFolder);
   // v57.9: навигация по структуре загруженных папок (item.path)
   const curDocPath = (docPath[docSection] || '').replace(/^\/+|\/+$/g, '');
+  // v68.7.1: ВАЖНО — item.path хранит путь ВКЛЮЧАЯ имя файла ('Kit_foto/IMG_1.jpeg').
+  // Папка файла = путь без последнего сегмента.
   const relPathOf = (it) => {
-    let p = String(docMediaOf(it).path || '').replace(/^\/+|\/+$/g, '');
-    // v68.7: старые загрузки могли сохранить ИМЯ файла как path — такой путь считаем корнем
-    if (p && p.indexOf('/') === -1 && /\.[A-Za-z0-9]{2,5}$/.test(p)) p = '';
-    // v68.7: строго — внутри выбранной папки показываем ТОЛЬКО её файлы (и подпапки)
+    const p = String(docMediaOf(it).path || '').replace(/^\/+|\/+$/g, '');
+    const dir = p.indexOf('/') !== -1 ? p.split('/').slice(0, -1).join('/') : '';
     if (curDocPath) {
-      if (p === curDocPath) return ''; // файл прямо в текущей папке
-      if (p.startsWith(curDocPath + '/')) return p.slice(curDocPath.length + 1);
+      if (dir === curDocPath) return ''; // файл прямо в текущей папке
+      if (dir.startsWith(curDocPath + '/')) return dir.slice(curDocPath.length + 1); // во вложенной подпапке
       return null; // файл вне текущей ветки — не показываем
     }
-    return p;
+    return dir;
   };
   const subFolders = [];
   const seenSub = {};
@@ -1251,7 +1251,10 @@ function DocsTab({ user, token }) {
   const dynFolders = [...new Set([...(DOC_FOLDERS[docSection] || []), ...(customFolders[docSection] || []), ...usedFolders])]
     .filter(f => !(hiddenFolders[docSection] || []).includes(f));
   // v68.7: все пути дерева структуры (item.path) — для перемещения в существующие папки дерева
-  const allTreePaths = [...new Set(allItems.map(it => String(docMediaOf(it).path || '').replace(/^\/+|\/+$/g, '')).filter(p => p && !/\.[A-Za-z0-9]{2,5}$/.test(p.split('/').pop())))].sort();
+  const allTreePaths = [...new Set(allItems.map(it => {
+    const p = String(docMediaOf(it).path || '').replace(/^\/+|\/+$/g, '');
+    return p.indexOf('/') !== -1 ? p.split('/').slice(0, -1).join('/') : '';
+  }).filter(Boolean))].sort();
   return (
     <div style={{ padding: '12px 15px', maxWidth: 1100, margin: '0 auto' }}>
       <style>{'.docs-active-tab{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important}.docs-active-tab:hover{background:#0066d6 !important}'}</style>
@@ -7181,7 +7184,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v68.7 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v68.7.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
