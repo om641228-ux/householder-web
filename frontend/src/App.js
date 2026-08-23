@@ -933,9 +933,9 @@ function DocsTab({ user, token }) {
 
   const addDocs = async (cat, fileList) => {
     let files = Array.from(fileList || []);
-    const tooBig = files.filter(f => f.size > 500 * 1024 * 1024);
-    if (tooBig.length) alert(`Слишком большие файлы (максимум 500 МБ) — пропущены:\n${tooBig.map(f => `${f.name} — ${(f.size / 1024 / 1024).toFixed(0)} МБ`).join('\n')}`);
-    files = files.filter(f => f.size <= 500 * 1024 * 1024);
+    const tooBig = files.filter(f => f.size > 1024 * 1024 * 1024);
+    if (tooBig.length) alert(`Слишком большие файлы (максимум 1 ГБ) — пропущены:\n${tooBig.map(f => `${f.name} — ${(f.size / 1024 / 1024).toFixed(0)} МБ`).join('\n')}\n\nБольшие видео сожмите заранее (HandBrake/ffmpeg, H.265 1080p) — тогда пройдут.`);
+    files = files.filter(f => f.size <= 1024 * 1024 * 1024);
     if (!files.length) return;
     // v69.5: партии — чтобы сервер не держал весь объём в памяти (16+ ГБ одним запросом = падение)
     const BATCH_MAX_FILES = 80;
@@ -1488,7 +1488,7 @@ function DocsTab({ user, token }) {
       <style>{'.docs-active-tab{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important}.docs-active-tab:hover{background:#0066d6 !important}'}</style>
       <h2 style={{ margin: '4px 0 4px', fontSize: 20 }}>📁 Документы</h2>
       <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 12 }}>
-        Файлы любых типов — фото, видео, аудио, текст, PDF и другие. Общее хранилище команды (сервер). Видео больше ~50 МБ сжимаются на сервере автоматически.
+        Файлы любых типов — фото, видео, аудио, текст, PDF и другие. Общее хранилище команды (сервер). Видео 50–300 МБ сжимаются на сервере автоматически; 300 МБ–1 ГБ загружаются как есть (большие видео лучше сжать заранее: H.265 1080p).
       </div>
       {docsError && (
         <div style={{ background: '#fff4e5', border: '1px solid #ffd699', borderRadius: 10, padding: '8px 12px', fontSize: 13, color: '#8a6d3b', marginBottom: 10 }}>
@@ -1724,7 +1724,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v69.7 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v69.8 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -7578,7 +7578,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v69.7 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v69.8 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

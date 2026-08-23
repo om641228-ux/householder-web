@@ -17,7 +17,7 @@ require('dotenv').config();
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
-const crmMediaUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } }); // CRM-медиа (v36.1): видео/аудио до 500 МБ
+const crmMediaUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 1024 * 1024 * 1024 } }); // CRM-медиа (v36.1/v69.8): видео/аудио до 1 ГБ
 // Обёртка над multer: LIMIT_FILE_SIZE и прочие ошибки отдаём JSON (413/400), а не HTML-страницей Express → фронт покажет понятный текст
 const crmMediaMulter = (field) => (req, res, next) => {
   crmMediaUpload.array(field)(req, res, (err) => {
@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v69.2-2026-08-22', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v69.8-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -3927,7 +3927,8 @@ app.post('/api/crm/counterparties/:id/files', requireAuth, crmMediaMulter('files
         if (!mkind) continue;
         let buf = f.buffer, ct = mt;
         if (mkind === 'photo') { buf = await processImage(f.buffer); ct = 'image/jpeg'; }
-        if (mkind === 'video' && f.size > 48 * 1024 * 1024) { buf = await compressVideoBuffer(f.buffer); ct = 'video/mp4'; }
+        // v69.8: >300 МБ — как есть (ffmpeg на ГБ-файлах = OOM)
+        if (mkind === 'video' && f.size > 48 * 1024 * 1024 && f.size <= 300 * 1024 * 1024) { buf = await compressVideoBuffer(f.buffer); ct = 'video/mp4'; }
         if (mkind === 'doc' && !ct) ct = /\.pdf$/i.test(f.originalname || '') ? 'application/pdf' : 'text/plain';
         const url = await uploadToStorage(buf, f.originalname || 'file', 'crm_cp', ct);
         items.push({ url, kind: mkind, name: f.originalname || '', ts: Date.now(), actor: userName });
@@ -3982,7 +3983,8 @@ app.post('/api/crm/contacts/:id/files', requireAuth, crmMediaMulter('files'), as
         if (!mkind) continue;
         let buf = f.buffer, ct2 = mt;
         if (mkind === 'photo') { buf = await processImage(f.buffer); ct2 = 'image/jpeg'; }
-        if (mkind === 'video' && f.size > 48 * 1024 * 1024) { buf = await compressVideoBuffer(f.buffer); ct2 = 'video/mp4'; }
+        // v69.8: >300 МБ — как есть (ffmpeg на ГБ-файлах = OOM)
+        if (mkind === 'video' && f.size > 48 * 1024 * 1024 && f.size <= 300 * 1024 * 1024) { buf = await compressVideoBuffer(f.buffer); ct2 = 'video/mp4'; }
         if (mkind === 'doc' && !ct2) ct2 = /\.pdf$/i.test(f.originalname || '') ? 'application/pdf' : 'text/plain';
         const url = await uploadToStorage(buf, f.originalname || 'file', 'crm_contacts', ct2);
         items.push({ url, kind: mkind, name: f.originalname || '', ts: Date.now(), actor: userName });
@@ -4056,7 +4058,7 @@ app.get('/api/docs', requireAuth, async (req, res) => {
   }
 });
 
-// POST /api/docs/:category/files — multipart/form-data, поле files (любые типы, ≤500 МБ на файл)
+// POST /api/docs/:category/files — multipart/form-data, поле files (любые типы, ≤1 ГБ на файл)
 app.post('/api/docs/:category/files', requireAuth, crmMediaMulter('files'), async (req, res) => {
   try {
     const cat = String(req.params.category || '');
@@ -4079,7 +4081,8 @@ app.post('/api/docs/:category/files', requireAuth, crmMediaMulter('files'), asyn
           : (mt === 'application/pdf' || /^text\//.test(mt) || /\.(pdf|txt|md|csv)$/i.test(f.originalname || '')) ? 'doc' : 'file';
         let buf = f.buffer, ct = mt || 'application/octet-stream';
         if (mkind === 'photo') { buf = await processImage(f.buffer); ct = 'image/jpeg'; }
-        if (mkind === 'video' && f.size > 48 * 1024 * 1024) { buf = await compressVideoBuffer(f.buffer); ct = 'video/mp4'; }
+        // v69.8: >300 МБ — как есть (ffmpeg на ГБ-файлах = OOM)
+        if (mkind === 'video' && f.size > 48 * 1024 * 1024 && f.size <= 300 * 1024 * 1024) { buf = await compressVideoBuffer(f.buffer); ct = 'video/mp4'; }
         const fixedName = fixUtf8Name(f.originalname || 'file');
         const url = await uploadToStorage(buf, fixedName, `docs/${cat}`, ct);
         const folder = String(req.body.folder || '').trim().slice(0, 40);
@@ -4566,7 +4569,8 @@ app.post('/api/crm/tasks/:id/photos', requireAuth, crmMediaMulter('photos'), asy
         if (!mkind) continue;
         let buf = f.buffer, ct = mt;
         if (mkind === 'photo') { buf = await processImage(f.buffer); ct = 'image/jpeg'; }
-        if (mkind === 'video' && f.size > 48 * 1024 * 1024) { buf = await compressVideoBuffer(f.buffer); ct = 'video/mp4'; }
+        // v69.8: >300 МБ — как есть (ffmpeg на ГБ-файлах = OOM)
+        if (mkind === 'video' && f.size > 48 * 1024 * 1024 && f.size <= 300 * 1024 * 1024) { buf = await compressVideoBuffer(f.buffer); ct = 'video/mp4'; }
         if (mkind === 'doc' && !ct) ct = /\.pdf$/i.test(f.originalname || '') ? 'application/pdf' : 'text/plain';
         const url = await uploadToStorage(buf, `${kind}_${f.originalname || 'file'}`, 'crm', ct);
         items.push({ url, kind: mkind, name: f.originalname || '', ts: Date.now(), actor: userName });
