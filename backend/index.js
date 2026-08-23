@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v70-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v70.2-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -4169,11 +4169,13 @@ app.post('/api/docs/:category/big/complete', requireAuth, async (req, res) => {
     if (!DOC_CATEGORIES.includes(cat)) return res.status(400).json({ error: 'Неизвестный раздел' });
     const { key, uploadId, parts, name, type, relPath, size } = req.body || {};
     if (!key || !uploadId || !Array.isArray(parts) || !parts.length) return res.status(400).json({ error: 'Передайте {key, uploadId, parts[]}' });
+    console.log(`[big/complete] start: ${key}, parts=${parts.length}`);
     const { s3 } = r2Sdk();
     await getR2(s3.S3Client).send(new s3.CompleteMultipartUploadCommand({
       Bucket: R2_BUCKET, Key: key, UploadId: uploadId,
       MultipartUpload: { Parts: parts.map(p => ({ PartNumber: p.PartNumber, ETag: p.ETag })).sort((a, b) => a.PartNumber - b.PartNumber) }
     }));
+    console.log(`[big/complete] R2 assembled: ${key}`);
     const fixedName = fixUtf8Name(String(name || 'big.mp4')).slice(0, 180);
     const mt = String(type || '');
     const mkind = /^image\//.test(mt) ? 'photo' : /^video\//.test(mt) ? 'video' : /^audio\//.test(mt) ? 'audio'
@@ -4182,14 +4184,16 @@ app.post('/api/docs/:category/big/complete', requireAuth, async (req, res) => {
     if (size) item.size = size;
     const rp = String(relPath || '').trim().slice(0, 200).replace(/^\/+|\/+$/g, '');
     if (rp) item.path = rp;
+    console.log(`[big/complete] supabase write: ${cat}`);
     const { data: row } = await supabaseAdmin.from('doc_sections').select('*').eq('category', cat).maybeSingle();
     const cur = row && Array.isArray(row.attachments) ? row.attachments : [];
     const { data, error } = await supabaseAdmin.from('doc_sections')
       .upsert({ category: cat, attachments: [...cur, item], updated_at: new Date().toISOString() }, { onConflict: 'category' })
       .select().single();
     if (error) throw error;
+    console.log(`[big/complete] done: ${key}`);
     res.json({ category: cat, attachments: fixDocsAttachments(data.attachments) });
-  } catch (e) { res.status(e.statusCode || 500).json({ error: e.message }); }
+  } catch (e) { console.error('[big/complete] FAIL:', e.message); res.status(e.statusCode || 500).json({ error: 'Сборка файла: ' + e.message }); }
 });
 app.post('/api/docs/:category/big/abort', requireAuth, async (req, res) => {
   try {

@@ -1003,10 +1003,21 @@ function DocsTab({ user, token }) {
       try { localStorage.setItem(lsKey, JSON.stringify(state)); } catch (e) {}
       if (onProgress) onProgress(doneBytes, `${f.name} · часть ${pn}/${partCount} готова`);
     }
-    const cr = await fetch(`${API_URL}/api/docs/${cat}/big/complete?token=${token}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key: state.key, uploadId: state.uploadId, parts: state.parts.map(p => ({ PartNumber: p.PartNumber, ETag: p.ETag })), name: f.name, type: f.type, relPath: rel, size: f.size })
-    });
+    // v70.2: финальная сборка — с таймаутом, чтобы не висеть на 100% молча
+    setDocsUpload(prev => prev ? { ...prev, currentFile: `☁️ ${f.name} — сборка файла в облаке…` } : prev);
+    const ac = new AbortController();
+    const acTimer = setTimeout(() => ac.abort(), 120000);
+    let cr;
+    try {
+      cr = await fetch(`${API_URL}/api/docs/${cat}/big/complete?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ac.signal,
+        body: JSON.stringify({ key: state.key, uploadId: state.uploadId, parts: state.parts.map(p => ({ PartNumber: p.PartNumber, ETag: p.ETag })), name: f.name, type: f.type, relPath: rel, size: f.size })
+      });
+    } catch (fe) {
+      throw new Error(fe && fe.name === 'AbortError'
+        ? 'Сборка файла в облаке заняла больше 2 минут — повторите загрузку, все части уже в облаке и продолжатся с этого места'
+        : 'Сборка файла: ' + (fe && fe.message || 'сетевая ошибка'));
+    } finally { clearTimeout(acTimer); }
     const cj = await cr.json().catch(() => ({}));
     if (!cr.ok) throw new Error(cj.error || `HTTP ${cr.status}`);
     try { localStorage.removeItem(lsKey); } catch (e) {}
@@ -1820,7 +1831,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v70.1 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v70.2 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -7674,7 +7685,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v70.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v70.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

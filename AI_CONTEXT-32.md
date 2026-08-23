@@ -1960,3 +1960,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Причина ошибки «The object exceeded the maximum allowed size»: это лимит Supabase Storage (~50 МБ на объект), НЕ наш сервер. Обычный порционный путь хранит файлы в Supabase, поэтому всё крупнее ~50 МБ падало.
 - Фикс (только фронт, App.js): BIG_FILE_LIMIT снижен с 1 ГБ до 40 МБ — файлы >40 МБ идут напрямую в Cloudflare R2 (bigUploadDoc, части 32 МБ, докачка через localStorage). Мелкие файлы — как раньше, через сервер в Supabase.
 - Бэкенд не менялся. Метки: футер и модалка «сборка · v70.1 ·». md5 App.js = 5735b00e23d0086231e12d0349e86b1e.
+
+## v70.2 (2026-08-24)
+- Симптом: прямая загрузка в R2 доходит до «часть 73/73 готова» и висит на 100% — затык на /big/complete (сборка multipart + запись в doc_sections).
+- index.js: логи [big/complete] start/R2 assembled/supabase write/done/FAIL, текст ошибки с префиксом «Сборка файла:». Health: v70.2-2026-08-24.
+- App.js: big/complete fetch с AbortController 120с + понятные сообщения (повтор загрузки докачает — части уже в облаке), статус «сборка файла в облаке…». Метки · v70.2 ·.
