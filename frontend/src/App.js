@@ -497,6 +497,20 @@ function loadXlsx() {
   });
   return xlsxLoading;
 }
+// v69.7: JSZip с CDN — сборка ZIP-архива выбранных чеков прямо в браузере
+let jszipLoading = null;
+function loadJSZip() {
+  if (window.JSZip) return Promise.resolve(window.JSZip);
+  if (jszipLoading) return jszipLoading;
+  jszipLoading = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+    script.onload = () => resolve(window.JSZip);
+    script.onerror = () => reject(new Error('Не удалось загрузить модуль ZIP — проверьте интернет'));
+    document.head.appendChild(script);
+  });
+  return jszipLoading;
+}
 const isExcelName = (name) => /\.(xlsx?|xlsm|xlsb|csv|ods)(\?|$)/i.test(name || '');
 
 const isPdfFile = (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '');
@@ -1710,7 +1724,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v69.6 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v69.7 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -3561,6 +3575,7 @@ function App() {
   // Фокус на группе дубликатов ОДНОЙ выбранной карточки (кнопка «Показать копии»)
   const [dupFocusId, setDupFocusId] = useState(null);
   const [exportProgress, setExportProgress] = useState(null); // v68.2: {done, total, files} — окно прогресса «Загрузить»
+  const [exportMenuOpen, setExportMenuOpen] = useState(false); // v69.7: всплывающее меню «Загрузить» (файлы / ZIP)
   const [confirmDlg, setConfirmDlg] = useState(null); // v68.3: {title, text, yesLabel, danger, onYes} — подтверждение действий (загрузка/удаление)
   const exportStopRef = useRef(false);
 
@@ -4741,6 +4756,75 @@ function App() {
       alert(`✅ Экспорт завершён! Сохранено файлов/папок: ${savedCount}`);
     } else {
       alert('✅ Скачивание завершено!');
+    }
+  };
+
+  // v69.7: «Загрузить ZIP» — подтверждение, затем сборка одного архива (папка на каждый чек)
+  const handleExportZip = () => {
+    if (selectedReceiptIds.size === 0) return alert('Выберите чеки');
+    setConfirmDlg({
+      title: '🗜 ZIP-архив',
+      text: `Собрать выбранные чеки в ОДИН ZIP-файл?\nЧеков: ${selectedReceiptIds.size}\nРежим: ${EXPORT_MODE_LABELS[exportMode] || exportMode}\n\nВнутри архива — отдельная папка на каждый чек.`,
+      yesLabel: 'Создать ZIP',
+      onYes: () => doExportZip()
+    });
+  };
+  const doExportZip = async () => {
+    const selected = receipts.filter(r => selectedReceiptIds.has(r.id));
+    exportStopRef.current = false;
+    setExportProgress({ done: 0, total: selected.length, files: 0 });
+    try {
+      const JSZip = await loadJSZip();
+      const zip = new JSZip();
+      const formats = exportMode === 'all' ? ['excel', 'text', 'photo'] : [exportMode];
+      const usedNames = new Set();
+      let savedCount = 0;
+      let doneCount = 0;
+      for (const receipt of selected) {
+        if (exportStopRef.current) break; // ⏹ «Остановить»
+        doneCount++;
+        const safeName = (receipt.store_name || 'receipt')
+          .replace(/[^a-zA-Z0-9\u0400-\u04FF]/g, '_')
+          .substring(0, 40);
+        let folderName = `${safeName}_${String(receipt.id).slice(-4)}`;
+        let dup = 2;
+        while (usedNames.has(folderName)) { folderName = `${safeName}_${String(receipt.id).slice(-4)}_${dup}`; dup++; }
+        usedNames.add(folderName);
+        const dir = zip.folder(folderName);
+        if (formats.includes('excel')) {
+          try { dir.file('receipt.csv', generateReceiptCSV(receipt)); savedCount++; } catch (e) { console.error('ZIP csv:', e); }
+        }
+        if (formats.includes('text')) {
+          const text = receipt.raw_text || receipt.recognized_text || '';
+          if (text) { try { dir.file('recognized_text.txt', text); savedCount++; } catch (e) { console.error('ZIP text:', e); } }
+        }
+        if (formats.includes('photo')) {
+          const u = receipt.photo_url || receipt.image_url;
+          if (u) {
+            try {
+              const res = await fetch(fixImageUrl(u));
+              const blob = await res.blob();
+              const ext = (u.split('.').pop().split('?')[0]) || 'jpg';
+              dir.file(`receipt.${ext}`, blob);
+              savedCount++;
+            } catch (e) { console.error('ZIP photo:', e); }
+          }
+        }
+        setExportProgress({ done: doneCount, total: selected.length, files: savedCount });
+      }
+      if (exportStopRef.current) {
+        setExportProgress(null);
+        alert(`⏹ Сборка ZIP остановлена.\nОбработано чеков: ${doneCount} из ${selected.length} — архив НЕ создан.`);
+        return;
+      }
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const stamp = new Date().toISOString().slice(0, 10);
+      downloadBlob(blob, `checks_${stamp}_${selected.length}шт.zip`);
+      setExportProgress(null);
+      alert(`✅ ZIP-архив готов!\nЧеков: ${doneCount} · файлов внутри: ${savedCount}`);
+    } catch (e) {
+      setExportProgress(null);
+      alert('Не удалось собрать ZIP: ' + e.message);
     }
   };
 
@@ -7494,7 +7578,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v69.6 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v69.7 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7804,7 +7888,28 @@ ${bodyHtml}
                     <option value="photos">📷 Только фото</option>
                     <option value="text">📝 Только текст</option>
                   </select>
-                  <button className="bulk-btn bulk-btn-success" onClick={handleExport}>⬇ Загрузить</button>
+                  <div style={{ position: 'relative' }}>
+                    <button className="bulk-btn bulk-btn-success" onClick={() => setExportMenuOpen(v => !v)}>⬇ Загрузить ▾</button>
+                    {exportMenuOpen && (
+                      <React.Fragment>
+                        <div onClick={() => setExportMenuOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 900 }} />
+                        <div style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 901, background: '#fff', borderRadius: 12, boxShadow: '0 10px 30px rgba(0,0,0,0.18)', border: '1px solid #e3e6ea', padding: 6, minWidth: 250 }}>
+                          <button onClick={() => { setExportMenuOpen(false); handleExport(); }}
+                            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 12px', border: 'none', background: 'transparent', borderRadius: 8, fontSize: 13.5, fontWeight: 600, color: '#1d1d1f', cursor: 'pointer' }}
+                            onMouseEnter={e => { e.currentTarget.style.background = '#f5f5f7'; }} onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                            📁 Загрузить файлы
+                            <div style={{ fontSize: 11, fontWeight: 400, color: '#8e8e93', marginTop: 2 }}>в выбранную папку / по одному в «Загрузки»</div>
+                          </button>
+                          <button onClick={() => { setExportMenuOpen(false); handleExportZip(); }}
+                            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 12px', border: 'none', background: 'transparent', borderRadius: 8, fontSize: 13.5, fontWeight: 600, color: '#1d1d1f', cursor: 'pointer' }}
+                            onMouseEnter={e => { e.currentTarget.style.background = '#f5f5f7'; }} onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                            🗜 Загрузить ZIP-архив
+                            <div style={{ fontSize: 11, fontWeight: 400, color: '#8e8e93', marginTop: 2 }}>один .zip — внутри папка на каждый чек</div>
+                          </button>
+                        </div>
+                      </React.Fragment>
+                    )}
+                  </div>
                 </div>
                 <button className="bulk-btn bulk-btn-purple" onClick={() => bulkReprocess()}>🔄 Перераспознать</button>
                 <button className="bulk-btn bulk-btn-teal" onClick={() => bulkTranslate()}>🌐 Перевести</button>
