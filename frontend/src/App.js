@@ -931,9 +931,11 @@ function DocsTab({ user, token }) {
   }, [token]);
   useEffect(() => { loadDocs(); }, [loadDocs]);
 
-  // v70: БОЛЬШИЕ файлы (>1 ГБ) — прямая загрузка в облако (Cloudflare R2) частями по 32 МБ.
+  // v70.1: файлы >40 МБ — прямая загрузка в облако (Cloudflare R2) частями по 32 МБ.
+  // Причина: Supabase Storage отклоняет объекты больше ~50 МБ («object exceeded the maximum allowed size»),
+  // поэтому обычный путь через сервер остаётся только для мелких файлов.
   // Сервер только подписывает URL — файл в память сервера НЕ попадает. Докачка: состояние в localStorage.
-  const BIG_FILE_LIMIT = 1024 * 1024 * 1024;      // до 1 ГБ — обычный путь через сервер
+  const BIG_FILE_LIMIT = 40 * 1024 * 1024;         // до 40 МБ — обычный путь через сервер (Supabase)
   const BIG_MAX = 5 * 1024 * 1024 * 1024;          // потолок облачной загрузки
   const BIG_PART = 32 * 1024 * 1024;               // размер части
   const bigUpKey = (cat, f) => `bigup:${cat}:${f.name}:${f.size}`;
@@ -1818,7 +1820,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v70 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v70.1 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -7672,7 +7674,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v70 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v70.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

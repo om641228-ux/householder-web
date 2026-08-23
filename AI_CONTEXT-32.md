@@ -1955,3 +1955,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Прямая загрузка больших файлов (>1 ГБ, до 5 ГБ) в Cloudflare R2 multipart по 32 МБ, минуя память сервера: backend эндпоинты /api/docs/:cat/big/{init,sign,complete,abort} (AWS SDK v3, presigned PUT, 1ч), фронт bigUploadDoc с докачкой (localStorage bigup:cat:name:size), 3 попытки на часть, прогресс в общем окне (☁️ часть N/M).
 - Файлы ≤1 ГБ — прежний путь. Backend требует Variables R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/R2_BUCKET/R2_PUBLIC_URL и пакеты @aws-sdk/client-s3 + @aws-sdk/s3-request-presigner.
 - md5 App.js: a5093654ff33371095cc663c65eaa8ae, index.js: 0a5dde2668295b1809536b517d842f6c.
+
+## v70.1 (2026-08-24)
+- Причина ошибки «The object exceeded the maximum allowed size»: это лимит Supabase Storage (~50 МБ на объект), НЕ наш сервер. Обычный порционный путь хранит файлы в Supabase, поэтому всё крупнее ~50 МБ падало.
+- Фикс (только фронт, App.js): BIG_FILE_LIMIT снижен с 1 ГБ до 40 МБ — файлы >40 МБ идут напрямую в Cloudflare R2 (bigUploadDoc, части 32 МБ, докачка через localStorage). Мелкие файлы — как раньше, через сервер в Supabase.
+- Бэкенд не менялся. Метки: футер и модалка «сборка · v70.1 ·». md5 App.js = 5735b00e23d0086231e12d0349e86b1e.
