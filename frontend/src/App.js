@@ -931,11 +931,91 @@ function DocsTab({ user, token }) {
   }, [token]);
   useEffect(() => { loadDocs(); }, [loadDocs]);
 
+  // v70: БОЛЬШИЕ файлы (>1 ГБ) — прямая загрузка в облако (Cloudflare R2) частями по 32 МБ.
+  // Сервер только подписывает URL — файл в память сервера НЕ попадает. Докачка: состояние в localStorage.
+  const BIG_FILE_LIMIT = 1024 * 1024 * 1024;      // до 1 ГБ — обычный путь через сервер
+  const BIG_MAX = 5 * 1024 * 1024 * 1024;          // потолок облачной загрузки
+  const BIG_PART = 32 * 1024 * 1024;               // размер части
+  const bigUpKey = (cat, f) => `bigup:${cat}:${f.name}:${f.size}`;
+  const bigUploadDoc = async (cat, f, rel, onProgress) => {
+    const total = f.size;
+    const lsKey = bigUpKey(cat, f);
+    let state = null;
+    try { state = JSON.parse(localStorage.getItem(lsKey) || 'null'); } catch (e) { state = null; }
+    if (!state || !state.key || !state.uploadId || !Array.isArray(state.parts)) {
+      const r = await fetch(`${API_URL}/api/docs/${cat}/big/init?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: f.name, size: f.size, type: f.type || 'application/octet-stream' })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      state = { key: j.key, uploadId: j.uploadId, parts: [] };
+      try { localStorage.setItem(lsKey, JSON.stringify(state)); } catch (e) {}
+    }
+    const partCount = Math.ceil(total / BIG_PART);
+    const uploadedMap = new Map(state.parts.map(p => [p.PartNumber, p.ETag]));
+    let doneBytes = state.parts.reduce((a, p) => a + (p.size || 0), 0);
+    const putPart = (url, blob, pn) => new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      docsXhrRef.current = xhr;
+      xhr.open('PUT', url);
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable && onProgress) onProgress(doneBytes + ev.loaded, `${f.name} · часть ${pn}/${partCount}`);
+      };
+      xhr.onload = () => {
+        const et = xhr.getResponseHeader('ETag');
+        if (xhr.status >= 200 && xhr.status < 300 && et) resolve(et);
+        else reject(new Error(`часть ${pn}: HTTP ${xhr.status}`));
+      };
+      xhr.onerror = () => reject(new Error('сетевая ошибка'));
+      xhr.onabort = () => reject(new Error('ABORTED'));
+      xhr.send(blob);
+    });
+    for (let pn = 1; pn <= partCount; pn++) {
+      if (docsStopRef.current) throw new Error('ABORTED');
+      if (uploadedMap.has(pn)) continue; // докачка: часть уже в облаке
+      const blob = f.slice((pn - 1) * BIG_PART, Math.min(total, pn * BIG_PART));
+      let etag = null;
+      let lastErr = null;
+      for (let attempt = 0; attempt < 3 && !etag; attempt++) {
+        try {
+          const sr = await fetch(`${API_URL}/api/docs/${cat}/big/sign?token=${token}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: state.key, uploadId: state.uploadId, parts: [pn] })
+          });
+          const sj = await sr.json().catch(() => ({}));
+          if (!sr.ok) throw new Error(sj.error || `HTTP ${sr.status}`);
+          etag = await putPart(sj.urls[pn], blob, pn);
+        } catch (e) {
+          if (e.message === 'ABORTED') throw e;
+          lastErr = e;
+          await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
+        }
+      }
+      docsXhrRef.current = null;
+      if (!etag) throw new Error(`часть ${pn}/${partCount} не загрузилась: ${lastErr ? lastErr.message : 'ошибка'} — повторите загрузку, продолжится с этого места`);
+      state.parts.push({ PartNumber: pn, ETag: etag, size: blob.size });
+      uploadedMap.set(pn, etag);
+      doneBytes += blob.size;
+      try { localStorage.setItem(lsKey, JSON.stringify(state)); } catch (e) {}
+      if (onProgress) onProgress(doneBytes, `${f.name} · часть ${pn}/${partCount} готова`);
+    }
+    const cr = await fetch(`${API_URL}/api/docs/${cat}/big/complete?token=${token}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: state.key, uploadId: state.uploadId, parts: state.parts.map(p => ({ PartNumber: p.PartNumber, ETag: p.ETag })), name: f.name, type: f.type, relPath: rel, size: f.size })
+    });
+    const cj = await cr.json().catch(() => ({}));
+    if (!cr.ok) throw new Error(cj.error || `HTTP ${cr.status}`);
+    try { localStorage.removeItem(lsKey); } catch (e) {}
+    setSections(prev => ({ ...prev, [cat]: Array.isArray(cj.attachments) ? cj.attachments : prev[cat] }));
+  };
+
   const addDocs = async (cat, fileList) => {
     let files = Array.from(fileList || []);
-    const tooBig = files.filter(f => f.size > 1024 * 1024 * 1024);
-    if (tooBig.length) alert(`Слишком большие файлы (максимум 1 ГБ) — пропущены:\n${tooBig.map(f => `${f.name} — ${(f.size / 1024 / 1024).toFixed(0)} МБ`).join('\n')}\n\nБольшие видео сожмите заранее (HandBrake/ffmpeg, H.265 1080p) — тогда пройдут.`);
-    files = files.filter(f => f.size <= 1024 * 1024 * 1024);
+    const tooBig = files.filter(f => f.size > 5 * 1024 * 1024 * 1024);
+    if (tooBig.length) alert(`Слишком большие файлы (максимум 5 ГБ) — пропущены:\n${tooBig.map(f => `${f.name} — ${(f.size / 1024 / 1024).toFixed(0)} МБ`).join('\n')}`);
+    files = files.filter(f => f.size <= 5 * 1024 * 1024 * 1024);
     if (!files.length) return;
     // v69.5: партии — чтобы сервер не держал весь объём в памяти (16+ ГБ одним запросом = падение)
     const BATCH_MAX_FILES = 80;
@@ -1018,6 +1098,20 @@ function DocsTab({ user, token }) {
         if (docsStopRef.current) throw new Error('ABORTED');
         const f = files[pi];
         setDocsUpload(prev => prev ? { ...prev, phase: 'prepare', currentFile: f.name } : prev);
+        // v70: файл >1 ГБ — напрямую в облако частями (минуя сервер), с докачкой
+        if (f.size > BIG_FILE_LIMIT) {
+          await flush(); // сначала уходит накопленная партия обычных файлов
+          const bigBase = bytesDone;
+          setDocsUpload(prev => prev ? { ...prev, phase: 'upload', currentFile: `☁️ ${f.name} — прямая загрузка в облако…` } : prev);
+          await bigUploadDoc(cat, f, relOf(f), (doneB, note) => {
+            const overall = Math.min(100, Math.round((bigBase + doneB) / totalBytes * 100));
+            setDocsUpload(prev => prev ? { ...prev, percent: overall, currentFile: `☁️ ${note}` } : prev);
+          });
+          uploaded++;
+          bytesDone += f.size;
+          setDocsUpload(prev => prev ? { ...prev, done: uploaded, percent: Math.min(100, Math.round(bytesDone / totalBytes * 100)) } : prev);
+          continue;
+        }
         // v69.5.2: ЛЮБАЯ ошибка подготовки (битое фото «Failed to load image», HEIC, сбой чтения) НЕ роняет
         // загрузку папки — файл уходит как есть, в конце будет сводка
         let prep = f;
@@ -1488,7 +1582,7 @@ function DocsTab({ user, token }) {
       <style>{'.docs-active-tab{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important}.docs-active-tab:hover{background:#0066d6 !important}'}</style>
       <h2 style={{ margin: '4px 0 4px', fontSize: 20 }}>📁 Документы</h2>
       <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 12 }}>
-        Файлы любых типов — фото, видео, аудио, текст, PDF и другие. Общее хранилище команды (сервер). Видео 50–300 МБ сжимаются на сервере автоматически; 300 МБ–1 ГБ загружаются как есть (большие видео лучше сжать заранее: H.265 1080p).
+        Файлы любых типов — фото, видео, аудио, текст, PDF и другие. Общее хранилище команды (сервер). Видео 50–300 МБ сжимаются на сервере автоматически; 300 МБ–1 ГБ загружаются как есть; больше 1 ГБ (до 5 ГБ) — напрямую в облако частями с докачкой.
       </div>
       {docsError && (
         <div style={{ background: '#fff4e5', border: '1px solid #ffd699', borderRadius: 10, padding: '8px 12px', fontSize: 13, color: '#8a6d3b', marginBottom: 10 }}>
@@ -1724,7 +1818,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v69.8 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v70 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -7578,7 +7672,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v69.8 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v70 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

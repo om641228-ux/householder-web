@@ -1950,3 +1950,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Вариант «сжал сам → загрузил»: лимит файла 500 МБ → 1 ГБ (фронт addDocs + backend crmMediaUpload). Сервер пережимает видео только 48–300 МБ; >300 МБ грузятся как есть (ffmpeg на ГБ-файлах = OOM) — во всех 4 точках (docs, CRM, чеки).
 - Подсказка в шапке Документов обновлена; при превышении 1 ГБ alert советует сжать H.265 1080p.
 - ВАЖНО: оба сервиса надо передеплоить (api health: v69.8-2026-08-24). md5 App.js: 8324d53dfea5bae484945c2edb1253e4, index.js: 85aa569bfdfd3cda7fa5d6ca3f4c5467.
+
+## v70 (2026-08-24)
+- Прямая загрузка больших файлов (>1 ГБ, до 5 ГБ) в Cloudflare R2 multipart по 32 МБ, минуя память сервера: backend эндпоинты /api/docs/:cat/big/{init,sign,complete,abort} (AWS SDK v3, presigned PUT, 1ч), фронт bigUploadDoc с докачкой (localStorage bigup:cat:name:size), 3 попытки на часть, прогресс в общем окне (☁️ часть N/M).
+- Файлы ≤1 ГБ — прежний путь. Backend требует Variables R2_ACCOUNT_ID/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/R2_BUCKET/R2_PUBLIC_URL и пакеты @aws-sdk/client-s3 + @aws-sdk/s3-request-presigner.
+- md5 App.js: a5093654ff33371095cc663c65eaa8ae, index.js: 0a5dde2668295b1809536b517d842f6c.

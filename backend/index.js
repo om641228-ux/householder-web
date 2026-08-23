@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v69.8-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v70-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -4103,6 +4103,105 @@ app.post('/api/docs/:category/files', requireAuth, crmMediaMulter('files'), asyn
   } catch (e) {
     res.status(500).json({ error: e.message, hint: DOCS_MIGRATION_HINT });
   }
+});
+
+// ============ v70: БОЛЬШИЕ ФАЙЛЫ (>1 ГБ) — прямая загрузка в Cloudflare R2 кусками, минуя память сервера ============
+// Нужны Variables в householder-api: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, R2_PUBLIC_URL
+// и пакеты: @aws-sdk/client-s3 @aws-sdk/s3-request-presigner
+const R2_BUCKET = process.env.R2_BUCKET || '';
+const R2_PUBLIC_URL = (process.env.R2_PUBLIC_URL || '').replace(/\/+$/, '');
+let r2Client = null;
+function r2Configured() {
+  return !!(process.env.R2_ACCOUNT_ID && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY && R2_BUCKET && R2_PUBLIC_URL);
+}
+function getR2(S3Client) {
+  if (!r2Client) {
+    r2Client = new S3Client({
+      region: 'auto',
+      endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      credentials: { accessKeyId: process.env.R2_ACCESS_KEY_ID, secretAccessKey: process.env.R2_SECRET_ACCESS_KEY }
+    });
+  }
+  return r2Client;
+}
+function r2Sdk() {
+  try {
+    return { s3: require('@aws-sdk/client-s3'), sign: require('@aws-sdk/s3-request-presigner') };
+  } catch (e) {
+    const err = new Error('Нет пакетов AWS SDK: в householder-api выполните npm i @aws-sdk/client-s3 @aws-sdk/s3-request-presigner и сделайте redeploy');
+    err.statusCode = 501;
+    throw err;
+  }
+}
+app.post('/api/docs/:category/big/init', requireAuth, async (req, res) => {
+  try {
+    if (!r2Configured()) return res.status(501).json({ error: 'Облако не настроено: задайте R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, R2_PUBLIC_URL в Variables householder-api' });
+    const cat = String(req.params.category || '');
+    if (!DOC_CATEGORIES.includes(cat)) return res.status(400).json({ error: 'Неизвестный раздел' });
+    const { s3 } = r2Sdk();
+    const name = fixUtf8Name(String((req.body || {}).name || 'big.mp4')).slice(0, 180);
+    const type = String((req.body || {}).type || 'application/octet-stream').slice(0, 100);
+    const key = `docs/${cat}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${name.replace(/[^\w.\-а-яА-ЯёЁ ]/g, '_')}`;
+    const out = await getR2(s3.S3Client).send(new s3.CreateMultipartUploadCommand({ Bucket: R2_BUCKET, Key: key, ContentType: type }));
+    res.json({ key, uploadId: out.UploadId });
+  } catch (e) { res.status(e.statusCode || 500).json({ error: e.message }); }
+});
+app.post('/api/docs/:category/big/sign', requireAuth, async (req, res) => {
+  try {
+    if (!r2Configured()) return res.status(501).json({ error: 'Облако не настроено (R2_* Variables)' });
+    const { key, uploadId, parts } = req.body || {};
+    if (!key || !uploadId || !Array.isArray(parts) || !parts.length) return res.status(400).json({ error: 'Передайте {key, uploadId, parts[]}' });
+    const { s3, sign } = r2Sdk();
+    const r2 = getR2(s3.S3Client);
+    const urls = {};
+    for (const n of parts.slice(0, 100)) {
+      const pn = Math.max(1, Math.min(10000, parseInt(n, 10) || 0));
+      if (!pn) continue;
+      urls[pn] = await sign.getSignedUrl(r2, new s3.UploadPartCommand({ Bucket: R2_BUCKET, Key: key, UploadId: uploadId, PartNumber: pn }), { expiresIn: 3600 });
+    }
+    res.json({ urls });
+  } catch (e) { res.status(e.statusCode || 500).json({ error: e.message }); }
+});
+app.post('/api/docs/:category/big/complete', requireAuth, async (req, res) => {
+  try {
+    if (!r2Configured()) return res.status(501).json({ error: 'Облако не настроено (R2_* Variables)' });
+    const cat = String(req.params.category || '');
+    if (!DOC_CATEGORIES.includes(cat)) return res.status(400).json({ error: 'Неизвестный раздел' });
+    const { key, uploadId, parts, name, type, relPath, size } = req.body || {};
+    if (!key || !uploadId || !Array.isArray(parts) || !parts.length) return res.status(400).json({ error: 'Передайте {key, uploadId, parts[]}' });
+    const { s3 } = r2Sdk();
+    await getR2(s3.S3Client).send(new s3.CompleteMultipartUploadCommand({
+      Bucket: R2_BUCKET, Key: key, UploadId: uploadId,
+      MultipartUpload: { Parts: parts.map(p => ({ PartNumber: p.PartNumber, ETag: p.ETag })).sort((a, b) => a.PartNumber - b.PartNumber) }
+    }));
+    const fixedName = fixUtf8Name(String(name || 'big.mp4')).slice(0, 180);
+    const mt = String(type || '');
+    const mkind = /^image\//.test(mt) ? 'photo' : /^video\//.test(mt) ? 'video' : /^audio\//.test(mt) ? 'audio'
+      : (mt === 'application/pdf' || /^text\//.test(mt) || /\.(pdf|txt|md|csv)$/i.test(fixedName)) ? 'doc' : 'file';
+    const item = { url: `${R2_PUBLIC_URL}/${key}`, kind: mkind, name: fixedName, ts: Date.now(), actor: req.user.name || req.user.id };
+    if (size) item.size = size;
+    const rp = String(relPath || '').trim().slice(0, 200).replace(/^\/+|\/+$/g, '');
+    if (rp) item.path = rp;
+    const { data: row } = await supabaseAdmin.from('doc_sections').select('*').eq('category', cat).maybeSingle();
+    const cur = row && Array.isArray(row.attachments) ? row.attachments : [];
+    const { data, error } = await supabaseAdmin.from('doc_sections')
+      .upsert({ category: cat, attachments: [...cur, item], updated_at: new Date().toISOString() }, { onConflict: 'category' })
+      .select().single();
+    if (error) throw error;
+    res.json({ category: cat, attachments: fixDocsAttachments(data.attachments) });
+  } catch (e) { res.status(e.statusCode || 500).json({ error: e.message }); }
+});
+app.post('/api/docs/:category/big/abort', requireAuth, async (req, res) => {
+  try {
+    if (r2Configured()) {
+      const { key, uploadId } = req.body || {};
+      if (key && uploadId) {
+        const { s3 } = r2Sdk();
+        await getR2(s3.S3Client).send(new s3.AbortMultipartUploadCommand({ Bucket: R2_BUCKET, Key: key, UploadId: uploadId }));
+      }
+    }
+    res.json({ ok: true });
+  } catch (e) { res.json({ ok: true }); }
 });
 
 // POST /api/docs/recognize-text (v57.6): распознавание текста файла из вкладки «Документы» —
