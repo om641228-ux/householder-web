@@ -994,12 +994,12 @@ function DocsTab({ user, token }) {
         if (docsStopRef.current) throw new Error('ABORTED');
         const f = files[pi];
         setDocsUpload(prev => prev ? { ...prev, phase: 'prepare', currentFile: f.name } : prev);
-        // v69.5.1: битое фото (HEIC/повреждённый JPG — «Failed to load image») НЕ роняет загрузку — шлём как есть
+        // v69.5.2: ЛЮБАЯ ошибка подготовки (битое фото «Failed to load image», HEIC, сбой чтения) НЕ роняет
+        // загрузку папки — файл уходит как есть, в конце будет сводка
         let prep = f;
-        if (docKindOf(f) === 'photo') {
-          try { prep = await compressImageFile(f); }
-          catch (ce) { compressFails.push(f.name); console.warn('Без сжатия (не удалось прочитать):', f.name, ce.message); }
-        }
+        try {
+          if (docKindOf(f) === 'photo') prep = await compressImageFile(f);
+        } catch (ce) { compressFails.push(f.name); console.warn('Без сжатия (не удалось прочитать):', f.name, ce && ce.message); }
         batch.push({ orig: f, prep, rel: relOf(f) });
         batchOrigBytes += f.size;
         if (batch.length >= BATCH_MAX_FILES || batchOrigBytes >= BATCH_MAX_BYTES) await flush();
@@ -1679,6 +1679,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v69.5.2 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -7462,7 +7463,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v69.5.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v69.5.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
