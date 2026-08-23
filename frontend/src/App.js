@@ -883,6 +883,16 @@ function DocsTab({ user, token }) {
     try { localStorage.setItem('docsCustomTree', JSON.stringify(next)); } catch (e) {}
     return next;
   });
+  // v69.6: сворачиваемое дерево папок — какие узлы развёрнуты (localStorage)
+  const [docsTreeExpanded, setDocsTreeExpandedRaw] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('docsTreeExpanded') || '{}'); } catch (e) { return {}; }
+  });
+  const setDocsTreeExpanded = (up) => setDocsTreeExpandedRaw(prev => {
+    const next = typeof up === 'function' ? up(prev) : up;
+    try { localStorage.setItem('docsTreeExpanded', JSON.stringify(next)); } catch (e) {}
+    return next;
+  });
+  const toggleTreeNode = (p) => setDocsTreeExpanded(prev => ({ ...prev, [p]: !prev[p] }));
   const setHiddenFolders = (up) => setHiddenFoldersRaw(prev => {
     const next = typeof up === 'function' ? up(prev) : up;
     try { localStorage.setItem('docsHiddenFolders', JSON.stringify(next)); } catch (e) {}
@@ -1488,6 +1498,8 @@ function DocsTab({ user, token }) {
               style={{ padding: '5px 12px', borderRadius: 980, border: '1px dashed #0071e3', background: '#fff', color: '#0071e3', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>＋ Папка</button>
             <button onClick={cleanEmptyTreeFolders} title="Удалить все ПУСТЫЕ папки без файлов в этом разделе (убрать мусор)"
               style={{ padding: '5px 10px', borderRadius: 980, border: '1px solid #d0d0d5', background: '#fff', color: '#8e8e93', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>🧹</button>
+            <button onClick={() => setDocsTreeExpanded({})} title="Свернуть все папки до верхнего уровня"
+              style={{ padding: '5px 10px', borderRadius: 980, border: '1px solid #d0d0d5', background: '#fff', color: '#8e8e93', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>⊟ Свернуть</button>
             <button className={!curDocPath ? 'docs-active-tab' : ''} onClick={() => { setDocFolder(prev => ({ ...prev, [docSection]: 'All' })); setDocPath(prev => ({ ...prev, [docSection]: '' })); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
               style={{ padding: '5px 14px', borderRadius: 980, border: !curDocPath ? '2px solid #0071e3' : '1px solid #d0d0d5', background: !curDocPath ? '#0071e3' : '#fff', color: !curDocPath ? '#fff' : '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer', boxShadow: !curDocPath ? '0 2px 8px rgba(0,113,227,0.35)' : 'none' }}>
               🗂 Все ({allItems.length})
@@ -1496,9 +1508,23 @@ function DocsTab({ user, token }) {
           {topFoldersAll.map(fn => {
             const on = curDocPath === fn || curDocPath.startsWith(fn + '/');
             const isFolderField = dynFolders.includes(fn);
+            const descs = treeDescendantsOf(fn);
+            // v69.6: узел развёрнут, если его развернули явно ИЛИ он на пути к открытой папке
+            const nodeOpen = (p) => (p in docsTreeExpanded) ? !!docsTreeExpanded[p] : (curDocPath === p || curDocPath.startsWith(p + '/'));
+            const open = nodeOpen(fn);
+            const visibleDescs = open ? descs.filter(rel => {
+              const parts = rel.split('/');
+              let anc = fn;
+              for (let ai = 0; ai < parts.length - 1; ai++) { anc = anc + '/' + parts[ai]; if (!nodeOpen(anc)) return false; }
+              return true;
+            }) : [];
             return (
               <div key={fn} style={{ marginBottom: 2 }}>
                 <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  {descs.length > 0 ? (
+                    <button onClick={() => toggleTreeNode(fn)} title={open ? 'Свернуть ветку' : `Развернуть ветку (папок внутри: ${descs.length})`}
+                      style={{ width: 18, height: 18, border: 'none', background: 'transparent', color: '#8e8e93', fontSize: 10, cursor: 'pointer', padding: 0, lineHeight: '18px' }}>{open ? '▼' : '▶'}</button>
+                  ) : <span style={{ width: 18 }} />}
                   <button className={on ? 'docs-active-tab' : ''} onClick={() => { setDocFolder(prev => ({ ...prev, [docSection]: 'All' })); setDocPath(prev => ({ ...prev, [docSection]: fn })); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
                     style={{ padding: '5px 14px', borderRadius: 980, border: on ? '2px solid #0071e3' : '1px solid #d0d0d5', background: on ? '#0071e3' : '#fff', color: on ? '#fff' : '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer', boxShadow: on ? '0 2px 8px rgba(0,113,227,0.35)' : 'none' }}>
                     📁 {fn} ({treeCountOf(fn)})
@@ -1508,14 +1534,19 @@ function DocsTab({ user, token }) {
                   <button onClick={() => isFolderField ? deleteDocsFolder(fn) : deleteTreeFolder(fn)} title={`Удалить папку «${fn}» (файлы НЕ удалятся)`}
                     style={{ width: 20, height: 20, borderRadius: '50%', border: '1px solid #d0d0d5', background: '#fff', color: '#e74c3c', fontSize: 10, cursor: 'pointer', padding: 0, lineHeight: '18px' }}>✕</button>
                 </div>
-                {treeDescendantsOf(fn).map(rel => {
+                {visibleDescs.map(rel => {
                   const full = fn + '/' + rel;
                   const parentName = full.split('/').slice(0, -1).join('/');
                   const short = rel.split('/').pop();
                   const depth = rel.split('/').length;
                   const con = curDocPath === full || curDocPath.startsWith(full + '/');
+                  const hasKids = descs.some(r2 => r2 !== rel && r2.startsWith(rel + '/'));
                   return (
                     <div key={`tree-${full}`} style={{ display: 'flex', gap: 4, alignItems: 'center', paddingLeft: 14 + Math.min(depth - 1, 4) * 22, marginTop: 3, borderLeft: '2px solid #e3e6ea', marginLeft: 10 }}>
+                      {hasKids ? (
+                        <button onClick={() => toggleTreeNode(full)} title={nodeOpen(full) ? 'Свернуть ветку' : 'Развернуть ветку'}
+                          style={{ width: 14, height: 14, border: 'none', background: 'transparent', color: '#8e8e93', fontSize: 8, cursor: 'pointer', padding: 0, lineHeight: '14px' }}>{nodeOpen(full) ? '▼' : '▶'}</button>
+                      ) : <span style={{ width: 14 }} />}
                       <button className={con ? 'docs-active-tab' : ''}
                         onClick={() => { setDocFolder(prev => ({ ...prev, [docSection]: 'All' })); setDocPath(prev => ({ ...prev, [docSection]: full })); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
                         title={`Вложенная папка «${full}» — файлов: ${treeCountOf(full)}`}
@@ -1679,7 +1710,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v69.5.2 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v69.6 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -7463,7 +7494,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v69.5.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v69.6 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
