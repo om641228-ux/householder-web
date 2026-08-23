@@ -930,6 +930,7 @@ function DocsTab({ user, token }) {
     setDocsUpload({ phase: 'prepare', percent: 0, done: 0, total: files.length, currentFile: '', batch: 0, batches: estBatches });
     let uploaded = 0;   // файлов уже СОХРАНЕНО на сервере (по завершённым партиям)
     let bytesDone = 0;  // байты (исходные) завершённых партий — для общего процента
+    let compressFails = []; // v69.5.1: фото, которые не удалось сжать (уйдут как есть)
     try {
       let batch = []; // [{orig, prep, rel}]
       let batchOrigBytes = 0;
@@ -993,13 +994,20 @@ function DocsTab({ user, token }) {
         if (docsStopRef.current) throw new Error('ABORTED');
         const f = files[pi];
         setDocsUpload(prev => prev ? { ...prev, phase: 'prepare', currentFile: f.name } : prev);
-        const prep = docKindOf(f) === 'photo' ? await compressImageFile(f) : f;
+        // v69.5.1: битое фото (HEIC/повреждённый JPG — «Failed to load image») НЕ роняет загрузку — шлём как есть
+        let prep = f;
+        if (docKindOf(f) === 'photo') {
+          try { prep = await compressImageFile(f); }
+          catch (ce) { compressFails.push(f.name); console.warn('Без сжатия (не удалось прочитать):', f.name, ce.message); }
+        }
         batch.push({ orig: f, prep, rel: relOf(f) });
         batchOrigBytes += f.size;
         if (batch.length >= BATCH_MAX_FILES || batchOrigBytes >= BATCH_MAX_BYTES) await flush();
       }
       await flush();
       setDocsUpload(prev => prev ? { ...prev, percent: 100, done: files.length } : prev);
+      // v69.5.1: сводка по несжавшимся фото — они на сервере в исходном качестве
+      if (compressFails.length) alert(`Готово. ${compressFails.length} фото не удалось сжать в браузере (повреждённые/нестандартные) — они загружены как есть:\n${compressFails.slice(0, 20).join('\n')}${compressFails.length > 20 ? `\n… и ещё ${compressFails.length - 20}` : ''}`);
       // v68.5: АВТО-распознавание при загрузке УБРАНО — файлы просто сохраняются на сервер.
     } catch (e) {
       if (e.message === 'ABORTED') {
@@ -7454,7 +7462,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v69.5 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v69.5.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
