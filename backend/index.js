@@ -203,6 +203,22 @@ const tabGuard = (tab) => (req, res, next) =>
   canAccessTab(req.user, tab) ? next() : res.status(403).json({ error: 'Нет доступа к разделу «' + tab + '»' });
 const writeTabGuard = (tab) => (req, res, next) =>
   canWriteTab(req.user, tab) ? next() : res.status(403).json({ error: 'Раздел «' + tab + '» — только просмотр' });
+// v79: видимость чужих записей (чеки/CRM): null — видит всех (admin), иначе массив owner_id
+const visibleOwners = (user) => {
+  if (!user || user.role === 'admin') return null;
+  return [user.id].concat(Array.isArray(user.can_view) ? user.can_view : []);
+};
+// guard «только своя запись или admin» для UPDATE/DELETE
+const ownOrAdmin = (table) => async (req, res, next) => {
+  try {
+    if ((req.user || {}).role === 'admin') return next();
+    const { data, error } = await supabaseAdmin.from(table).select('owner_id').eq('id', req.params.id).maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Запись не найдена' });
+    if (data.owner_id && data.owner_id !== req.user.id) return res.status(403).json({ error: 'Это запись другого пользователя — менять может только автор или admin' });
+    next();
+  } catch (e) { res.status(500).json({ error: e.message }); }
+};
 const docSectionGuard = (req, res, next) =>
   canAccessSection(req.user, String(req.params.category || '')) ? next() : res.status(403).json({ error: 'Нет доступа к этому разделу документов' });
 
@@ -218,7 +234,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v78-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v79-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -3986,11 +4002,17 @@ app.use('/api/crm', (req, res, next) => req.method === 'GET' ? next() : writeTab
 // GET /api/crm — все три раздела одним запросом (контрагенты + контакты + задачи)
 app.get('/api/crm', requireAuth, async (req, res) => {
   try {
-    const [cps, contacts, tasks] = await Promise.all([
-      supabaseAdmin.from('crm_counterparties').select('*').order('name'),
-      supabaseAdmin.from('crm_contacts').select('*').order('name'),
-      supabaseAdmin.from('crm_tasks').select('*').order('created_at', { ascending: false })
-    ]);
+    // v79: видны свои записи + записи пользователей из can_view (admin — все)
+    const owners = visibleOwners(req.user);
+    let qCps = supabaseAdmin.from('crm_counterparties').select('*').order('name');
+    let qContacts = supabaseAdmin.from('crm_contacts').select('*').order('name');
+    let qTasks = supabaseAdmin.from('crm_tasks').select('*').order('created_at', { ascending: false });
+    if (owners) {
+      qCps = qCps.or(`owner_id.in.(${owners.join(',')}),owner_id.is.null`);
+      qContacts = qContacts.or(`owner_id.in.(${owners.join(',')}),owner_id.is.null`);
+      qTasks = qTasks.or(`owner_id.in.(${owners.join(',')}),owner_id.is.null`);
+    }
+    const [cps, contacts, tasks] = await Promise.all([qCps, qContacts, qTasks]);
     if (cps.error) throw cps.error;
     if (contacts.error) throw contacts.error;
     if (tasks.error) throw tasks.error;
@@ -4021,7 +4043,7 @@ app.post('/api/crm/counterparties', requireAuth, async (req, res) => {
   }
 });
 
-app.put('/api/crm/counterparties/:id', requireAuth, async (req, res) => {
+app.put('/api/crm/counterparties/:id', requireAuth, ownOrAdmin('crm_counterparties'), async (req, res) => {
   try {
     const FIELDS = ['name', 'type', 'phone', 'email', 'address', 'comment'];
     const updates = {};
@@ -4039,7 +4061,7 @@ app.put('/api/crm/counterparties/:id', requireAuth, async (req, res) => {
   }
 });
 
-app.delete('/api/crm/counterparties/:id', requireAuth, async (req, res) => {
+app.delete('/api/crm/counterparties/:id', requireAuth, ownOrAdmin('crm_counterparties'), async (req, res) => {
   try {
     // контакты и задачи отвязываются сами: FK ON DELETE SET NULL (миграция v21)
     const { error } = await supabaseAdmin.from('crm_counterparties').delete().eq('id', req.params.id);
@@ -4829,7 +4851,7 @@ app.post('/api/crm/contacts', requireAuth, async (req, res) => {
   }
 });
 
-app.put('/api/crm/contacts/:id', requireAuth, async (req, res) => {
+app.put('/api/crm/contacts/:id', requireAuth, ownOrAdmin('crm_contacts'), async (req, res) => {
   try {
     const FIELDS = ['counterparty_id', 'name', 'position', 'phone', 'email', 'comment'];
     const updates = {};
@@ -4847,7 +4869,7 @@ app.put('/api/crm/contacts/:id', requireAuth, async (req, res) => {
   }
 });
 
-app.delete('/api/crm/contacts/:id', requireAuth, async (req, res) => {
+app.delete('/api/crm/contacts/:id', requireAuth, ownOrAdmin('crm_contacts'), async (req, res) => {
   try {
     // задачи отвязываются сами: FK crm_tasks.contact_id ON DELETE SET NULL (миграция v21)
     const { error } = await supabaseAdmin.from('crm_contacts').delete().eq('id', req.params.id);
@@ -4885,7 +4907,7 @@ app.post('/api/crm/tasks', requireAuth, async (req, res) => {
   }
 });
 
-app.put('/api/crm/tasks/:id', requireAuth, async (req, res) => {
+app.put('/api/crm/tasks/:id', requireAuth, ownOrAdmin('crm_tasks'), async (req, res) => {
   try {
     const { data: t, error: e0 } = await supabaseAdmin.from('crm_tasks').select('*').eq('id', req.params.id).single();
     if (e0 || !t) return res.status(404).json({ error: 'Задача не найдена' });
@@ -4959,7 +4981,7 @@ app.post('/api/crm/tasks/:id/action', requireAuth, async (req, res) => {
   }
 });
 
-app.delete('/api/crm/tasks/:id', requireAuth, async (req, res) => {
+app.delete('/api/crm/tasks/:id', requireAuth, ownOrAdmin('crm_tasks'), async (req, res) => {
   try {
     const { data: t, error: e0 } = await supabaseAdmin.from('crm_tasks').select('*').eq('id', req.params.id).single();
     if (e0 || !t) return res.status(404).json({ error: 'Задача не найдена' });

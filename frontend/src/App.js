@@ -974,7 +974,7 @@ function UsersTab({ token, objectsList }) {
               <label key={o} style={{ fontSize: 13 }}><input type="checkbox" checked={edit.objects.includes(o)} onChange={() => setEdit({ ...edit, objects: toggleArr(edit.objects, o) })} /> {o}</label>
             ))}
           </div>
-          <div style={{ fontSize: 12.5, fontWeight: 700, margin: '6px 0 4px' }}>Видит чеки пользователей (ничего не отмечено = только свои{edit.role === 'admin' ? ', у admin — всё' : ''}):</div>
+          <div style={{ fontSize: 12.5, fontWeight: 700, margin: '6px 0 4px' }}>Видит данные пользователей — чеки и CRM (ничего не отмечено = только свои{edit.role === 'admin' ? ', у admin — всё' : ''}):</div>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
             {list.filter(x => x.id !== edit.id).map(x => (
               <label key={x.id} style={{ fontSize: 13 }}><input type="checkbox" checked={edit.can_view.includes(x.id)} onChange={() => setEdit({ ...edit, can_view: toggleArr(edit.can_view, x.id) })} /> {x.name || x.id}</label>
@@ -2058,7 +2058,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v78.1 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v79 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -8039,7 +8039,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v78.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v79 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

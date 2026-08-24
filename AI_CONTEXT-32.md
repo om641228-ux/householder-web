@@ -2011,3 +2011,7 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 
 ## v78.1 (2026-08-24)
 - UsersTab «Видит чеки пользователей»: добавлены встроенные admin/user1…user10 (помечены «встроенный») — старые чеки записаны на них. Только фронт. Метки · v78.1 ·. md5 App.js см. вывод.
+
+## v79 (2026-08-24) — can_view действует и на CRM
+- index.js: visibleOwners(user) (admin=null=все); GET /api/crm фильтрует counterparties/contacts/tasks по owner_id IN (self+can_view) OR owner_id IS NULL (старые записи без владельца видны всем). ownOrAdmin(table) guard на PUT/DELETE crm_counterparties/crm_contacts/crm_tasks — менять/удалять может автор или admin. Health v79.
+- App.js: подпись блока «Видит данные пользователей — чеки и CRM». Метки · v79 ·.
