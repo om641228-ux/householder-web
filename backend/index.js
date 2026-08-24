@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v70.2-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v71-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -4206,6 +4206,76 @@ app.post('/api/docs/:category/big/abort', requireAuth, async (req, res) => {
     }
     res.json({ ok: true });
   } catch (e) { res.json({ ok: true }); }
+});
+
+
+// ========== v71: ПУБЛИЧНЫЕ ССЫЛКИ НА ФАЙЛЫ (принцип Dropbox) ==========
+// Требуется таблица Supabase (выполнить один раз в SQL Editor):
+//   create table shares (id text primary key, title text, items jsonb, created_by text,
+//                        created_at timestamptz default now(), expires_at timestamptz);
+const escHtmlShare = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const sharePageHtml = (title, inner) => `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escHtmlShare(title)}</title>
+<style>
+body{margin:0;background:#f5f5f7;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#1d1d1f}
+.wrap{max-width:640px;margin:0 auto;padding:28px 16px 60px}
+.card{background:#fff;border-radius:16px;padding:22px;box-shadow:0 2px 12px rgba(0,0,0,0.06)}
+h1{font-size:20px;margin:0 0 4px}
+.meta{font-size:13px;color:#8e8e93;margin-bottom:16px}
+a.file{display:flex;align-items:center;gap:12px;padding:11px 12px;border:1px solid #e3e6ea;border-radius:12px;margin-bottom:8px;text-decoration:none;color:#1d1d1f;background:#fafafa}
+a.file:hover{background:#eef4ff;border-color:#bcd3ff}
+.ic{font-size:22px;flex:0 0 auto}
+.nm{font-size:14px;font-weight:600;word-break:break-all;flex:1}
+.sz{font-size:12px;color:#8e8e93;white-space:nowrap}
+.dl{font-size:12px;color:#0071e3;font-weight:700;white-space:nowrap}
+</style></head><body><div class="wrap"><div class="card">${inner}</div></div></body></html>`;
+const fmtSzShare = (b) => { b = +b || 0; if (b <= 0) return ''; const u = ['Б', 'КБ', 'МБ', 'ГБ']; let i = 0; while (b >= 1024 && i < 3) { b /= 1024; i++; } return b.toFixed(i ? 1 : 0) + ' ' + u[i]; };
+
+app.post('/api/share', requireAuth, async (req, res) => {
+  try {
+    const { title, items, days } = req.body || {};
+    if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: 'Передайте items[]' });
+    const clean = items.slice(0, 500).map(it => ({
+      url: String((it && it.url) || '').slice(0, 600),
+      name: String((it && it.name) || 'file').slice(0, 180),
+      kind: String((it && it.kind) || 'file').slice(0, 20),
+      size: Math.max(0, parseInt((it && it.size) || 0, 10) || 0)
+    })).filter(it => /^https?:\/\//.test(it.url));
+    if (!clean.length) return res.status(400).json({ error: 'Нет валидных ссылок на файлы' });
+    const id = require('crypto').randomBytes(10).toString('hex');
+    const d = parseInt(days, 10);
+    const expires = d > 0 ? new Date(Date.now() + d * 86400000).toISOString() : null;
+    const { error } = await supabaseAdmin.from('shares').insert({ id, title: String(title || 'Файлы').slice(0, 120), items: clean, created_by: (req.user && (req.user.name || req.user.id)) || '', expires_at: expires });
+    if (error) {
+      if (/does not exist/i.test(error.message || '')) return res.status(500).json({ error: 'В Supabase нет таблицы shares — выполните один раз в SQL Editor: create table shares (id text primary key, title text, items jsonb, created_by text, created_at timestamptz default now(), expires_at timestamptz);' });
+      throw error;
+    }
+    const proto = req.headers['x-forwarded-proto'] || req.protocol;
+    res.json({ id, url: `${proto}://${req.get('host')}/api/share/${id}`, expires_at: expires });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/share/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id || '').replace(/[^a-f0-9]/gi, '').slice(0, 40);
+    const { data: row, error } = await supabaseAdmin.from('shares').select('*').eq('id', id).maybeSingle();
+    if (error || !row) return res.status(404).send(sharePageHtml('Ссылка не найдена', '<h1>Ссылка не найдена</h1><p class="meta">Ссылка недействительна или была удалена.</p>'));
+    if (row.expires_at && new Date(row.expires_at).getTime() < Date.now()) return res.status(410).send(sharePageHtml('Срок ссылки истёк', '<h1>Срок действия ссылки истёк</h1><p class="meta">Попросите отправителя создать новую ссылку.</p>'));
+    const items = Array.isArray(row.items) ? row.items : [];
+    const icons = { photo: '🖼', video: '🎬', audio: '🎵', doc: '📄', file: '📎' };
+    const created = row.created_at ? new Date(row.created_at).toLocaleDateString('ru-RU') : '';
+    const exp = row.expires_at ? ` · действует до ${new Date(row.expires_at).toLocaleDateString('ru-RU')}` : ' · бессрочная';
+    const list = items.map(it => `<a class="file" href="${escHtmlShare(it.url)}" target="_blank" rel="noopener">
+  <span class="ic">${icons[it.kind] || '📎'}</span>
+  <span class="nm">${escHtmlShare(it.name)}</span>
+  <span class="sz">${fmtSzShare(it.size)}</span>
+  <span class="dl">Открыть →</span>
+</a>`).join('');
+    res.send(sharePageHtml(row.title, `<h1>📦 ${escHtmlShare(row.title)}</h1>
+<p class="meta">Файлов: ${items.length} · создано ${created}${exp}</p>
+${list || '<p class="meta">Нет файлов.</p>'}`));
+  } catch (e) { res.status(500).send(sharePageHtml('Ошибка', `<h1>Ошибка</h1><p class="meta">${escHtmlShare(e.message)}</p>`)); }
 });
 
 // POST /api/docs/recognize-text (v57.6): распознавание текста файла из вкладки «Документы» —

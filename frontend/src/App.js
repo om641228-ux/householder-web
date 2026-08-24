@@ -863,6 +863,73 @@ function parseDocDateFromText(text) {
 }
 const fmtDocDate = (iso) => iso ? iso.split('-').reverse().join('.') : '';
 
+
+// v71: диалог «Поделиться ссылкой» — публичная страница со списком выбранных файлов (принцип Dropbox)
+function ShareDialog({ dlg, setDlg, token }) {
+  if (!dlg) return null;
+  const upd = (patch) => setDlg(prev => (prev ? { ...prev, ...patch } : prev));
+  const create = async () => {
+    upd({ busy: true, err: '' });
+    try {
+      const r = await fetch(`${API_URL}/api/share?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: (dlg.title || '').slice(0, 120), days: dlg.days, items: dlg.items })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      upd({ busy: false, url: j.url });
+    } catch (e) { upd({ busy: false, err: e.message }); }
+  };
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(dlg.url); upd({ copied: true }); setTimeout(() => upd({ copied: false }), 1500); }
+    catch (e) { window.prompt('Скопируйте ссылку:', dlg.url); }
+  };
+  return (
+    <div onClick={() => setDlg(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1600, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 22, width: '100%', maxWidth: 440 }}>
+        <h3 style={{ marginTop: 0, marginBottom: 6 }}>🔗 Поделиться ссылкой</h3>
+        <div style={{ fontSize: 12.5, color: '#8e8e93', marginBottom: 14 }}>Публичная страница со списком файлов — как Dropbox. Откроется у любого, у кого есть ссылка.</div>
+        {!dlg.url ? (
+          <React.Fragment>
+            <div style={{ fontSize: 12, color: '#6e6e73', marginBottom: 4 }}>Файлов: <b>{dlg.items.length}</b></div>
+            <input value={dlg.title} onChange={e => upd({ title: e.target.value })} placeholder="Название подборки"
+              style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: 10, border: '1px solid #d0d0d5', fontSize: 14, marginBottom: 10 }} />
+            <select value={dlg.days} onChange={e => upd({ days: parseInt(e.target.value, 10) })}
+              style={{ width: '100%', padding: '9px 12px', borderRadius: 10, border: '1px solid #d0d0d5', fontSize: 14, marginBottom: 14 }}>
+              <option value={7}>⏳ Ссылка на 7 дней</option>
+              <option value={30}>⏳ Ссылка на 30 дней</option>
+              <option value={0}>♾ Бессрочная ссылка</option>
+            </select>
+            {dlg.err && <div style={{ fontSize: 12.5, color: '#e74c3c', whiteSpace: 'pre-line', marginBottom: 10 }}>{dlg.err}</div>}
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+              <button onClick={create} disabled={dlg.busy}
+                style={{ padding: '9px 22px', borderRadius: 980, border: 'none', background: dlg.busy ? '#c7c7cc' : '#0071e3', color: '#fff', fontWeight: 700, fontSize: 14, cursor: dlg.busy ? 'wait' : 'pointer' }}>
+                {dlg.busy ? 'Создаю…' : '🔗 Создать ссылку'}
+              </button>
+              <button onClick={() => setDlg(null)}
+                style={{ padding: '9px 22px', borderRadius: 980, border: '1px solid #c7c7cc', background: '#fff', color: '#1d1d1f', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>Отмена</button>
+            </div>
+          </React.Fragment>
+        ) : (
+          <React.Fragment>
+            <div style={{ background: '#f5f5f7', borderRadius: 10, padding: '10px 12px', fontSize: 12.5, wordBreak: 'break-all', marginBottom: 12 }}>{dlg.url}</div>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+              <button onClick={copy}
+                style={{ padding: '9px 22px', borderRadius: 980, border: 'none', background: dlg.copied ? '#34c759' : '#0071e3', color: '#fff', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>
+                {dlg.copied ? '✓ Скопировано' : '📋 Копировать'}
+              </button>
+              <a href={dlg.url} target="_blank" rel="noopener"
+                style={{ padding: '9px 22px', borderRadius: 980, border: '1px solid #c7c7cc', background: '#fff', color: '#0071e3', fontWeight: 700, fontSize: 14, textDecoration: 'none' }}>Открыть ↗</a>
+              <button onClick={() => setDlg(null)}
+                style={{ padding: '9px 22px', borderRadius: 980, border: '1px solid #c7c7cc', background: '#fff', color: '#1d1d1f', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>Готово</button>
+            </div>
+          </React.Fragment>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function DocsTab({ user, token }) {
   const [sections, setSections] = useState({ home: [], auto: [], personal: [] });
   const [docSection, setDocSection] = useState('home');
@@ -881,6 +948,7 @@ function DocsTab({ user, token }) {
   const [docsSort, setDocsSort] = useState({ by: 'docDate', dir: 'desc' }); // v59: сортировка по дате документа / дате распознавания
   const [docsSelectMode, setDocsSelectMode] = useState(false); // v59: режим мультивыбора файлов
   const [docsSelected, setDocsSelected] = useState({}); // v59: {url: true}
+  const [shareDlg, setShareDlg] = useState(null); // v71: диалог «поделиться ссылкой»
   // v59.1: реестр папок в localStorage — переименованные/новые папки не исчезают, даже если пустые
   const [hiddenFolders, setHiddenFoldersRaw] = useState(() => {
     try { return JSON.parse(localStorage.getItem('docsHiddenFolders') || '{}'); } catch (e) { return {}; }
@@ -1342,6 +1410,16 @@ function DocsTab({ user, token }) {
 
   // v59: мультивыбор — переместить в папку / удалить группой
   const selectedUrls = Object.keys(docsSelected).filter(u => docsSelected[u]);
+  // v71: поделиться ссылкой на выбранные файлы (все загруженные разделы, не только текущий экран)
+  const shareSelectedDocs = () => {
+    const map = {};
+    Object.values(sections).forEach(list => (list || []).forEach(e => { const m = docMediaOf(e); if (m && m.url) map[m.url] = m; }));
+    const items = selectedUrls.map(u => map[u]).filter(Boolean)
+      .map(m => ({ url: m.url, name: m.name || 'file', kind: m.kind || 'file', size: m.size || 0 }));
+    if (!items.length) return alert('Выбранные файлы не найдены среди загруженных разделов');
+    const secTitle = (DOC_SECTIONS.find(x => x.key === docSection) || {}).title || 'Документы';
+    setShareDlg({ title: `${secTitle} · ${items.length} файл(ов)`, days: 30, items, busy: false, url: '', err: '' });
+  };
   const moveSelectedDocs = async (folder) => {
     if (!selectedUrls.length) return;
     setDocsMove({ total: selectedUrls.length, target: folder ? `📁 ${folder}` : '🚫 Без папки', status: 'run', msg: '' });
@@ -1750,10 +1828,13 @@ function DocsTab({ user, token }) {
                 </React.Fragment>
               ))}
             </select>
+            <button onClick={shareSelectedDocs} disabled={!selectedUrls.length} title="Публичная ссылка на выбранные файлы"
+              style={{ padding: '5px 14px', borderRadius: 980, border: 'none', background: selectedUrls.length ? '#0071e3' : '#f0f0f2', color: selectedUrls.length ? '#fff' : '#8e8e93', fontWeight: 600, fontSize: 12.5, cursor: selectedUrls.length ? 'pointer' : 'not-allowed' }}>🔗 Ссылка</button>
             <button onClick={removeSelectedDocs} disabled={!selectedUrls.length}
               style={{ padding: '5px 14px', borderRadius: 980, border: 'none', background: selectedUrls.length ? '#e74c3c' : '#f0f0f2', color: selectedUrls.length ? '#fff' : '#8e8e93', fontWeight: 600, fontSize: 12.5, cursor: selectedUrls.length ? 'pointer' : 'not-allowed' }}>🗑 Удалить</button>
             <button onClick={() => { setDocsSelectMode(false); setDocsSelected({}); }}
               style={{ padding: '5px 14px', borderRadius: 980, border: '1px solid #d0d0d5', background: '#fff', color: '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer' }}>Отмена</button>
+            {shareDlg && <ShareDialog dlg={shareDlg} setDlg={setShareDlg} token={token} />}
           </React.Fragment>
         )}
       </div>
@@ -1831,7 +1912,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v70.2 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v71 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -3683,6 +3764,7 @@ function App() {
   const [dupFocusId, setDupFocusId] = useState(null);
   const [exportProgress, setExportProgress] = useState(null); // v68.2: {done, total, files} — окно прогресса «Загрузить»
   const [exportMenuOpen, setExportMenuOpen] = useState(false); // v69.7: всплывающее меню «Загрузить» (файлы / ZIP)
+  const [shareDlg, setShareDlg] = useState(null); // v71: ссылка на выбранные чеки
   const [confirmDlg, setConfirmDlg] = useState(null); // v68.3: {title, text, yesLabel, danger, onYes} — подтверждение действий (загрузка/удаление)
   const exportStopRef = useRef(false);
 
@@ -4867,6 +4949,22 @@ function App() {
   };
 
   // v69.7: «Загрузить ZIP» — подтверждение, затем сборка одного архива (папка на каждый чек)
+  // v71: публичная ссылка на файлы выбранных чеков (принцип Dropbox)
+  const handleShareReceipts = () => {
+    if (selectedReceiptIds.size === 0) return alert('Выберите чеки');
+    const selected = receipts.filter(r => selectedReceiptIds.has(r.id));
+    const items = [];
+    for (const r of selected) {
+      const u = r.photo_url || r.image_url;
+      if (!u) continue;
+      const safeName = (r.store_name || 'receipt').replace(/[^a-zA-Z0-9Ѐ-ӿ]/g, '_').substring(0, 40);
+      const ext = (u.split('.').pop().split('?')[0]) || 'jpg';
+      items.push({ url: fixImageUrl(u), name: `${safeName}_${String(r.id).slice(-4)}.${ext}`, kind: 'photo' });
+    }
+    if (!items.length) return alert('У выбранных чеков нет файлов для ссылки');
+    setShareDlg({ title: `Чеки · ${items.length} файл(ов)`, days: 30, items, busy: false, url: '', err: '' });
+  };
+
   const handleExportZip = () => {
     if (selectedReceiptIds.size === 0) return alert('Выберите чеки');
     setConfirmDlg({
@@ -7010,6 +7108,8 @@ ${bodyHtml}
         </div>
       )}
 
+      {shareDlg && <ShareDialog dlg={shareDlg} setDlg={setShareDlg} token={token} />}
+
       {/* v68.3: универсальное всплывающее подтверждение (загрузка / удаление) */}
       {confirmDlg && (
         <div className="modal-overlay" onClick={() => setConfirmDlg(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
@@ -7685,7 +7785,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v70.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v71 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8012,6 +8112,12 @@ ${bodyHtml}
                             onMouseEnter={e => { e.currentTarget.style.background = '#f5f5f7'; }} onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
                             🗜 Загрузить ZIP-архив
                             <div style={{ fontSize: 11, fontWeight: 400, color: '#8e8e93', marginTop: 2 }}>один .zip — внутри папка на каждый чек</div>
+                          </button>
+                          <button onClick={() => { setExportMenuOpen(false); handleShareReceipts(); }}
+                            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 12px', border: 'none', background: 'transparent', borderRadius: 8, fontSize: 13.5, fontWeight: 600, color: '#1d1d1f', cursor: 'pointer' }}
+                            onMouseEnter={e => { e.currentTarget.style.background = '#f5f5f7'; }} onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                            🔗 Поделиться ссылкой
+                            <div style={{ fontSize: 11, fontWeight: 400, color: '#8e8e93', marginTop: 2 }}>публичная страница с файлами — как Dropbox</div>
                           </button>
                         </div>
                       </React.Fragment>

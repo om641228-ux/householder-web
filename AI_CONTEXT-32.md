@@ -1965,3 +1965,10 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Симптом: прямая загрузка в R2 доходит до «часть 73/73 готова» и висит на 100% — затык на /big/complete (сборка multipart + запись в doc_sections).
 - index.js: логи [big/complete] start/R2 assembled/supabase write/done/FAIL, текст ошибки с префиксом «Сборка файла:». Health: v70.2-2026-08-24.
 - App.js: big/complete fetch с AbortController 120с + понятные сообщения (повтор загрузки докачает — части уже в облаке), статус «сборка файла в облаке…». Метки · v70.2 ·.
+
+## v71 (2026-08-24)
+- Публичные ссылки на файлы (принцип Dropbox): выбранные файлы Документов (кнопка «🔗 Ссылка» в режиме выбора) и Чеков (меню «⬇ Загрузить ▾» → «🔗 Поделиться ссылкой»).
+- index.js: POST /api/share (requireAuth; {title, items[{url,name,kind,size}], days: 7/30/0=∞} → {url}), GET /api/share/:id — ПУБЛИЧНАЯ HTML-страница со списком файлов (escHtml, проверка expires_at, 404/410). Health: v71-2026-08-24.
+- App.js: компонент ShareDialog (название, срок, создать/копировать/открыть), shareSelectedDocs (по всем загруженным разделам через docMediaOf), handleShareReceipts (photo_url/image_url выбранных чеков). Метки · v71 ·.
+- ТРЕБУЕТСЯ: таблица Supabase `shares` (SQL в «SQL — таблица shares (один раз).md»).
+- md5: App.js 081bdead81a33e95f909c9fa47db8902, index.js 6704bc381cdc7f6621d9808b5edb267d.
