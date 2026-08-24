@@ -175,7 +175,9 @@ resolveToken = function (token) {
 };
 
 async function requireAuth(req, res, next) {
-  const token = req.query.token || req.headers['x-token'] || (req.body && req.body.token);
+  let token = req.query.token || req.headers['x-token'] || (req.body && req.body.token);
+  const ah = req.headers['authorization']; // v83.1: Bearer-токен (чат и др.)
+  if (!token && ah && ah.startsWith('Bearer ')) token = ah.slice(7);
   let user = resolveToken(token);
   if (!user && token) { await refreshUsersCache(false); user = resolveToken(token); }
   if (!user) return res.status(401).json({ error: 'Unauthorized' });
@@ -235,7 +237,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v83-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v83.1-2026-08-25', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========

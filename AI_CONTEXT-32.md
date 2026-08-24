@@ -2033,3 +2033,6 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - SQL: create table chat_messages (id uuid pk default gen_random_uuid(), channel text, from_id, from_name, to_id, text, file_url, file_name, created_at); create table chat_reads (user_id, channel, last_read, pk(user_id,channel))
 - Backend: GET/POST /api/chat/messages (tabGuard('chat')), POST /api/chat/upload (multer 20MB → uploadToStorage 'chat'), POST /api/chat/read, GET /api/chat/unread; helpers dmChannel/chatCanAccess; health v83-2026-08-24
 - Frontend: ChatTab (сайдбар каналов, пуллинг сообщений 4с, вложения-фото инлайн, Enter=отправить), бейдж непрочитанных в nav (пуллинг 15с), chat в TAB_LABELS
+
+## v83.1 (2026-08-25)
+- FIX: чат слал токен в Authorization: Bearer, а requireAuth читал только query/x-token/body → 401 Unauthorized. requireAuth теперь принимает и Bearer (полезно всем endpoint'ам). health v83.1-2026-08-25
