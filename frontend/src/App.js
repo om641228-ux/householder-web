@@ -889,12 +889,12 @@ function UsersTab({ token, objectsList }) {
     if (Array.isArray(t)) t.forEach(k => { o[k] = 'full'; });
     return o;
   };
-  const blank = { id: '', name: '', password: '', role: 'viewer', sections: [], objects: [], tabs: {}, disabled: false, isNew: true };
+  const blank = { id: '', name: '', password: '', role: 'viewer', sections: [], objects: [], tabs: {}, can_view: [], disabled: false, isNew: true };
   const save = async () => {
     try {
       const r = await fetch(`${API_URL}/api/users?token=${token}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: edit.id, name: edit.name, password: edit.password || undefined, role: edit.role, sections: edit.sections, objects: edit.objects, tabs: Object.keys(edit.tabs).length ? edit.tabs : null, disabled: edit.disabled })
+        body: JSON.stringify({ id: edit.id, name: edit.name, password: edit.password || undefined, role: edit.role, sections: edit.sections, objects: edit.objects, tabs: Object.keys(edit.tabs).length ? edit.tabs : null, can_view: edit.can_view, disabled: edit.disabled })
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
@@ -920,10 +920,10 @@ function UsersTab({ token, objectsList }) {
             <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 8, background: u.role === 'admin' ? '#ffe9e7' : '#eef4ff', color: u.role === 'admin' ? '#c0392b' : '#0071e3', fontWeight: 700 }}>{u.role}</span>
             {u.disabled && <span style={{ fontSize: 12, color: '#e74c3c', fontWeight: 700 }}>отключён</span>}
             <span style={{ fontSize: 11.5, color: '#8e8e93' }}>
-              {(Array.isArray(u.tabs) && u.tabs.length) ? `разделы: ${u.tabs.map(t => (TAB_LABELS[t] || t).replace(/^\S+ /, '')).join(', ')}` : (u.tabs && typeof u.tabs === 'object' && Object.keys(u.tabs).length) ? `разделы: ${Object.entries(u.tabs).map(([k, v]) => `${(TAB_LABELS[k] || k).replace(/^\S+ /, '')}=${v}`).join(', ')}` : 'все разделы'} · {Array.isArray(u.objects) && u.objects.length ? `объекты: ${u.objects.join(', ')}` : 'все объекты'} · {Array.isArray(u.sections) && u.sections.length ? `документы: ${u.sections.join(', ')}` : 'все документы'}
+              {(Array.isArray(u.tabs) && u.tabs.length) ? `разделы: ${u.tabs.map(t => (TAB_LABELS[t] || t).replace(/^\S+ /, '')).join(', ')}` : (u.tabs && typeof u.tabs === 'object' && Object.keys(u.tabs).length) ? `разделы: ${Object.entries(u.tabs).map(([k, v]) => `${(TAB_LABELS[k] || k).replace(/^\S+ /, '')}=${v}`).join(', ')}` : 'все разделы'} · {Array.isArray(u.objects) && u.objects.length ? `объекты: ${u.objects.join(', ')}` : 'все объекты'} · {Array.isArray(u.sections) && u.sections.length ? `документы: ${u.sections.join(', ')}` : 'все документы'} · {Array.isArray(u.can_view) && u.can_view.length ? `видит: ${u.can_view.join(', ')}` : 'только своё'}
             </span>
             <span style={{ flex: 1 }} />
-            <button onClick={() => setEdit({ ...u, password: '', sections: u.sections || [], objects: u.objects || [], tabs: tabsObj(u.tabs), isNew: false })}
+            <button onClick={() => setEdit({ ...u, password: '', sections: u.sections || [], objects: u.objects || [], tabs: tabsObj(u.tabs), can_view: u.can_view || [], isNew: false })}
               style={{ padding: '4px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12.5, cursor: 'pointer' }}>✏️</button>
             <button onClick={() => del(u.id)}
               style={{ padding: '4px 12px', borderRadius: 8, border: '1px solid #ffd2cc', background: '#fff', color: '#e74c3c', fontSize: 12.5, cursor: 'pointer' }}>🗑</button>
@@ -973,6 +973,13 @@ function UsersTab({ token, objectsList }) {
             {(objectsList || []).map(o => (
               <label key={o} style={{ fontSize: 13 }}><input type="checkbox" checked={edit.objects.includes(o)} onChange={() => setEdit({ ...edit, objects: toggleArr(edit.objects, o) })} /> {o}</label>
             ))}
+          </div>
+          <div style={{ fontSize: 12.5, fontWeight: 700, margin: '6px 0 4px' }}>Видит чеки пользователей (ничего не отмечено = только свои{edit.role === 'admin' ? ', у admin — всё' : ''}):</div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
+            {list.filter(x => x.id !== edit.id).map(x => (
+              <label key={x.id} style={{ fontSize: 13 }}><input type="checkbox" checked={edit.can_view.includes(x.id)} onChange={() => setEdit({ ...edit, can_view: toggleArr(edit.can_view, x.id) })} /> {x.name || x.id}</label>
+            ))}
+            <label style={{ fontSize: 13, color: '#8e8e93' }}><input type="checkbox" checked={edit.can_view.includes('admin')} onChange={() => setEdit({ ...edit, can_view: toggleArr(edit.can_view, 'admin') })} /> admin (встроенный)</label>
           </div>
           <label style={{ fontSize: 13, display: 'block', margin: '6px 0' }}>
             <input type="checkbox" checked={edit.disabled} onChange={e => setEdit({ ...edit, disabled: e.target.checked })} /> 🚫 Отключён (вход запрещён)
@@ -2048,7 +2055,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v77 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v78 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -8029,7 +8036,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v77 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v78 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

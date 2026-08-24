@@ -2002,3 +2002,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Вёрстка логина: <style> в login-box — оба поля (логин/пароль) одинаковой ширины/вида.
 - Доступ к разделам стал ПОУРОВНЕВЫМ: tabs теперь объект {upload/list/analysis/taxes/crm/docs: 'full'|'read'|'none'} (нет ключа = full; старый массив поддержан). UsersTab: у каждого раздела select «⛔ Нет доступа / 👁 Просмотр / ✏️ Полный доступ» (full не сохраняется — чистая запись).
 - index.js: tabLevel/canAccessTab/canWriteTab + writeTabGuard; write-защита: PUT receipts (role+write list), DELETE receipts, docs write (6 эндпоинтов +writeTabGuard('docs')), CRM не-GET → write crm, bank-movements/manual → write analysis, upload-receipt → write upload. Health v77. Метки · v77 ·.
+
+## v78 (2026-08-24) — «видит данные пользователей»
+- app_users: новая колонка can_view jsonb (SQL: alter table app_users add column can_view jsonb;) — массив id пользователей, чьи чеки видны.
+- index.js: receipts GET: admin — все; остальные — owner_id IN (self + can_view), плюс objects-фильтр комбинируется; legacy user — своё + can_view. can_view в cache/login/CRUD. Health v78.
+- App.js: UsersTab — блок «Видит чеки пользователей» (чекбоксы всех пользователей + встроенный admin); в списке пользователей видно «видит: …». Кто добавил чек — поле «Добавил» уже было (formatOwnerName). Метки · v78 ·.
