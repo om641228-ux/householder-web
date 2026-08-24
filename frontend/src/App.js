@@ -2223,19 +2223,19 @@ function ChatTab({ user, token }) {
     fetch(`${API_URL}/api/users/names?token=${token}`).then(r => r.json()).then(j => {
       if (Array.isArray(j)) setUsers(j.filter(u => u.id !== myId));
     }).catch(() => {});
-  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [token]); // eslint-disable-line
 
   const loadUnread = useCallback(() => {
     if (!token) return;
     fetch(`${API_URL}/api/chat/unread`, { headers: hdr }).then(r => r.json()).then(j => {
       if (j && typeof j === 'object' && !j.error) setUnread(j);
     }).catch(() => {});
-  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [token]); // eslint-disable-line
 
   const markRead = useCallback((key) => {
     fetch(`${API_URL}/api/chat/read`, { method: 'POST', headers: { ...hdr, 'Content-Type': 'application/json' }, body: JSON.stringify({ channel: key }) })
       .then(() => loadUnread()).catch(() => {});
-  }, [token, loadUnread]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [token, loadUnread]); // eslint-disable-line
 
   const loadMsgs = useCallback(() => {
     if (!token) return;
@@ -2244,7 +2244,7 @@ function ChatTab({ user, token }) {
       if (Array.isArray(j)) { setMsgs(j); setLoadErr(''); markRead(chanKey); }
       else if (j && j.error) setLoadErr(j.error);
     }).catch(() => {});
-  }, [token, chan, chanKey, markRead]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [token, chan, chanKey, markRead]); // eslint-disable-line
 
   useEffect(() => { loadMsgs(); const t = setInterval(loadMsgs, 4000); return () => clearInterval(t); }, [loadMsgs]);
   useEffect(() => { loadUnread(); const t = setInterval(loadUnread, 10000); return () => clearInterval(t); }, [loadUnread]);
