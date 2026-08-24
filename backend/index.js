@@ -187,10 +187,22 @@ const requireRole = (...roles) => (req, res, next) =>
   roles.includes((req.user || {}).role) ? next() : res.status(403).json({ error: 'Недостаточно прав (роль: ' + ((req.user || {}).role || '?') + ')' });
 // v75: доступ к разделам документов (sections = null/[] — все разделы)
 const canAccessSection = (user, cat) => !user || !Array.isArray(user.sections) || user.sections.length === 0 || user.sections.includes(cat);
-// v75: доступ к разделам приложения (tabs = null/[] — всё открыто; ключи: upload/list/analysis/taxes/crm/docs)
-const canAccessTab = (user, tab) => !user || !Array.isArray(user.tabs) || user.tabs.length === 0 || user.tabs.includes(tab);
+// v75/v77: доступ к разделам приложения.
+// tabs: null/[] — всё открыто; массив ['list',...] — перечисленное открыто (старый формат);
+// объект {upload:'full'|'read'|'none', ...} — по каждому разделу свой уровень (нет ключа = full).
+const tabLevel = (user, tab) => {
+  if (!user) return 'full';
+  const t = user.tabs;
+  if (!t) return 'full';
+  if (Array.isArray(t)) return (t.length === 0 || t.includes(tab)) ? 'full' : 'none';
+  return t[tab] === undefined ? 'full' : t[tab];
+};
+const canAccessTab = (user, tab) => tabLevel(user, tab) !== 'none';
+const canWriteTab = (user, tab) => tabLevel(user, tab) === 'full';
 const tabGuard = (tab) => (req, res, next) =>
   canAccessTab(req.user, tab) ? next() : res.status(403).json({ error: 'Нет доступа к разделу «' + tab + '»' });
+const writeTabGuard = (tab) => (req, res, next) =>
+  canWriteTab(req.user, tab) ? next() : res.status(403).json({ error: 'Раздел «' + tab + '» — только просмотр' });
 const docSectionGuard = (req, res, next) =>
   canAccessSection(req.user, String(req.params.category || '')) ? next() : res.status(403).json({ error: 'Нет доступа к этому разделу документов' });
 
@@ -206,7 +218,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v76-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v77-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -2754,7 +2766,7 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     const user = resolveToken(token);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
         if (user.role === 'viewer') return res.status(403).json({ error: 'Роль «viewer» — только просмотр, загрузка запрещена' });
-    if (!canAccessTab(user, 'upload')) return res.status(403).json({ error: 'Нет доступа к разделу «Загрузка»' });
+    if (!canWriteTab(user, 'upload')) return res.status(403).json({ error: 'Раздел «Загрузка» закрыт или только для просмотра' });
 
     if (!req.file) return res.status(400).json({ error: 'No image provided' });
     
@@ -3781,7 +3793,7 @@ app.get('/api/receipts', requireAuth, tabGuard('list'), async (req, res) => {
 });
 
 // ========== DELETE RECEIPT ==========
-app.delete('/api/receipts/:id', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+app.delete('/api/receipts/:id', requireAuth, requireRole('admin', 'manager'), writeTabGuard('list'), async (req, res) => {
   try {
     const user = req.user;
     if (user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
@@ -3795,7 +3807,7 @@ app.delete('/api/receipts/:id', requireAuth, requireRole('admin', 'manager'), as
 });
 
 // ========== UPDATE RECEIPT (редактирование полей документа) ==========
-app.put('/api/receipts/:id', requireAuth, async (req, res) => {
+app.put('/api/receipts/:id', requireAuth, requireRole('admin', 'manager', 'buchhalter', 'user'), writeTabGuard('list'), async (req, res) => {
   try {
     const EDITABLE = ['store_name', 'store_name_ru', 'receipt_date', 'receipt_time',
       'total_amount', 'subtotal', 'tax_amount', 'currency', 'country', 'payment_method',
@@ -3967,6 +3979,7 @@ const crmTaskToApi = (r) => r && ({
 
 // v74: CRM — только admin/manager
 app.use('/api/crm', requireAuth, requireRole('admin', 'manager'), tabGuard('crm'));
+app.use('/api/crm', (req, res, next) => req.method === 'GET' ? next() : writeTabGuard('crm')(req, res, next));
 
 // GET /api/crm — все три раздела одним запросом (контрагенты + контакты + задачи)
 app.get('/api/crm', requireAuth, async (req, res) => {
@@ -4189,7 +4202,7 @@ app.get('/api/docs', requireAuth, tabGuard('docs'), async (req, res) => {
 });
 
 // POST /api/docs/:category/files — multipart/form-data, поле files (любые типы, ≤1 ГБ на файл)
-app.post('/api/docs/:category/files', requireAuth, requireRole('admin', 'manager'), docSectionGuard, crmMediaMulter('files'), async (req, res) => {
+app.post('/api/docs/:category/files', requireAuth, requireRole('admin', 'manager'), writeTabGuard('docs'), docSectionGuard, crmMediaMulter('files'), async (req, res) => {
   try {
     const cat = String(req.params.category || '');
     if (!DOC_CATEGORIES.includes(cat)) return res.status(400).json({ error: 'Неизвестный раздел (нужен home, auto или personal)' });
@@ -4263,7 +4276,7 @@ function r2Sdk() {
     throw err;
   }
 }
-app.post('/api/docs/:category/big/init', requireAuth, requireRole('admin', 'manager'), docSectionGuard, async (req, res) => {
+app.post('/api/docs/:category/big/init', requireAuth, requireRole('admin', 'manager'), writeTabGuard('docs'), docSectionGuard, async (req, res) => {
   try {
     if (!r2Configured()) return res.status(501).json({ error: 'Облако не настроено: задайте R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, R2_PUBLIC_URL в Variables householder-api' });
     const cat = String(req.params.category || '');
@@ -4292,7 +4305,7 @@ app.post('/api/docs/:category/big/sign', requireAuth, async (req, res) => {
     res.json({ urls });
   } catch (e) { res.status(e.statusCode || 500).json({ error: e.message }); }
 });
-app.post('/api/docs/:category/big/complete', requireAuth, requireRole('admin', 'manager'), docSectionGuard, async (req, res) => {
+app.post('/api/docs/:category/big/complete', requireAuth, requireRole('admin', 'manager'), writeTabGuard('docs'), docSectionGuard, async (req, res) => {
   try {
     if (!r2Configured()) return res.status(501).json({ error: 'Облако не настроено (R2_* Variables)' });
     const cat = String(req.params.category || '');
@@ -4325,7 +4338,7 @@ app.post('/api/docs/:category/big/complete', requireAuth, requireRole('admin', '
     res.json({ category: cat, attachments: fixDocsAttachments(data.attachments) });
   } catch (e) { console.error('[big/complete] FAIL:', e.message); res.status(e.statusCode || 500).json({ error: 'Сборка файла: ' + e.message }); }
 });
-app.post('/api/docs/:category/big/abort', requireAuth, requireRole('admin', 'manager'), docSectionGuard, async (req, res) => {
+app.post('/api/docs/:category/big/abort', requireAuth, requireRole('admin', 'manager'), writeTabGuard('docs'), docSectionGuard, async (req, res) => {
   try {
     if (r2Configured()) {
       const { key, uploadId } = req.body || {};
@@ -4564,7 +4577,7 @@ app.post('/api/docs/recognize-text', requireAuth, crmMediaMulter('pages'), async
 //  {urls:[…], folder:'X'}              — переместить файлы в подпапку (v59, мультивыбор; '' — убрать из папки)
 //  {folderRename:{from,to}}            — переименовать подпапку (v59)
 //  {folderDelete:'X'}                  — удалить подпапку: файлы остаются, поле folder снимается (v59)
-app.patch('/api/docs/:category/files', requireAuth, requireRole('admin', 'manager'), docSectionGuard, async (req, res) => {
+app.patch('/api/docs/:category/files', requireAuth, requireRole('admin', 'manager'), writeTabGuard('docs'), docSectionGuard, async (req, res) => {
   try {
     const cat = String(req.params.category || '');
     if (!DOC_CATEGORIES.includes(cat)) return res.status(400).json({ error: 'Неизвестный раздел (нужен home, auto или personal)' });
@@ -4699,7 +4712,7 @@ app.patch('/api/docs/:category/files', requireAuth, requireRole('admin', 'manage
 });
 
 // DELETE /api/docs/:category/files — body {url}
-app.delete('/api/docs/:category/files', requireAuth, requireRole('admin', 'manager'), docSectionGuard, async (req, res) => {
+app.delete('/api/docs/:category/files', requireAuth, requireRole('admin', 'manager'), writeTabGuard('docs'), docSectionGuard, async (req, res) => {
   try {
     const cat = String(req.params.category || '');
     if (!DOC_CATEGORIES.includes(cat)) return res.status(400).json({ error: 'Неизвестный раздел (нужен home, auto или personal)' });
@@ -5505,7 +5518,7 @@ app.post('/api/link-bank-movement', requireAuth, async (req, res) => {
 // v67.7: ручное добавление фактуры в выписку банка (из карточки фактуры).
 // Создаёт платёжное движение (amount<0) и СРАЗУ привязывает его к фактуре.
 // Поддерживает разбитую оплату: можно добавить несколько платежей к одной фактуре.
-app.post('/api/bank-movements/manual', requireAuth, async (req, res) => {
+app.post('/api/bank-movements/manual', requireAuth, writeTabGuard('analysis'), async (req, res) => {
   try {
     const { receipt_id, operation_date, amount, counterparty, concept } = req.body || {};
     if (!receipt_id) return res.status(400).json({ error: 'Нужен receipt_id' });

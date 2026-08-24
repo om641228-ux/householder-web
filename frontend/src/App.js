@@ -882,12 +882,19 @@ function UsersTab({ token, objectsList }) {
     } catch (e) { setErr(e.message); }
   };
   useEffect(() => { load(); }, []); // eslint-disable-line
-  const blank = { id: '', name: '', password: '', role: 'viewer', sections: [], objects: [], tabs: [], disabled: false, isNew: true };
+  const TAB_LEVELS = { none: '⛔ Нет доступа', read: '👁 Просмотр', full: '✏️ Полный доступ' };
+  const tabsObj = (t) => { // старый формат-массив → объект full
+    if (t && !Array.isArray(t) && typeof t === 'object') return { ...t };
+    const o = {};
+    if (Array.isArray(t)) t.forEach(k => { o[k] = 'full'; });
+    return o;
+  };
+  const blank = { id: '', name: '', password: '', role: 'viewer', sections: [], objects: [], tabs: {}, disabled: false, isNew: true };
   const save = async () => {
     try {
       const r = await fetch(`${API_URL}/api/users?token=${token}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: edit.id, name: edit.name, password: edit.password || undefined, role: edit.role, sections: edit.sections, objects: edit.objects, tabs: edit.tabs, disabled: edit.disabled })
+        body: JSON.stringify({ id: edit.id, name: edit.name, password: edit.password || undefined, role: edit.role, sections: edit.sections, objects: edit.objects, tabs: Object.keys(edit.tabs).length ? edit.tabs : null, disabled: edit.disabled })
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
@@ -913,10 +920,10 @@ function UsersTab({ token, objectsList }) {
             <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 8, background: u.role === 'admin' ? '#ffe9e7' : '#eef4ff', color: u.role === 'admin' ? '#c0392b' : '#0071e3', fontWeight: 700 }}>{u.role}</span>
             {u.disabled && <span style={{ fontSize: 12, color: '#e74c3c', fontWeight: 700 }}>отключён</span>}
             <span style={{ fontSize: 11.5, color: '#8e8e93' }}>
-              {Array.isArray(u.tabs) && u.tabs.length ? `разделы: ${u.tabs.map(t => (TAB_LABELS[t] || t).replace(/^\S+ /, '')).join(', ')}` : 'все разделы'} · {Array.isArray(u.objects) && u.objects.length ? `объекты: ${u.objects.join(', ')}` : 'все объекты'} · {Array.isArray(u.sections) && u.sections.length ? `документы: ${u.sections.join(', ')}` : 'все документы'}
+              {(Array.isArray(u.tabs) && u.tabs.length) ? `разделы: ${u.tabs.map(t => (TAB_LABELS[t] || t).replace(/^\S+ /, '')).join(', ')}` : (u.tabs && typeof u.tabs === 'object' && Object.keys(u.tabs).length) ? `разделы: ${Object.entries(u.tabs).map(([k, v]) => `${(TAB_LABELS[k] || k).replace(/^\S+ /, '')}=${v}`).join(', ')}` : 'все разделы'} · {Array.isArray(u.objects) && u.objects.length ? `объекты: ${u.objects.join(', ')}` : 'все объекты'} · {Array.isArray(u.sections) && u.sections.length ? `документы: ${u.sections.join(', ')}` : 'все документы'}
             </span>
             <span style={{ flex: 1 }} />
-            <button onClick={() => setEdit({ ...u, password: '', sections: u.sections || [], objects: u.objects || [], tabs: u.tabs || [], isNew: false })}
+            <button onClick={() => setEdit({ ...u, password: '', sections: u.sections || [], objects: u.objects || [], tabs: tabsObj(u.tabs), isNew: false })}
               style={{ padding: '4px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12.5, cursor: 'pointer' }}>✏️</button>
             <button onClick={() => del(u.id)}
               style={{ padding: '4px 12px', borderRadius: 8, border: '1px solid #ffd2cc', background: '#fff', color: '#e74c3c', fontSize: 12.5, cursor: 'pointer' }}>🗑</button>
@@ -939,12 +946,22 @@ function UsersTab({ token, objectsList }) {
           <select style={inp} value={edit.role} onChange={e => setEdit({ ...edit, role: e.target.value })}>
             {Object.entries(ROLE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
-          <div style={{ fontSize: 12.5, fontWeight: 700, margin: '6px 0 4px' }}>Разделы приложения (ничего не отмечено = все):</div>
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, margin: '6px 0 4px' }}>Разделы приложения — свой уровень доступа к каждому:</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 6 }}>
             {Object.entries(TAB_LABELS).map(([k, l]) => (
-              <label key={k} style={{ fontSize: 13 }}><input type="checkbox" checked={edit.tabs.includes(k)} onChange={() => setEdit({ ...edit, tabs: toggleArr(edit.tabs, k) })} /> {l}</label>
+              <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 13, flex: '0 0 150px' }}>{l}</span>
+                <select value={edit.tabs[k] || 'full'} onChange={e => {
+                  const v = e.target.value;
+                  setEdit(prev => { const t = { ...prev.tabs }; if (v === 'full') delete t[k]; else t[k] = v; return { ...prev, tabs: t }; });
+                }} style={{ flex: 1, padding: '6px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13,
+                  background: (edit.tabs[k] || 'full') === 'none' ? '#ffe9e7' : (edit.tabs[k] || 'full') === 'read' ? '#fff8e1' : '#eafaef' }}>
+                  {Object.entries(TAB_LEVELS).map(([v, tl]) => <option key={v} value={v}>{tl}</option>)}
+                </select>
+              </div>
             ))}
           </div>
+          <div style={{ fontSize: 11.5, color: '#8e8e93', marginBottom: 8 }}>«Полный доступ» — как у всех; «Просмотр» — смотреть, но не менять; «Нет доступа» — раздел скрыт.</div>
           <div style={{ fontSize: 12.5, fontWeight: 700, margin: '6px 0 4px' }}>Разделы документов (ничего не отмечено = все):</div>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
             {Object.entries(SEC_LABELS).map(([k, l]) => (
@@ -2031,7 +2048,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v76 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v77 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -3887,14 +3904,20 @@ function App() {
   const [shareDlg, setShareDlg] = useState(null); // v71: ссылка на выбранные чеки
   const [backupBusy, setBackupBusy] = useState(false); // v72: бэкап проекта (admin)
   const [restoreBusy, setRestoreBusy] = useState(false); // v73: восстановление из бэкапа (admin)
+  // v77: уровень доступа к разделу: tabs null/[] — всё; массив — перечисленное; объект {tab:'full'|'read'|'none'}
+  const tabAllowed = (t) => {
+    const x = user && user.tabs;
+    if (!x) return true;
+    if (Array.isArray(x)) return !x.length || x.includes(t);
+    return x[t] !== 'none';
+  };
   // v74/v75: viewer — только просмотр; закрытые разделы (user.tabs) — перебрасываем на доступное
   useEffect(() => {
     if (!user) return;
-    const allowed = (t) => !Array.isArray(user.tabs) || !user.tabs.length || user.tabs.includes(t);
-    const needList = (user.role === 'viewer' || !allowed('upload')) && activeTab === 'upload';
-    const closed = !allowed(activeTab) && activeTab !== 'users';
+    const needList = (user.role === 'viewer' || !tabAllowed('upload')) && activeTab === 'upload';
+    const closed = !tabAllowed(activeTab) && activeTab !== 'users';
     if (needList || closed) {
-      const fallback = ['list', 'docs', 'analysis', 'taxes'].find(t => allowed(t) && (t !== 'list' || true));
+      const fallback = ['list', 'docs', 'analysis', 'taxes'].find(t => tabAllowed(t));
       setActiveTab(fallback || 'list');
       if ((fallback || 'list') === 'list') loadReceipts();
     }
@@ -7074,6 +7097,7 @@ ${bodyHtml}
     return (
       <div className="App">
         <div className="login-box">
+          <style>{'.login-box input{width:100% !important;box-sizing:border-box;padding:13px 16px;margin:0 0 10px;border-radius:12px;border:1px solid #d0d0d5;font-size:15px;text-align:center}'}</style>
           <h1>Receipt Manager</h1>
           <div style={{
             padding: '8px 12px',
@@ -7120,34 +7144,34 @@ ${bodyHtml}
           </div>
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}'}</style>
           <nav className="tabs-inline">
-            {user?.role !== 'viewer' && (!Array.isArray(user?.tabs) || !user.tabs.length || user.tabs.includes('upload')) && (
+            {user?.role !== 'viewer' && tabAllowed('upload') && (
               <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>Загрузка</button>
             )}
-            {(!Array.isArray(user?.tabs) || !user.tabs.length || user.tabs.includes('list')) && (
+            {tabAllowed('list') && (
             <button className={activeTab === 'list' ? 'active' : ''} onClick={() => {setActiveTab('list'); loadReceipts();}}>
               Чеки/фактуры ({receiptCount}) · Прочие документы ({invoiceCount})
             </button>
             )}
             {/* Вкладка «Анализ»: банковские выписки и автопривязка платежей к фактурам */}
-            {(!Array.isArray(user?.tabs) || !user.tabs.length || user.tabs.includes('analysis')) && (
+            {tabAllowed('analysis') && (
               <button className={activeTab === 'analysis' ? 'active' : ''} onClick={() => {setActiveTab('analysis'); loadReceipts(); loadBankMovements(); loadPlannedPayments();}}>
                 📊 Анализ
               </button>
             )}
             {/* Вкладка «Налоги» (v29.2): полная копия банковского «Анализа» — основа под налоговый учёт */}
-            {(!Array.isArray(user?.tabs) || !user.tabs.length || user.tabs.includes('taxes')) && (
+            {tabAllowed('taxes') && (
               <button className={activeTab === 'taxes' ? 'active' : ''} onClick={() => {setActiveTab('taxes'); loadReceipts(); loadBankMovements();}}>
                 🧾 Налоги
               </button>
             )}
             {/* Вкладка «CRM» (v32): календарь задач, контрагенты, контакты, таймлайн исполнения — локально, без бэкенда */}
-            {(user?.role === 'admin' || user?.role === 'manager' || user?.role === 'user') && (!Array.isArray(user?.tabs) || !user.tabs.length || user.tabs.includes('crm')) && (
+            {(user?.role === 'admin' || user?.role === 'manager' || user?.role === 'user') && tabAllowed('crm') && (
               <button className={activeTab === 'crm' ? 'active' : ''} onClick={() => setActiveTab('crm')}>
                 🤝 CRM
               </button>
             )}
             {/* Вкладка «Документы» (v40): разделы Дома/Авто/Личное, файлы любых типов */}
-            {(!Array.isArray(user?.tabs) || !user.tabs.length || user.tabs.includes('docs')) && (
+            {tabAllowed('docs') && (
               <button className={activeTab === 'docs' ? 'active' : ''} onClick={() => setActiveTab('docs')}>
                 📁 Документы
               </button>
@@ -8005,7 +8029,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v76 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v77 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

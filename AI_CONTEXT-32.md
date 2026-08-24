@@ -1997,3 +1997,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 
 ## v76 (2026-08-24)
 - Вход по ЛОГИНУ + ПАРОЛЮ: форма логина получила поле «Логин» (пусто = старые общие пароли admin/user1…). /api/login принимает {login, password}: с логином — строго app_users по id (без учёта регистра), без логина — старое поведение по паролю. Health v76. Метки · v76 ·.
+
+## v77 (2026-08-24)
+- Вёрстка логина: <style> в login-box — оба поля (логин/пароль) одинаковой ширины/вида.
+- Доступ к разделам стал ПОУРОВНЕВЫМ: tabs теперь объект {upload/list/analysis/taxes/crm/docs: 'full'|'read'|'none'} (нет ключа = full; старый массив поддержан). UsersTab: у каждого раздела select «⛔ Нет доступа / 👁 Просмотр / ✏️ Полный доступ» (full не сохраняется — чистая запись).
+- index.js: tabLevel/canAccessTab/canWriteTab + writeTabGuard; write-защита: PUT receipts (role+write list), DELETE receipts, docs write (6 эндпоинтов +writeTabGuard('docs')), CRM не-GET → write crm, bank-movements/manual → write analysis, upload-receipt → write upload. Health v77. Метки · v77 ·.
