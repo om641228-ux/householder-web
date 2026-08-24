@@ -2023,3 +2023,7 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - app_users: новая колонка can_view_crm jsonb (SQL: alter table app_users add column can_view_crm jsonb;). can_view = только чеки, can_view_crm = только CRM.
 - index.js: visibleOwners(user, scope) — 'crm' → can_view_crm, иначе can_view. Проброшено в cache/login/CRUD. Health v81.
 - App.js: UsersTab — два независимых блока «🧾 Видит ЧЕКИ» и «🤝 Видит CRM» (renderCanView(field)); в списке: «чеки: … · crm: …». Метки · v81 ·.
+
+## v82 (2026-08-24)
+- UsersTab: убран выпадающий список роли из карточки пользователя (роль сохраняется в state и шлётся как раньше; для новых пользователей по умолчанию manager, чтобы per-tab доступы работали без ограничений viewer)
+- Удалён неиспользуемый ROLE_LABELS

@@ -867,7 +867,6 @@ const fmtDocDate = (iso) => iso ? iso.split('-').reverse().join('.') : '';
 
 // v74: вкладка «👥 Пользователи» (только admin) — управление доступом: роли, разделы документов, объекты
 function UsersTab({ token, objectsList }) {
-  const ROLE_LABELS = { admin: '👑 admin — полный доступ', manager: '🛠 manager — всё, кроме удаления и бэкапа', buchhalter: '🧾 buchhalter — финансы без CRM', viewer: '👁 viewer — только просмотр' };
   const SEC_LABELS = { home: '🏠 Дома', auto: '🚗 Авто', personal: '👤 Личное' };
   const TAB_LABELS = { upload: '📤 Загрузка', list: '🧾 Чеки/документы', analysis: '📊 Анализ', taxes: '🧾 Налоги', crm: '🤝 CRM', docs: '📁 Документы' };
   const [list, setList] = useState([]);
@@ -889,7 +888,7 @@ function UsersTab({ token, objectsList }) {
     if (Array.isArray(t)) t.forEach(k => { o[k] = 'full'; });
     return o;
   };
-  const blank = { id: '', name: '', password: '', role: 'viewer', sections: [], objects: [], tabs: {}, can_view: [], can_view_crm: [], disabled: false, isNew: true };
+  const blank = { id: '', name: '', password: '', role: 'manager', sections: [], objects: [], tabs: {}, can_view: [], can_view_crm: [], disabled: false, isNew: true };
   // v81: общий рендер списка «видит данные пользователей» (чеки и CRM — отдельные списки)
   const renderCanView = (field) => (
     <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
@@ -954,9 +953,6 @@ function UsersTab({ token, objectsList }) {
             onChange={e => setEdit({ ...edit, name: e.target.value })} />
           <input style={inp} placeholder={edit.isNew ? 'Пароль' : 'Новый пароль (пусто — не менять)'} value={edit.password}
             onChange={e => setEdit({ ...edit, password: e.target.value })} />
-          <select style={inp} value={edit.role} onChange={e => setEdit({ ...edit, role: e.target.value })}>
-            {Object.entries(ROLE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-          </select>
           <div style={{ fontSize: 12.5, fontWeight: 700, margin: '6px 0 4px' }}>Разделы приложения — свой уровень доступа к каждому:</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 6 }}>
             {Object.entries(TAB_LABELS).map(([k, l]) => (
@@ -2063,7 +2059,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v81 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v82 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -8051,7 +8047,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v81 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v82 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
