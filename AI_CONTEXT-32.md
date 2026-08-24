@@ -2015,3 +2015,6 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 ## v79 (2026-08-24) — can_view действует и на CRM
 - index.js: visibleOwners(user) (admin=null=все); GET /api/crm фильтрует counterparties/contacts/tasks по owner_id IN (self+can_view) OR owner_id IS NULL (старые записи без владельца видны всем). ownOrAdmin(table) guard на PUT/DELETE crm_counterparties/crm_contacts/crm_tasks — менять/удалять может автор или admin. Health v79.
 - App.js: подпись блока «Видит данные пользователей — чеки и CRM». Метки · v79 ·.
+
+## v80 (2026-08-24)
+- Пользователи в CRM: GET /api/users/names (requireAuth, любая роль) → [{id,name}] из app_users (не отключённые) + встроенные admin/user1…10. CrmTab: state crmUsers, подгрузка при монтировании, knownAssignees = задачи + текущий + все пользователи → datalist исполнителя полный. Health v80. Метки · v80 ·.

@@ -2058,7 +2058,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v79 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v80 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2208,6 +2208,13 @@ function CrmTab({ user, token }) {
   const [cps, setCps] = useState(() => crmLoad(CRM_LS_CPS));
   const [contacts, setContacts] = useState(() => crmLoad(CRM_LS_CONTACTS));
   const [section, setSection] = useState('calendar'); // calendar | tasks | cps | contacts
+  const [crmUsers, setCrmUsers] = useState([]); // v80: имена всех пользователей для выбора исполнителя
+  useEffect(() => {
+    if (!token) return;
+    fetch(`${API_URL}/api/users/names?token=${token}`).then(r => r.json()).then(j => {
+      if (Array.isArray(j)) setCrmUsers(j.map(u => u.name || u.id));
+    }).catch(() => {});
+  }, [token]);
 
   // Календарь
   const [calYear, setCalYear] = useState(() => new Date().getFullYear());
@@ -3033,7 +3040,7 @@ function CrmTab({ user, token }) {
   };
 
   // ---- производные данные ----
-  const knownAssignees = [...new Set(tasksL.flatMap(t => [t.assignee, t.createdBy]).concat([currentUser]).filter(n => n && n !== 'CRM'))];
+  const knownAssignees = [...new Set(tasksL.flatMap(t => [t.assignee, t.createdBy]).concat([currentUser]).concat(crmUsers).filter(n => n && n !== 'CRM'))]; // v80: + все пользователи системы
   const cntOpen = tasksL.filter(t => t.status === 'open').length;
   const cntPending = tasksL.filter(t => t.status === 'pending_confirm').length;
   const cntOverdue = tasksL.filter(isOverdue).length;
@@ -8039,7 +8046,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v79 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v80 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

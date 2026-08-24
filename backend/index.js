@@ -234,7 +234,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v79-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v80-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -263,6 +263,20 @@ app.post('/api/login', async (req, res) => {
 });
 
 // ========== v74: УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ (только admin) ==========
+// v80: список имён для выбора исполнителя в CRM — всем авторизованным (только id+name, без секретов)
+app.get('/api/users/names', requireAuth, async (req, res) => {
+  try {
+    const names = [{ id: 'admin', name: 'Admin' }];
+    for (let i = 1; i <= 10; i++) names.push({ id: `user${i}`, name: `User ${i}` });
+    try {
+      await refreshUsersCache(false);
+      const { data } = await supabaseAdmin.from('app_users').select('id, name').eq('disabled', false);
+      (data || []).forEach(u => { if (!names.some(n => n.id === u.id)) names.push({ id: u.id, name: u.name || u.id }); });
+    } catch (e) { /* app_users может не существовать */ }
+    res.json(names);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/users', requireAuth, requireRole('admin'), async (req, res) => {
   try {
     await refreshUsersCache(true);
