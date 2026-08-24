@@ -149,7 +149,7 @@ async function refreshUsersCache(force) {
     const map = {};
     (data || []).forEach(u => {
       if (u.disabled) return;
-      map[u.id] = { id: u.id, name: u.name || u.id, role: u.role || 'viewer', sections: Array.isArray(u.sections) ? u.sections : null, objects: Array.isArray(u.objects) ? u.objects : null, tabs: Array.isArray(u.tabs) ? u.tabs : null, can_view: Array.isArray(u.can_view) ? u.can_view : null };
+      map[u.id] = { id: u.id, name: u.name || u.id, role: u.role || 'viewer', sections: Array.isArray(u.sections) ? u.sections : null, objects: Array.isArray(u.objects) ? u.objects : null, tabs: Array.isArray(u.tabs) ? u.tabs : null, can_view: Array.isArray(u.can_view) ? u.can_view : null, can_view_crm: Array.isArray(u.can_view_crm) ? u.can_view_crm : null };
     });
     dbUsersCache = { map, loadedAt: Date.now() };
   } catch (e) { console.warn('app_users cache:', e.message); }
@@ -204,9 +204,10 @@ const tabGuard = (tab) => (req, res, next) =>
 const writeTabGuard = (tab) => (req, res, next) =>
   canWriteTab(req.user, tab) ? next() : res.status(403).json({ error: 'Раздел «' + tab + '» — только просмотр' });
 // v79: видимость чужих записей (чеки/CRM): null — видит всех (admin), иначе массив owner_id
-const visibleOwners = (user) => {
+const visibleOwners = (user, scope) => {
   if (!user || user.role === 'admin') return null;
-  return [user.id].concat(Array.isArray(user.can_view) ? user.can_view : []);
+  const field = scope === 'crm' ? 'can_view_crm' : 'can_view';
+  return [user.id].concat(Array.isArray(user[field]) ? user[field] : []);
 };
 // guard «только своя запись или admin» для UPDATE/DELETE
 const ownOrAdmin = (table) => async (req, res, next) => {
@@ -234,7 +235,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v80-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v81-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -248,7 +249,7 @@ app.post('/api/login', async (req, res) => {
     // логин указан → ищем строго его; без логина — старое поведение (по паролю)
     const hit = (data || []).find(u => !u.disabled && (!login || String(u.id).toLowerCase() === login) && u.pass_hash === hashPass(u.salt, password));
     if (hit) {
-      const user = { id: hit.id, name: hit.name || hit.id, role: hit.role || 'viewer', sections: Array.isArray(hit.sections) ? hit.sections : null, objects: Array.isArray(hit.objects) ? hit.objects : null, tabs: Array.isArray(hit.tabs) ? hit.tabs : null, can_view: Array.isArray(hit.can_view) ? hit.can_view : null };
+      const user = { id: hit.id, name: hit.name || hit.id, role: hit.role || 'viewer', sections: Array.isArray(hit.sections) ? hit.sections : null, objects: Array.isArray(hit.objects) ? hit.objects : null, tabs: Array.isArray(hit.tabs) ? hit.tabs : null, can_view: Array.isArray(hit.can_view) ? hit.can_view : null, can_view_crm: Array.isArray(hit.can_view_crm) ? hit.can_view_crm : null };
       const token = generateToken(user.id);
       tokens.set(token, user);
       return res.json({ success: true, token, user });
@@ -280,7 +281,7 @@ app.get('/api/users/names', requireAuth, async (req, res) => {
 app.get('/api/users', requireAuth, requireRole('admin'), async (req, res) => {
   try {
     await refreshUsersCache(true);
-    const { data, error } = await supabaseAdmin.from('app_users').select('id, name, role, sections, objects, tabs, can_view, disabled, created_at').order('id');
+    const { data, error } = await supabaseAdmin.from('app_users').select('id, name, role, sections, objects, tabs, can_view, can_view_crm, disabled, created_at').order('id');
     if (error) {
       if (/does not exist/i.test(error.message || '')) return res.status(500).json({ error: 'Нет таблицы app_users — выполните в SQL Editor: create table app_users (id text primary key, name text, salt text, pass_hash text, role text default \'viewer\', sections jsonb, objects jsonb, disabled boolean default false, created_at timestamptz default now());' });
       throw error;
@@ -291,7 +292,7 @@ app.get('/api/users', requireAuth, requireRole('admin'), async (req, res) => {
 
 app.post('/api/users', requireAuth, requireRole('admin'), async (req, res) => {
   try {
-    const { id, name, password, role, sections, objects, tabs, can_view, disabled } = req.body || {};
+    const { id, name, password, role, sections, objects, tabs, can_view, can_view_crm, disabled } = req.body || {};
     const uid = String(id || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 30);
     if (!uid) return res.status(400).json({ error: 'Логин: латиница/цифры' });
     if (!['admin', 'manager', 'buchhalter', 'viewer'].includes(role)) return res.status(400).json({ error: 'Роль: admin/manager/buchhalter/viewer' });
@@ -303,6 +304,7 @@ app.post('/api/users', requireAuth, requireRole('admin'), async (req, res) => {
       objects: Array.isArray(objects) && objects.length ? objects : null,
       tabs: Array.isArray(tabs) && tabs.length ? tabs : null,
       can_view: Array.isArray(can_view) && can_view.length ? can_view : null,
+      can_view_crm: Array.isArray(can_view_crm) && can_view_crm.length ? can_view_crm : null,
       disabled: !!disabled
     };
     if (password) { // пароль задан (или меняется) — новая соль+хэш
@@ -4017,7 +4019,7 @@ app.use('/api/crm', (req, res, next) => req.method === 'GET' ? next() : writeTab
 app.get('/api/crm', requireAuth, async (req, res) => {
   try {
     // v79: видны свои записи + записи пользователей из can_view (admin — все)
-    const owners = visibleOwners(req.user);
+    const owners = visibleOwners(req.user, 'crm');
     let qCps = supabaseAdmin.from('crm_counterparties').select('*').order('name');
     let qContacts = supabaseAdmin.from('crm_contacts').select('*').order('name');
     let qTasks = supabaseAdmin.from('crm_tasks').select('*').order('created_at', { ascending: false });

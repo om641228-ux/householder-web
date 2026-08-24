@@ -2018,3 +2018,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 
 ## v80 (2026-08-24)
 - Пользователи в CRM: GET /api/users/names (requireAuth, любая роль) → [{id,name}] из app_users (не отключённые) + встроенные admin/user1…10. CrmTab: state crmUsers, подгрузка при монтировании, knownAssignees = задачи + текущий + все пользователи → datalist исполнителя полный. Health v80. Метки · v80 ·.
+
+## v81 (2026-08-24) — чеки и CRM разделены в «видит данные»
+- app_users: новая колонка can_view_crm jsonb (SQL: alter table app_users add column can_view_crm jsonb;). can_view = только чеки, can_view_crm = только CRM.
+- index.js: visibleOwners(user, scope) — 'crm' → can_view_crm, иначе can_view. Проброшено в cache/login/CRUD. Health v81.
+- App.js: UsersTab — два независимых блока «🧾 Видит ЧЕКИ» и «🤝 Видит CRM» (renderCanView(field)); в списке: «чеки: … · crm: …». Метки · v81 ·.
