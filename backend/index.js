@@ -154,7 +154,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v71-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v72-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -4276,6 +4276,97 @@ app.get('/api/share/:id', async (req, res) => {
 <p class="meta">Файлов: ${items.length} · создано ${created}${exp}</p>
 ${list || '<p class="meta">Нет файлов.</p>'}`));
   } catch (e) { res.status(500).send(sharePageHtml('Ошибка', `<h1>Ошибка</h1><p class="meta">${escHtmlShare(e.message)}</p>`)); }
+});
+
+
+// ========== v72: БЭКАП ПРОЕКТА (только admin) ==========
+// GET /api/backup.zip — все таблицы (JSON) + манифест файлов (URL) + README одним ZIP.
+// ZIP собирается встроенным zlib (без внешних зависимостей). Файлы в архив НЕ входят — они в Supabase/R2.
+const crcTableZip = (() => { const t = new Int32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c; } return t; })();
+const crc32Zip = (buf) => { let c = -1; for (let i = 0; i < buf.length; i++) c = crcTableZip[(c ^ buf[i]) & 255] ^ (c >>> 8); return (c ^ (-1)) >>> 0; };
+function buildZipBackup(entries) { // [{name, data:Buffer}] -> Buffer (.zip, deflate)
+  const zlib = require('zlib');
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  for (const e of entries) {
+    const nameBuf = Buffer.from(e.name, 'utf8');
+    const data = e.data;
+    const comp = zlib.deflateRawSync(data, { level: 6 });
+    const crc = crc32Zip(data);
+    const lh = Buffer.alloc(30);
+    lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(20, 4); lh.writeUInt16LE(0x0800, 6);
+    lh.writeUInt16LE(8, 8); lh.writeUInt16LE(0, 10); lh.writeUInt16LE(0, 12);
+    lh.writeUInt32LE(crc, 14); lh.writeUInt32LE(comp.length, 18); lh.writeUInt32LE(data.length, 22);
+    lh.writeUInt16LE(nameBuf.length, 26); lh.writeUInt16LE(0, 28);
+    chunks.push(lh, nameBuf, comp);
+    const ch = Buffer.alloc(46);
+    ch.writeUInt32LE(0x02014b50, 0); ch.writeUInt16LE(20, 4); ch.writeUInt16LE(20, 6); ch.writeUInt16LE(0x0800, 8);
+    ch.writeUInt16LE(8, 10); ch.writeUInt16LE(0, 12); ch.writeUInt16LE(0, 14);
+    ch.writeUInt32LE(crc, 16); ch.writeUInt32LE(comp.length, 20); ch.writeUInt32LE(data.length, 24);
+    ch.writeUInt16LE(nameBuf.length, 28);
+    ch.writeUInt32LE(offset, 42); // смещение локального заголовка от начала файла
+    central.push(Buffer.concat([ch, nameBuf]));
+    offset += 30 + nameBuf.length + comp.length;
+  }
+  const cd = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(entries.length, 8); end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(cd.length, 12); end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...chunks, cd, end]);
+}
+
+app.get('/api/backup.zip', requireAuth, async (req, res) => {
+  try {
+    if ((req.user || {}).role !== 'admin') return res.status(403).json({ error: 'Бэкап доступен только администратору' });
+    const TABLES = ['receipts', 'doc_sections', 'objects', 'shares', 'document_pages', 'bank_movements', 'planned_payments', 'proposals', 'contract_documents', 'crm_contacts', 'crm_counterparties', 'crm_tasks'];
+    const entries = [];
+    const manifest = [];
+    const stats = {};
+    for (const t of TABLES) {
+      let rows = [];
+      let from = 0;
+      while (true) { // постранично по 1000 — лимит PostgREST
+        const { data, error } = await supabaseAdmin.from(t).select('*').range(from, from + 999);
+        if (error) { stats[t] = 'ОШИБКА: ' + error.message; rows = null; break; }
+        rows = rows.concat(data || []);
+        if (!data || data.length < 1000) break;
+        from += 1000;
+      }
+      if (rows === null) continue;
+      if (stats[t] === undefined) stats[t] = rows.length;
+      entries.push({ name: `tables/${t}.json`, data: Buffer.from(JSON.stringify(rows, null, 1), 'utf8') });
+      if (t === 'receipts') rows.forEach(r => { const u = r.photo_url || r.image_url; if (u) manifest.push({ table: 'receipts', id: r.id, name: r.store_name || '', url: u }); });
+      if (t === 'doc_sections') rows.forEach(r => (Array.isArray(r.attachments) ? r.attachments : []).forEach(a => {
+        const m = (a && typeof a === 'object') ? a : { url: a };
+        if (m.url) manifest.push({ table: 'doc_sections', category: r.category, name: m.name || '', path: m.path || m.folder || '', size: m.size || 0, url: m.url });
+      }));
+    }
+    entries.push({ name: 'files-manifest.json', data: Buffer.from(JSON.stringify(manifest, null, 1), 'utf8') });
+    const csvRows = ['table;id_category;name;path;size;url']
+      .concat(manifest.map(m => [m.table, m.id != null ? m.id : (m.category || ''), String(m.name || '').replace(/;/g, ','), String(m.path || '').replace(/;/g, ','), m.size || '', m.url].join(';')));
+    entries.push({ name: 'files-manifest.csv', data: Buffer.from('﻿' + csvRows.join('\n'), 'utf8') });
+    const readme = [
+      `Бэкап householder — ${new Date().toISOString()}`,
+      '',
+      'СОДЕРЖИМОЕ:',
+      '  tables/*.json — полный дамп всех таблиц базы (Supabase Postgres)',
+      '  files-manifest.json/csv — список ВСЕХ файлов с прямыми URL (сами файлы остаются в Supabase Storage и Cloudflare R2)',
+      '',
+      'ТАБЛИЦЫ:',
+      ...Object.entries(stats).map(([k, v]) => `  ${k}: ${v}`),
+      '',
+      `Файлов в манифесте: ${manifest.length}`,
+      '',
+      'НЕ ВХОДИТ: переменные окружения Railway (SUPABASE_*, GEMINI_*, GROQ_*, R2_*, пароли) — храните их отдельно в менеджере паролей!',
+      ''
+    ].join('\n');
+    entries.unshift({ name: 'README.txt', data: Buffer.from(readme, 'utf8') });
+    const zip = buildZipBackup(entries);
+    const fname = `householder-backup-${new Date().toISOString().slice(0, 10)}.zip`;
+    res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${fname}"`, 'Content-Length': zip.length });
+    res.send(zip);
+  } catch (e) { res.status(500).json({ error: 'Бэкап не удался: ' + e.message }); }
 });
 
 // POST /api/docs/recognize-text (v57.6): распознавание текста файла из вкладки «Документы» —

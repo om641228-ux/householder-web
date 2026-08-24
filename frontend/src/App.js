@@ -1912,7 +1912,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v71 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v72 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -3765,6 +3765,7 @@ function App() {
   const [exportProgress, setExportProgress] = useState(null); // v68.2: {done, total, files} — окно прогресса «Загрузить»
   const [exportMenuOpen, setExportMenuOpen] = useState(false); // v69.7: всплывающее меню «Загрузить» (файлы / ZIP)
   const [shareDlg, setShareDlg] = useState(null); // v71: ссылка на выбранные чеки
+  const [backupBusy, setBackupBusy] = useState(false); // v72: бэкап проекта (admin)
   const [confirmDlg, setConfirmDlg] = useState(null); // v68.3: {title, text, yesLabel, danger, onYes} — подтверждение действий (загрузка/удаление)
   const exportStopRef = useRef(false);
 
@@ -4949,6 +4950,18 @@ function App() {
   };
 
   // v69.7: «Загрузить ZIP» — подтверждение, затем сборка одного архива (папка на каждый чек)
+  // v72: скачать полный бэкап проекта (admin): все таблицы + манифест файлов, ZIP
+  const downloadBackup = async () => {
+    setBackupBusy(true);
+    try {
+      const r = await fetch(`${API_URL}/api/backup.zip?token=${token}`);
+      if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || `HTTP ${r.status}`); }
+      const blob = await r.blob();
+      downloadBlob(blob, `householder-backup-${new Date().toISOString().slice(0, 10)}.zip`);
+    } catch (e) { alert('Бэкап не удался: ' + e.message); }
+    finally { setBackupBusy(false); }
+  };
+
   // v71: публичная ссылка на файлы выбранных чеков (принцип Dropbox)
   const handleShareReceipts = () => {
     if (selectedReceiptIds.size === 0) return alert('Выберите чеки');
@@ -6955,6 +6968,11 @@ ${bodyHtml}
         </div>
         <div className="header-right">
           <span className="user-name">{formatUserName(user)}</span>
+          {user?.role === 'admin' && (
+            <button className="logout-btn" onClick={downloadBackup} disabled={backupBusy} title="Скачать полный бэкап: все таблицы (JSON) + манифест файлов (URL) одним ZIP">
+              {backupBusy ? '⏳ Бэкап…' : '📦 Бэкап'}
+            </button>
+          )}
           <button className="logout-btn" onClick={logout}>Выйти</button>
         </div>
       </header>
@@ -7785,7 +7803,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v71 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v72 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

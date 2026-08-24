@@ -1972,3 +1972,7 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - App.js: компонент ShareDialog (название, срок, создать/копировать/открыть), shareSelectedDocs (по всем загруженным разделам через docMediaOf), handleShareReceipts (photo_url/image_url выбранных чеков). Метки · v71 ·.
 - ТРЕБУЕТСЯ: таблица Supabase `shares` (SQL в «SQL — таблица shares (один раз).md»).
 - md5: App.js 081bdead81a33e95f909c9fa47db8902, index.js 6704bc381cdc7f6621d9808b5edb267d.
+
+## v72 (2026-08-24)
+- Бэкап проекта (только role=admin): GET /api/backup.zip — все таблицы (receipts, doc_sections, objects, shares, document_pages, bank_movements, planned_payments, proposals, contract_documents, crm_*) постранично по 1000 → tables/*.json + files-manifest.json/csv (все URL файлов из receipts.photo_url и doc_sections.attachments) + README.txt. ZIP собран встроенным zlib (crc32+deflate, без новых зависимостей; в central directory обязательно offset поле 42!).
+- App.js: кнопка «📦 Бэкап» в шапке (только admin), downloadBackup → blob → downloadBlob. Метки · v72 ·. Health: v72-2026-08-24.
