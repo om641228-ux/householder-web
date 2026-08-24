@@ -2007,3 +2007,7 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - app_users: новая колонка can_view jsonb (SQL: alter table app_users add column can_view jsonb;) — массив id пользователей, чьи чеки видны.
 - index.js: receipts GET: admin — все; остальные — owner_id IN (self + can_view), плюс objects-фильтр комбинируется; legacy user — своё + can_view. can_view в cache/login/CRUD. Health v78.
 - App.js: UsersTab — блок «Видит чеки пользователей» (чекбоксы всех пользователей + встроенный admin); в списке пользователей видно «видит: …». Кто добавил чек — поле «Добавил» уже было (formatOwnerName). Метки · v78 ·.
+
+
+## v78.1 (2026-08-24)
+- UsersTab «Видит чеки пользователей»: добавлены встроенные admin/user1…user10 (помечены «встроенный») — старые чеки записаны на них. Только фронт. Метки · v78.1 ·. md5 App.js см. вывод.

@@ -979,7 +979,10 @@ function UsersTab({ token, objectsList }) {
             {list.filter(x => x.id !== edit.id).map(x => (
               <label key={x.id} style={{ fontSize: 13 }}><input type="checkbox" checked={edit.can_view.includes(x.id)} onChange={() => setEdit({ ...edit, can_view: toggleArr(edit.can_view, x.id) })} /> {x.name || x.id}</label>
             ))}
-            <label style={{ fontSize: 13, color: '#8e8e93' }}><input type="checkbox" checked={edit.can_view.includes('admin')} onChange={() => setEdit({ ...edit, can_view: toggleArr(edit.can_view, 'admin') })} /> admin (встроенный)</label>
+            {/* встроенные пользователи из кода — старые чеки записаны на них */}
+            {['admin', ...Array.from({ length: 10 }, (_, i) => `user${i + 1}`)].filter(id => id !== edit.id && !list.some(x => x.id === id)).map(id => (
+              <label key={id} style={{ fontSize: 13, color: '#6e6e73' }}><input type="checkbox" checked={edit.can_view.includes(id)} onChange={() => setEdit({ ...edit, can_view: toggleArr(edit.can_view, id) })} /> {id} <span style={{ fontSize: 10.5, color: '#aeaeb2' }}>(встроенный)</span></label>
+            ))}
           </div>
           <label style={{ fontSize: 13, display: 'block', margin: '6px 0' }}>
             <input type="checkbox" checked={edit.disabled} onChange={e => setEdit({ ...edit, disabled: e.target.checked })} /> 🚫 Отключён (вход запрещён)
@@ -2055,7 +2058,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v78 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v78.1 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -8036,7 +8039,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v78 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v78.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
