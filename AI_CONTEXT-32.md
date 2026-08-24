@@ -1976,3 +1976,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 ## v72 (2026-08-24)
 - Бэкап проекта (только role=admin): GET /api/backup.zip — все таблицы (receipts, doc_sections, objects, shares, document_pages, bank_movements, planned_payments, proposals, contract_documents, crm_*) постранично по 1000 → tables/*.json + files-manifest.json/csv (все URL файлов из receipts.photo_url и doc_sections.attachments) + README.txt. ZIP собран встроенным zlib (crc32+deflate, без новых зависимостей; в central directory обязательно offset поле 42!).
 - App.js: кнопка «📦 Бэкап» в шапке (только admin), downloadBackup → blob → downloadBlob. Метки · v72 ·. Health: v72-2026-08-24.
+
+## v73 (2026-08-24)
+- Кнопка «📦 Бэкап» ПЕРЕНЕСЕНА из шапки → панель загрузки, сразу после «🏦 Выписки банка» (admin only). Рядом «♻ Восстановить».
+- Восстановление: выбор .zip бэкапа → JSZip читает tables/*.json → confirmDlg со сводкой → POST /api/restore {tables} → upsert по PK чанками 500, whitelist 12 таблиц, лишнее не удаляет. После успеха — reload страницы.
+- index.js: express.json лимит 50mb → 300mb (дамп таблиц одним запросом). Health: v73-2026-08-24. Метки · v73 ·.

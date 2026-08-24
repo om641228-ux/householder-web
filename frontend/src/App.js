@@ -1912,7 +1912,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v72 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v73 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -3766,6 +3766,7 @@ function App() {
   const [exportMenuOpen, setExportMenuOpen] = useState(false); // v69.7: всплывающее меню «Загрузить» (файлы / ZIP)
   const [shareDlg, setShareDlg] = useState(null); // v71: ссылка на выбранные чеки
   const [backupBusy, setBackupBusy] = useState(false); // v72: бэкап проекта (admin)
+  const [restoreBusy, setRestoreBusy] = useState(false); // v73: восстановление из бэкапа (admin)
   const [confirmDlg, setConfirmDlg] = useState(null); // v68.3: {title, text, yesLabel, danger, onYes} — подтверждение действий (загрузка/удаление)
   const exportStopRef = useRef(false);
 
@@ -4960,6 +4961,47 @@ function App() {
       downloadBlob(blob, `householder-backup-${new Date().toISOString().slice(0, 10)}.zip`);
     } catch (e) { alert('Бэкап не удался: ' + e.message); }
     finally { setBackupBusy(false); }
+  };
+
+  // v73: восстановление из бэкапа — читаем tables/*.json из ZIP, показываем сводку, шлём на сервер
+  const handleRestoreFile = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const JSZip = await loadJSZip();
+      const zip = await JSZip.loadAsync(file);
+      const tables = {};
+      const stats = [];
+      for (const pth of Object.keys(zip.files)) {
+        const m = pth.match(/^tables\/([a-z_]+)\.json$/);
+        if (!m) continue;
+        const rows = JSON.parse(await zip.files[pth].async('string'));
+        if (Array.isArray(rows)) { tables[m[1]] = rows; stats.push(`${m[1]}: ${rows.length} строк`); }
+      }
+      if (!Object.keys(tables).length) return alert('В архиве нет tables/*.json — это не файл бэкапа проекта.');
+      setConfirmDlg({
+        title: '♻ Восстановление из бэкапа',
+        text: `Восстановить данные из файла «${file.name}»?\n\n${stats.join('\n')}\n\nСуществующие записи будут ОБНОВЛЕНЫ, недостающие — добавлены.\nЗаписи, которых нет в бэкапе, НЕ удаляются.`,
+        yesLabel: 'Восстановить',
+        onYes: () => doRestore(tables)
+      });
+    } catch (err) { alert('Не удалось прочитать архив: ' + err.message); }
+  };
+  const doRestore = async (tables) => {
+    setRestoreBusy(true);
+    try {
+      const r = await fetch(`${API_URL}/api/restore?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tables })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      const lines = Object.entries(j.report || {}).map(([k, v]) => `${k}: ${v}`);
+      alert('♻ Восстановление завершено:\n\n' + lines.join('\n') + '\n\nСтраница будет обновлена.');
+      window.location.reload();
+    } catch (err) { alert('Восстановление не удалось: ' + err.message); }
+    finally { setRestoreBusy(false); }
   };
 
   // v71: публичная ссылка на файлы выбранных чеков (принцип Dropbox)
@@ -6968,11 +7010,6 @@ ${bodyHtml}
         </div>
         <div className="header-right">
           <span className="user-name">{formatUserName(user)}</span>
-          {user?.role === 'admin' && (
-            <button className="logout-btn" onClick={downloadBackup} disabled={backupBusy} title="Скачать полный бэкап: все таблицы (JSON) + манифест файлов (URL) одним ZIP">
-              {backupBusy ? '⏳ Бэкап…' : '📦 Бэкап'}
-            </button>
-          )}
           <button className="logout-btn" onClick={logout}>Выйти</button>
         </div>
       </header>
@@ -7661,6 +7698,19 @@ ${bodyHtml}
             <label htmlFor="statement-input" className="btn-folder" style={{ background: '#16a085' }} title="Excel-выписки банка (.xlsx), можно несколько сразу: дубликаты пропускаются, фактуры автоматически привяжутся к платежам">
               🏦 Выписки банка
             </label>
+            {user?.role === 'admin' && (
+              <React.Fragment>
+                <button type="button" className="btn-folder" style={{ background: '#5e5ce6' }} onClick={downloadBackup} disabled={backupBusy || restoreBusy}
+                  title="Скачать полный бэкап: все таблицы (JSON) + манифест файлов (URL) одним ZIP">
+                  {backupBusy ? '⏳ Бэкап…' : '📦 Бэкап'}
+                </button>
+                <label className="btn-folder" style={{ background: '#bf5af2', opacity: restoreBusy ? 0.6 : 1 }}
+                  title="Восстановить таблицы из файла бэкапа (.zip): существующие записи обновятся, недостающие добавятся">
+                  {restoreBusy ? '⏳ Восстановление…' : '♻ Восстановить'}
+                  <input type="file" accept=".zip" style={{ display: 'none' }} disabled={restoreBusy || backupBusy} onChange={handleRestoreFile} />
+                </label>
+              </React.Fragment>
+            )}
             <div className="toolbar-controls">
               <div className="control-group compact">
                 <label>Валюта:</label>
@@ -7803,7 +7853,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v72 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v73 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

@@ -149,12 +149,12 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'x-token'],
   credentials: true
 }));
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ limit: '300mb' })); // v73: 300 МБ — восстановление из бэкапа шлёт дамп таблиц одним запросом
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v72-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v73-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -4315,6 +4315,30 @@ function buildZipBackup(entries) { // [{name, data:Buffer}] -> Buffer (.zip, def
   end.writeUInt32LE(cd.length, 12); end.writeUInt32LE(offset, 16);
   return Buffer.concat([...chunks, cd, end]);
 }
+
+
+// v72.1: ВОССТАНОВЛЕНИЕ из бэкапа (только admin). Body: {tables: {name: rows[]}}.
+// upsert по первичному ключу: существующие записи обновляются, недостающие добавляются; лишнее НЕ удаляется.
+app.post('/api/restore', requireAuth, async (req, res) => {
+  try {
+    if ((req.user || {}).role !== 'admin') return res.status(403).json({ error: 'Восстановление доступно только администратору' });
+    const tables = (req.body && req.body.tables) || {};
+    const ALLOW = ['receipts', 'doc_sections', 'objects', 'shares', 'document_pages', 'bank_movements', 'planned_payments', 'proposals', 'contract_documents', 'crm_contacts', 'crm_counterparties', 'crm_tasks'];
+    const report = {};
+    for (const t of Object.keys(tables)) {
+      if (!ALLOW.includes(t)) { report[t] = 'пропущено (неизвестная таблица)'; continue; }
+      const rows = Array.isArray(tables[t]) ? tables[t] : [];
+      let done = 0;
+      for (let i = 0; i < rows.length; i += 500) {
+        const { error } = await supabaseAdmin.from(t).upsert(rows.slice(i, i + 500));
+        if (error) { report[t] = `ОШИБКА (после ${done}): ${error.message}`; break; }
+        done += Math.min(500, rows.length - i);
+      }
+      if (!report[t]) report[t] = `OK: ${done} строк`;
+    }
+    res.json({ ok: true, report });
+  } catch (e) { res.status(500).json({ error: 'Восстановление не удалось: ' + e.message }); }
+});
 
 app.get('/api/backup.zip', requireAuth, async (req, res) => {
   try {
