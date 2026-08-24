@@ -864,6 +864,105 @@ function parseDocDateFromText(text) {
 const fmtDocDate = (iso) => iso ? iso.split('-').reverse().join('.') : '';
 
 
+
+// v74: вкладка «👥 Пользователи» (только admin) — управление доступом: роли, разделы документов, объекты
+function UsersTab({ token, objectsList }) {
+  const ROLE_LABELS = { admin: '👑 admin — полный доступ', manager: '🛠 manager — всё, кроме удаления и бэкапа', buchhalter: '🧾 buchhalter — финансы без CRM', viewer: '👁 viewer — только просмотр' };
+  const SEC_LABELS = { home: '🏠 Дома', auto: '🚗 Авто', personal: '👤 Личное' };
+  const [list, setList] = useState([]);
+  const [err, setErr] = useState('');
+  const [edit, setEdit] = useState(null); // {id,name,password,role,sections[],objects[],disabled,isNew}
+  const load = async () => {
+    try {
+      const r = await fetch(`${API_URL}/api/users?token=${token}`);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setList(j); setErr('');
+    } catch (e) { setErr(e.message); }
+  };
+  useEffect(() => { load(); }, []); // eslint-disable-line
+  const blank = { id: '', name: '', password: '', role: 'viewer', sections: [], objects: [], disabled: false, isNew: true };
+  const save = async () => {
+    try {
+      const r = await fetch(`${API_URL}/api/users?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: edit.id, name: edit.name, password: edit.password || undefined, role: edit.role, sections: edit.sections, objects: edit.objects, disabled: edit.disabled })
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setEdit(null); load();
+    } catch (e) { alert('Не сохранилось: ' + e.message); }
+  };
+  const del = async (id) => {
+    if (!window.confirm(`Удалить пользователя «${id}»? Вход по его паролю перестанет работать.`)) return;
+    await fetch(`${API_URL}/api/users?token=${token}&id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+    load();
+  };
+  const toggleArr = (arr, v) => arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v];
+  const inp = { width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13.5, marginBottom: 8 };
+  return (
+    <div style={{ padding: '12px 15px', maxWidth: 720, margin: '0 auto' }}>
+      <h2 style={{ margin: '4px 0 10px', fontSize: 20 }}>👥 Пользователи и доступ</h2>
+      {err && <div style={{ background: '#fff4e5', border: '1px solid #ffd699', borderRadius: 10, padding: '10px 12px', fontSize: 13, color: '#8a6d3b', whiteSpace: 'pre-line', marginBottom: 10 }}>⚠️ {err}</div>}
+      <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #e3e6ea', padding: 14, marginBottom: 14 }}>
+        {list.map(u => (
+          <div key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', borderBottom: '1px solid #f0f0f2', flexWrap: 'wrap' }}>
+            <b style={{ fontSize: 14 }}>{u.name}</b>
+            <span style={{ fontSize: 12, color: '#8e8e93' }}>({u.id})</span>
+            <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 8, background: u.role === 'admin' ? '#ffe9e7' : '#eef4ff', color: u.role === 'admin' ? '#c0392b' : '#0071e3', fontWeight: 700 }}>{u.role}</span>
+            {u.disabled && <span style={{ fontSize: 12, color: '#e74c3c', fontWeight: 700 }}>отключён</span>}
+            <span style={{ fontSize: 11.5, color: '#8e8e93' }}>
+              {Array.isArray(u.sections) && u.sections.length ? `разделы: ${u.sections.join(', ')}` : 'все разделы'} · {Array.isArray(u.objects) && u.objects.length ? `объекты: ${u.objects.join(', ')}` : 'все объекты'}
+            </span>
+            <span style={{ flex: 1 }} />
+            <button onClick={() => setEdit({ ...u, password: '', sections: u.sections || [], objects: u.objects || [], isNew: false })}
+              style={{ padding: '4px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12.5, cursor: 'pointer' }}>✏️</button>
+            <button onClick={() => del(u.id)}
+              style={{ padding: '4px 12px', borderRadius: 8, border: '1px solid #ffd2cc', background: '#fff', color: '#e74c3c', fontSize: 12.5, cursor: 'pointer' }}>🗑</button>
+          </div>
+        ))}
+        {!list.length && !err && <div style={{ fontSize: 13, color: '#8e8e93' }}>Пользователей в базе нет — работают встроенные admin/user1…10. Добавьте первого ниже.</div>}
+        <button onClick={() => setEdit({ ...blank })}
+          style={{ marginTop: 10, padding: '7px 16px', borderRadius: 980, border: 'none', background: '#0071e3', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>＋ Добавить пользователя</button>
+        <div style={{ fontSize: 11.5, color: '#8e8e93', marginTop: 8 }}>Встроенные admin/user1…10 продолжают работать и сюда не попадают — удалите их из кода, когда все перейдут на свои пароли.</div>
+      </div>
+      {edit && (
+        <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #e3e6ea', padding: 16 }}>
+          <h3 style={{ margin: '0 0 10px', fontSize: 16 }}>{edit.isNew ? 'Новый пользователь' : `Правка: ${edit.id}`}</h3>
+          <input style={inp} placeholder="Логин (латиница, для входа)" value={edit.id} disabled={!edit.isNew}
+            onChange={e => setEdit({ ...edit, id: e.target.value })} />
+          <input style={inp} placeholder="Имя (как показывать)" value={edit.name}
+            onChange={e => setEdit({ ...edit, name: e.target.value })} />
+          <input style={inp} placeholder={edit.isNew ? 'Пароль' : 'Новый пароль (пусто — не менять)'} value={edit.password}
+            onChange={e => setEdit({ ...edit, password: e.target.value })} />
+          <select style={inp} value={edit.role} onChange={e => setEdit({ ...edit, role: e.target.value })}>
+            {Object.entries(ROLE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+          <div style={{ fontSize: 12.5, fontWeight: 700, margin: '6px 0 4px' }}>Разделы документов (ничего не отмечено = все):</div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
+            {Object.entries(SEC_LABELS).map(([k, l]) => (
+              <label key={k} style={{ fontSize: 13 }}><input type="checkbox" checked={edit.sections.includes(k)} onChange={() => setEdit({ ...edit, sections: toggleArr(edit.sections, k) })} /> {l}</label>
+            ))}
+          </div>
+          <div style={{ fontSize: 12.5, fontWeight: 700, margin: '6px 0 4px' }}>Объекты по чекам (ничего не отмечено = все):</div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
+            {(objectsList || []).map(o => (
+              <label key={o} style={{ fontSize: 13 }}><input type="checkbox" checked={edit.objects.includes(o)} onChange={() => setEdit({ ...edit, objects: toggleArr(edit.objects, o) })} /> {o}</label>
+            ))}
+          </div>
+          <label style={{ fontSize: 13, display: 'block', margin: '6px 0' }}>
+            <input type="checkbox" checked={edit.disabled} onChange={e => setEdit({ ...edit, disabled: e.target.checked })} /> 🚫 Отключён (вход запрещён)
+          </label>
+          <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
+            <button onClick={save} style={{ padding: '8px 20px', borderRadius: 980, border: 'none', background: '#34c759', color: '#fff', fontWeight: 700, fontSize: 13.5, cursor: 'pointer' }}>💾 Сохранить</button>
+            <button onClick={() => setEdit(null)} style={{ padding: '8px 20px', borderRadius: 980, border: '1px solid #c7c7cc', background: '#fff', fontWeight: 700, fontSize: 13.5, cursor: 'pointer' }}>Отмена</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // v71: диалог «Поделиться ссылкой» — публичная страница со списком выбранных файлов (принцип Dropbox)
 function ShareDialog({ dlg, setDlg, token }) {
   if (!dlg) return null;
@@ -949,6 +1048,9 @@ function DocsTab({ user, token }) {
   const [docsSelectMode, setDocsSelectMode] = useState(false); // v59: режим мультивыбора файлов
   const [docsSelected, setDocsSelected] = useState({}); // v59: {url: true}
   const [shareDlg, setShareDlg] = useState(null); // v71: диалог «поделиться ссылкой»
+  // v74: роли — viewer только смотрит; разделы документов ограничены правами пользователя
+  const docsReadOnly = (user && user.role === 'viewer') || (user && user.role === 'buchhalter');
+  const visibleDocSections = DOC_SECTIONS.filter(sec => !user || !Array.isArray(user.sections) || !user.sections.length || user.sections.includes(sec.key));
   // v59.1: реестр папок в localStorage — переименованные/новые папки не исчезают, даже если пустые
   const [hiddenFolders, setHiddenFoldersRaw] = useState(() => {
     try { return JSON.parse(localStorage.getItem('docsHiddenFolders') || '{}'); } catch (e) { return {}; }
@@ -1681,7 +1783,7 @@ function DocsTab({ user, token }) {
         </div>
       )}
       <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
-        {DOC_SECTIONS.map(sec => (
+        {(visibleDocSections).map(sec => (
           <button key={sec.key} className={docSection === sec.key ? 'docs-active-tab' : ''} onClick={() => { setDocSection(sec.key); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); setDocPath(prev => ({ ...prev, [sec.key]: '' })); }}
             style={{ padding: '8px 18px', borderRadius: 980, border: docSection === sec.key ? '2px solid #0071e3' : '1px solid #c7c7cc', background: docSection === sec.key ? '#0071e3' : '#fff', color: docSection === sec.key ? '#fff' : '#1d1d1f', fontWeight: 700, fontSize: 14, cursor: 'pointer', boxShadow: docSection === sec.key ? '0 2px 8px rgba(0,113,227,0.35)' : 'none' }}>
             {sec.title} ({(sections[sec.key] || []).length})
@@ -1693,10 +1795,14 @@ function DocsTab({ user, token }) {
           {/* v69.3: ДЕРЕВО папок — вложенные выводятся ПОД основной папкой с отступом */}
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: topFoldersAll.length ? 6 : 0 }}>
             <span style={{ fontSize: 12, color: '#8e8e93', marginRight: 2 }}>Папка:</span>
-            <button onClick={createDocsFolder} title="Создать новую папку (внутри открытой — вложенную)"
-              style={{ padding: '5px 12px', borderRadius: 980, border: '1px dashed #0071e3', background: '#fff', color: '#0071e3', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>＋ Папка</button>
+            {!docsReadOnly && (
+              <button onClick={createDocsFolder} title="Создать новую папку (внутри открытой — вложенную)"
+                style={{ padding: '5px 12px', borderRadius: 980, border: '1px dashed #0071e3', background: '#fff', color: '#0071e3', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>＋ Папка</button>
+            )}
+            {docsReadOnly ? null : (
             <button onClick={cleanEmptyTreeFolders} title="Удалить все ПУСТЫЕ папки без файлов в этом разделе (убрать мусор)"
               style={{ padding: '5px 10px', borderRadius: 980, border: '1px solid #d0d0d5', background: '#fff', color: '#8e8e93', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>🧹</button>
+            )}
             <button onClick={() => setDocsTreeExpanded({})} title="Свернуть все папки до верхнего уровня"
               style={{ padding: '5px 10px', borderRadius: 980, border: '1px solid #d0d0d5', background: '#fff', color: '#8e8e93', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>⊟ Свернуть</button>
             <button className={!curDocPath ? 'docs-active-tab' : ''} onClick={() => { setDocFolder(prev => ({ ...prev, [docSection]: 'All' })); setDocPath(prev => ({ ...prev, [docSection]: '' })); setDocsHover(null); setDocsSelected({}); setDocsSelectMode(false); }}
@@ -1778,8 +1884,10 @@ function DocsTab({ user, token }) {
         </button>
         <span style={{ flex: 1 }} />
         {!docsSelectMode ? (
+          docsReadOnly ? null : (
           <button onClick={() => setDocsSelectMode(true)}
             style={{ padding: '5px 14px', borderRadius: 980, border: '1px solid #d0d0d5', background: '#fff', color: '#1d1d1f', fontWeight: 600, fontSize: 12.5, cursor: 'pointer' }}>☑ Выбрать</button>
+          )
         ) : (
           <React.Fragment>
             <span style={{ fontSize: 12, color: '#1d1d1f', fontWeight: 600 }}>Выбрано: {selectedUrls.length}</span>
@@ -1864,14 +1972,18 @@ function DocsTab({ user, token }) {
         )}
         <div style={{ display: 'flex', gap: 18, rowGap: 34, flexWrap: 'wrap', alignItems: 'flex-start', paddingBottom: 12 }}>
           {itemsSorted.map((entry, i) => docThumb(entry, i))}
+          {!docsReadOnly && (
           <label title="Добавить файлы любого типа" style={{ width: 72, height: 72, borderRadius: 8, border: '1px dashed #c7c7cc', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: docsBusy ? 'wait' : 'pointer', fontSize: 24, color: '#8e8e93', background: '#f5f5f7' }}>
             {docsBusy ? '⏳' : '📎'}
             <input type="file" accept="*/*" multiple disabled={docsBusy} style={{ display: 'none' }} onChange={(e) => { addDocs(docSection, e.target.files); e.target.value = ''; }} />
           </label>
+          )}
+          {!docsReadOnly && (
           <label title="Загрузить папку целиком — внутренняя структура сохранится" style={{ width: 72, height: 72, borderRadius: 8, border: '1px dashed #c7c7cc', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: docsBusy ? 'wait' : 'pointer', fontSize: 24, color: '#8e8e93', background: '#f5f5f7' }}>
             {docsBusy ? '⏳' : '📂'}
             <input type="file" multiple disabled={docsBusy} style={{ display: 'none' }} {...{ webkitdirectory: '', directory: '' }} onChange={(e) => { addDocs(docSection, e.target.files); e.target.value = ''; }} />
           </label>
+          )}
           {items.length === 0 && subFolders.length === 0 && !docsBusy && <div style={{ fontSize: 13, color: '#8e8e93', alignSelf: 'center' }}>Файлов пока нет — нажмите 📎 (файлы) или 📂 (папку со структурой), чтобы загрузить.</div>}
         </div>
       </div>
@@ -1912,7 +2024,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v73 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v74 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -3767,6 +3879,10 @@ function App() {
   const [shareDlg, setShareDlg] = useState(null); // v71: ссылка на выбранные чеки
   const [backupBusy, setBackupBusy] = useState(false); // v72: бэкап проекта (admin)
   const [restoreBusy, setRestoreBusy] = useState(false); // v73: восстановление из бэкапа (admin)
+  // v74: viewer — только просмотр: вкладка «Загрузка» недоступна
+  useEffect(() => {
+    if (user && user.role === 'viewer' && activeTab === 'upload') { setActiveTab('list'); loadReceipts(); }
+  }, [user]); // eslint-disable-line
   const [confirmDlg, setConfirmDlg] = useState(null); // v68.3: {title, text, yesLabel, danger, onYes} — подтверждение действий (загрузка/удаление)
   const exportStopRef = useRef(false);
 
@@ -6986,7 +7102,9 @@ ${bodyHtml}
           </div>
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}'}</style>
           <nav className="tabs-inline">
-            <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>Загрузка</button>
+            {user?.role !== 'viewer' && (
+              <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>Загрузка</button>
+            )}
             <button className={activeTab === 'list' ? 'active' : ''} onClick={() => {setActiveTab('list'); loadReceipts();}}>
               Чеки/фактуры ({receiptCount}) · Прочие документы ({invoiceCount})
             </button>
@@ -6999,13 +7117,21 @@ ${bodyHtml}
               🧾 Налоги
             </button>
             {/* Вкладка «CRM» (v32): календарь задач, контрагенты, контакты, таймлайн исполнения — локально, без бэкенда */}
-            <button className={activeTab === 'crm' ? 'active' : ''} onClick={() => setActiveTab('crm')}>
-              🤝 CRM
-            </button>
+            {(user?.role === 'admin' || user?.role === 'manager' || user?.role === 'user') && (
+              <button className={activeTab === 'crm' ? 'active' : ''} onClick={() => setActiveTab('crm')}>
+                🤝 CRM
+              </button>
+            )}
             {/* Вкладка «Документы» (v40): разделы Дома/Авто/Личное, файлы любых типов */}
             <button className={activeTab === 'docs' ? 'active' : ''} onClick={() => setActiveTab('docs')}>
               📁 Документы
             </button>
+            {/* v74: управление пользователями — только admin */}
+            {user?.role === 'admin' && (
+              <button className={activeTab === 'users' ? 'active' : ''} onClick={() => setActiveTab('users')}>
+                👥 Доступ
+              </button>
+            )}
           </nav>
         </div>
         <div className="header-right">
@@ -7672,7 +7798,7 @@ ${bodyHtml}
               {/* Кнопки редактирования НЕ монтируем/размонтируем, а прячем через display:
                   иначе Safari (backdrop-filter на overlay) оставляет «призрак» удалённой
                   оранжевой кнопки — линию через футер */}
-              <button onClick={startEdit} style={{ background: '#f39c12', display: editMode ? 'none' : undefined }}>✏️ Редактировать</button>
+              <button onClick={startEdit} style={{ background: '#f39c12', display: (editMode || user?.role === 'viewer') ? 'none' : undefined }}>✏️ Редактировать</button>
               <button onClick={() => setEditMode(false)} disabled={savingEdit} style={{ background: '#95a5a6', display: editMode ? undefined : 'none' }}>Отмена</button>
               <button onClick={saveEdit} disabled={savingEdit} style={{ background: '#27ae60', display: editMode ? undefined : 'none' }}>{savingEdit ? '⏳ Сохраняю...' : '💾 Сохранить'}</button>
               {user?.role === 'admin' && (
@@ -7853,7 +7979,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v73 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v74 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8153,7 +8279,7 @@ ${bodyHtml}
               {/* Верхняя строка — основные действия */}
               <div className="bulk-actions-row">
                 <span> Выбрано: <strong>{selectedReceiptIds.size}</strong></span>
-                {user?.role === 'admin' && (
+                {(user?.role === 'admin' || user?.role === 'manager' || user?.role === 'user') && (
                   <button className="bulk-btn bulk-btn-danger" onClick={bulkDelete}>🗑 Удалить</button>
                 )}
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -8192,8 +8318,12 @@ ${bodyHtml}
                     )}
                   </div>
                 </div>
-                <button className="bulk-btn bulk-btn-purple" onClick={() => bulkReprocess()}>🔄 Перераспознать</button>
-                <button className="bulk-btn bulk-btn-teal" onClick={() => bulkTranslate()}>🌐 Перевести</button>
+                {user?.role !== 'viewer' && (
+                  <React.Fragment>
+                    <button className="bulk-btn bulk-btn-purple" onClick={() => bulkReprocess()}>🔄 Перераспознать</button>
+                    <button className="bulk-btn bulk-btn-teal" onClick={() => bulkTranslate()}>🌐 Перевести</button>
+                  </React.Fragment>
+                )}
               </div>
 
               {/* Нижняя строка — Сменить... во всю ширину */}
@@ -9607,6 +9737,7 @@ ${bodyHtml}
 
       {/* Вкладка «Документы» (v40) */}
       {activeTab === 'docs' && <DocsTab user={user} token={token} />}
+      {activeTab === 'users' && user?.role === 'admin' && <UsersTab token={token} objectsList={objectsList} />}
 
       {scanResultOpen && (
         <div className="scan-overlay">

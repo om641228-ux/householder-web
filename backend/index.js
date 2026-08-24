@@ -132,15 +132,63 @@ function resolveToken(token) {
   return user;
 }
 
-function requireAuth(req, res, next) {
-  const token = req.query.token || req.headers['x-token'] || req.body?.token;
-  const user = resolveToken(token);
-  if (!user) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+// ========== v74: ПОЛЬЗОВАТЕЛИ В БАЗЕ + РОЛИ ==========
+// Таблица app_users (SQL Editor, один раз):
+//   create table app_users (id text primary key, name text, salt text, pass_hash text,
+//                           role text default 'viewer', sections jsonb, objects jsonb, disabled boolean default false);
+// Роли: admin (всё) / manager (всё, кроме удаления и бэкапа) / buchhalter (финансы, без CRM) / viewer (только просмотр).
+// user — старая роль хардкод-пользователей: свои чеки, без новых ограничений.
+let dbUsersCache = { map: {}, loadedAt: 0 };
+const hashPass = (salt, pass) => cryptoAuth.createHash('sha256').update(`${salt}:${String(pass)}`).digest('hex');
+async function refreshUsersCache(force) {
+  if (!supabaseAdmin) return;
+  if (!force && Date.now() - dbUsersCache.loadedAt < 60000) return;
+  try {
+    const { data, error } = await supabaseAdmin.from('app_users').select('*');
+    if (error) { if (!/does not exist/i.test(error.message || '')) console.warn('app_users cache:', error.message); return; }
+    const map = {};
+    (data || []).forEach(u => {
+      if (u.disabled) return;
+      map[u.id] = { id: u.id, name: u.name || u.id, role: u.role || 'viewer', sections: Array.isArray(u.sections) ? u.sections : null, objects: Array.isArray(u.objects) ? u.objects : null };
+    });
+    dbUsersCache = { map, loadedAt: Date.now() };
+  } catch (e) { console.warn('app_users cache:', e.message); }
+}
+setTimeout(() => refreshUsersCache(true), 1000);
+
+// Подписанный токен может пережить рестарт — ищем пользователя и в кэше БД
+const origResolveToken = resolveToken;
+resolveToken = function (token) {
+  const mem = tokens.get(token);
+  if (mem) return mem;
+  const m = String(token || '').match(/^s1\.([A-Za-z0-9_\-]+)\.([A-Za-z0-9_\-]+)$/);
+  if (!m) return null;
+  const expected = signPayload(m[1]);
+  const got = m[2];
+  if (expected.length !== got.length || !cryptoAuth.timingSafeEqual(Buffer.from(expected), Buffer.from(got))) return null;
+  let userId = null;
+  try { userId = Buffer.from(m[1], 'base64url').toString('utf8').split('.')[0]; } catch (_) { return null; }
+  const user = USERS[userId] || dbUsersCache.map[userId] || null;
+  if (!user) return null;
+  tokens.set(token, user);
+  return user;
+};
+
+async function requireAuth(req, res, next) {
+  const token = req.query.token || req.headers['x-token'] || (req.body && req.body.token);
+  let user = resolveToken(token);
+  if (!user && token) { await refreshUsersCache(false); user = resolveToken(token); }
+  if (!user) return res.status(401).json({ error: 'Unauthorized' });
   req.user = user;
   next();
 }
+
+const requireRole = (...roles) => (req, res, next) =>
+  roles.includes((req.user || {}).role) ? next() : res.status(403).json({ error: 'Недостаточно прав (роль: ' + ((req.user || {}).role || '?') + ')' });
+// v75: доступ к разделам документов (sections = null/[] — все разделы)
+const canAccessSection = (user, cat) => !user || !Array.isArray(user.sections) || user.sections.length === 0 || user.sections.includes(cat);
+const docSectionGuard = (req, res, next) =>
+  canAccessSection(req.user, String(req.params.category || '')) ? next() : res.status(403).json({ error: 'Нет доступа к этому разделу документов' });
 
 // ========== CORS ==========
 app.use(cors({
@@ -154,17 +202,81 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v73-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v74-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => {
   const { password } = req.body;
+  // v74: сначала пользователи из базы (app_users), затем хардкод-совместимость
+  try {
+    await refreshUsersCache(true);
+    const { data } = await supabaseAdmin.from('app_users').select('*');
+    const hit = (data || []).find(u => !u.disabled && u.pass_hash === hashPass(u.salt, password));
+    if (hit) {
+      const user = { id: hit.id, name: hit.name || hit.id, role: hit.role || 'viewer', sections: Array.isArray(hit.sections) ? hit.sections : null, objects: Array.isArray(hit.objects) ? hit.objects : null };
+      const token = generateToken(user.id);
+      tokens.set(token, user);
+      return res.json({ success: true, token, user });
+    }
+  } catch (e) { /* таблицы ещё нет — работаем на хардкоде */ }
   const user = USERS[password];
   if (!user) return res.status(401).json({ error: 'Неверный пароль' });
   const token = generateToken(user.id);
   tokens.set(token, user);
   res.json({ success: true, token, user });
+});
+
+// ========== v74: УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ (только admin) ==========
+app.get('/api/users', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    await refreshUsersCache(true);
+    const { data, error } = await supabaseAdmin.from('app_users').select('id, name, role, sections, objects, disabled, created_at').order('id');
+    if (error) {
+      if (/does not exist/i.test(error.message || '')) return res.status(500).json({ error: 'Нет таблицы app_users — выполните в SQL Editor: create table app_users (id text primary key, name text, salt text, pass_hash text, role text default \'viewer\', sections jsonb, objects jsonb, disabled boolean default false, created_at timestamptz default now());' });
+      throw error;
+    }
+    res.json(data || []);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/users', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const { id, name, password, role, sections, objects, disabled } = req.body || {};
+    const uid = String(id || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 30);
+    if (!uid) return res.status(400).json({ error: 'Логин: латиница/цифры' });
+    if (!['admin', 'manager', 'buchhalter', 'viewer'].includes(role)) return res.status(400).json({ error: 'Роль: admin/manager/buchhalter/viewer' });
+    const row = {
+      id: uid,
+      name: String(name || uid).slice(0, 60),
+      role,
+      sections: Array.isArray(sections) && sections.length ? sections : null,
+      objects: Array.isArray(objects) && objects.length ? objects : null,
+      disabled: !!disabled
+    };
+    if (password) { // пароль задан (или меняется) — новая соль+хэш
+      row.salt = require('crypto').randomBytes(8).toString('hex');
+      row.pass_hash = hashPass(row.salt, password);
+    } else {
+      const { data: ex } = await supabaseAdmin.from('app_users').select('id').eq('id', uid).maybeSingle();
+      if (!ex) return res.status(400).json({ error: 'Для нового пользователя задайте пароль' });
+    }
+    const { error } = await supabaseAdmin.from('app_users').upsert(row);
+    if (error) throw error;
+    await refreshUsersCache(true);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/users', requireAuth, requireRole('admin'), async (req, res) => {
+  try {
+    const uid = String(req.query.id || '');
+    if (!uid) return res.status(400).json({ error: 'id?' });
+    const { error } = await supabaseAdmin.from('app_users').delete().eq('id', uid);
+    if (error) throw error;
+    await refreshUsersCache(true);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/me', (req, res) => {
@@ -2633,7 +2745,8 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     const token = req.query.token || req.body.token;
     const user = resolveToken(token);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
-    
+        if (user.role === 'viewer') return res.status(403).json({ error: 'Роль «viewer» — только просмотр, загрузка запрещена' });
+
     if (!req.file) return res.status(400).json({ error: 'No image provided' });
     
     const model = req.body.model || DEFAULT_GEMINI_MODEL;
@@ -3613,9 +3726,13 @@ app.get('/api/receipts', requireAuth, async (req, res) => {
   try {
     const user = req.user;
     let query = supabaseAdmin.from('receipts').select('*').order('created_at', { ascending: false });
-    
-    if (user.role !== 'admin') {
+
+    // v74/v75: legacy 'user' — только свои чеки; роли admin/manager/buchhalter/viewer — все,
+    // а если у пользователя задан список объектов (objects) — только чеки этих объектов
+    if (user.role === 'user') {
       query = query.eq('owner_id', user.id);
+    } else if (Array.isArray(user.objects) && user.objects.length) {
+      query = query.in('object', user.objects);
     }
     
     const { data, error } = await query;
@@ -3655,7 +3772,7 @@ app.get('/api/receipts', requireAuth, async (req, res) => {
 });
 
 // ========== DELETE RECEIPT ==========
-app.delete('/api/receipts/:id', requireAuth, async (req, res) => {
+app.delete('/api/receipts/:id', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
   try {
     const user = req.user;
     if (user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
@@ -3838,6 +3955,9 @@ const crmTaskToApi = (r) => r && ({
   photosAfter: Array.isArray(r.photos_after) ? r.photos_after : [],
   createdAt: r.created_at ? Date.parse(r.created_at) : null
 });
+
+// v74: CRM — только admin/manager
+app.use('/api/crm', requireAuth, requireRole('admin', 'manager'));
 
 // GET /api/crm — все три раздела одним запросом (контрагенты + контакты + задачи)
 app.get('/api/crm', requireAuth, async (req, res) => {
@@ -4048,6 +4168,7 @@ app.get('/api/docs', requireAuth, async (req, res) => {
     const sections = { home: [], auto: [], personal: [] };
     (data || []).forEach(r => {
       if (!sections[r.category]) return;
+      if (!canAccessSection(req.user, r.category)) return; // v75: разделы по правам
       const arr = Array.isArray(r.attachments) ? r.attachments : [];
       // v57.5: старые записи с кракозяброй в name чиним на лету (без миграции данных)
       sections[r.category] = fixDocsAttachments(arr); // v59.2: общий хелпер
@@ -4059,7 +4180,7 @@ app.get('/api/docs', requireAuth, async (req, res) => {
 });
 
 // POST /api/docs/:category/files — multipart/form-data, поле files (любые типы, ≤1 ГБ на файл)
-app.post('/api/docs/:category/files', requireAuth, crmMediaMulter('files'), async (req, res) => {
+app.post('/api/docs/:category/files', requireAuth, requireRole('admin', 'manager'), docSectionGuard, crmMediaMulter('files'), async (req, res) => {
   try {
     const cat = String(req.params.category || '');
     if (!DOC_CATEGORIES.includes(cat)) return res.status(400).json({ error: 'Неизвестный раздел (нужен home, auto или personal)' });
@@ -4133,7 +4254,7 @@ function r2Sdk() {
     throw err;
   }
 }
-app.post('/api/docs/:category/big/init', requireAuth, async (req, res) => {
+app.post('/api/docs/:category/big/init', requireAuth, requireRole('admin', 'manager'), docSectionGuard, async (req, res) => {
   try {
     if (!r2Configured()) return res.status(501).json({ error: 'Облако не настроено: задайте R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, R2_PUBLIC_URL в Variables householder-api' });
     const cat = String(req.params.category || '');
@@ -4162,7 +4283,7 @@ app.post('/api/docs/:category/big/sign', requireAuth, async (req, res) => {
     res.json({ urls });
   } catch (e) { res.status(e.statusCode || 500).json({ error: e.message }); }
 });
-app.post('/api/docs/:category/big/complete', requireAuth, async (req, res) => {
+app.post('/api/docs/:category/big/complete', requireAuth, requireRole('admin', 'manager'), docSectionGuard, async (req, res) => {
   try {
     if (!r2Configured()) return res.status(501).json({ error: 'Облако не настроено (R2_* Variables)' });
     const cat = String(req.params.category || '');
@@ -4195,7 +4316,7 @@ app.post('/api/docs/:category/big/complete', requireAuth, async (req, res) => {
     res.json({ category: cat, attachments: fixDocsAttachments(data.attachments) });
   } catch (e) { console.error('[big/complete] FAIL:', e.message); res.status(e.statusCode || 500).json({ error: 'Сборка файла: ' + e.message }); }
 });
-app.post('/api/docs/:category/big/abort', requireAuth, async (req, res) => {
+app.post('/api/docs/:category/big/abort', requireAuth, requireRole('admin', 'manager'), docSectionGuard, async (req, res) => {
   try {
     if (r2Configured()) {
       const { key, uploadId } = req.body || {};
@@ -4434,7 +4555,7 @@ app.post('/api/docs/recognize-text', requireAuth, crmMediaMulter('pages'), async
 //  {urls:[…], folder:'X'}              — переместить файлы в подпапку (v59, мультивыбор; '' — убрать из папки)
 //  {folderRename:{from,to}}            — переименовать подпапку (v59)
 //  {folderDelete:'X'}                  — удалить подпапку: файлы остаются, поле folder снимается (v59)
-app.patch('/api/docs/:category/files', requireAuth, async (req, res) => {
+app.patch('/api/docs/:category/files', requireAuth, requireRole('admin', 'manager'), docSectionGuard, async (req, res) => {
   try {
     const cat = String(req.params.category || '');
     if (!DOC_CATEGORIES.includes(cat)) return res.status(400).json({ error: 'Неизвестный раздел (нужен home, auto или personal)' });
@@ -4569,7 +4690,7 @@ app.patch('/api/docs/:category/files', requireAuth, async (req, res) => {
 });
 
 // DELETE /api/docs/:category/files — body {url}
-app.delete('/api/docs/:category/files', requireAuth, async (req, res) => {
+app.delete('/api/docs/:category/files', requireAuth, requireRole('admin', 'manager'), docSectionGuard, async (req, res) => {
   try {
     const cat = String(req.params.category || '');
     if (!DOC_CATEGORIES.includes(cat)) return res.status(400).json({ error: 'Неизвестный раздел (нужен home, auto или personal)' });

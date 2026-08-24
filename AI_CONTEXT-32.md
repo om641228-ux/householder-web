@@ -1981,3 +1981,11 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Кнопка «📦 Бэкап» ПЕРЕНЕСЕНА из шапки → панель загрузки, сразу после «🏦 Выписки банка» (admin only). Рядом «♻ Восстановить».
 - Восстановление: выбор .zip бэкапа → JSZip читает tables/*.json → confirmDlg со сводкой → POST /api/restore {tables} → upsert по PK чанками 500, whitelist 12 таблиц, лишнее не удаляет. После успеха — reload страницы.
 - index.js: express.json лимит 50mb → 300mb (дамп таблиц одним запросом). Health: v73-2026-08-24. Метки · v73 ·.
+
+## v74 (2026-08-24) — АВТОРИЗАЦИЯ С РОЛЯМИ (вариант А+Б)
+- Таблица app_users (SQL-файл в output): id/name/salt/pass_hash/role/sections/objects/disabled. Пароль = sha256(salt:pass).
+- Роли: admin (всё) / manager (всё, кроме удаления и бэкапа) / buchhalter (финансы, без CRM, документы read-only) / viewer (только просмотр) / user (legacy хардкод — как раньше, свои чеки).
+- index.js: login сначала ищет в app_users (потом хардкод USERS); dbUsersCache 60с + refreshUsersCache; resolveToken смотрит и в кэш БД; requireAuth стал async; requireRole(...); docSectionGuard; canAccessSection.
+- Ограждения: /api/crm* — admin/manager (app.use); DELETE receipts, docs files POST/PATCH/DELETE, big/init|complete|abort — admin/manager; upload-receipt — viewer 403; GET /api/docs фильтрует разделы по user.sections; GET /api/receipts — legacy user → owner_id, роли с objects[] → фильтр .in('object').
+- CRUD: GET/POST/DELETE /api/users (admin). Health: v74-2026-08-24.
+- App.js: UsersTab (вкладка «👥 Доступ», admin): список, добавление, роли, чекбоксы разделов/объектов, disable, удаление. Навигация: «Загрузка» скрыта у viewer (useEffect-перенос на list), «CRM» у buchhalter/viewer, «👥 Доступ» только admin. DocsTab: docsReadOnly (viewer/buchhalter) — скрыты 📎/📂/☑ Выбрать/＋ Папка/🧹; visibleDocSections по user.sections. Чеки: ✏️ Редактировать скрыто у viewer; Перераспознать/Перевести скрыты у viewer; bulk 🗑 Удалить — admin/manager/user. Метки · v74 ·.
