@@ -1989,3 +1989,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Ограждения: /api/crm* — admin/manager (app.use); DELETE receipts, docs files POST/PATCH/DELETE, big/init|complete|abort — admin/manager; upload-receipt — viewer 403; GET /api/docs фильтрует разделы по user.sections; GET /api/receipts — legacy user → owner_id, роли с objects[] → фильтр .in('object').
 - CRUD: GET/POST/DELETE /api/users (admin). Health: v74-2026-08-24.
 - App.js: UsersTab (вкладка «👥 Доступ», admin): список, добавление, роли, чекбоксы разделов/объектов, disable, удаление. Навигация: «Загрузка» скрыта у viewer (useEffect-перенос на list), «CRM» у buchhalter/viewer, «👥 Доступ» только admin. DocsTab: docsReadOnly (viewer/buchhalter) — скрыты 📎/📂/☑ Выбрать/＋ Папка/🧹; visibleDocSections по user.sections. Чеки: ✏️ Редактировать скрыто у viewer; Перераспознать/Перевести скрыты у viewer; bulk 🗑 Удалить — admin/manager/user. Метки · v74 ·.
+
+## v75 (2026-08-24) — доступ по разделам приложения
+- app_users: новая колонка tabs jsonb (SQL: alter table app_users add column tabs jsonb;). Ключи: upload/list/analysis/taxes/crm/docs; NULL/[] = всё открыто.
+- index.js: canAccessTab + tabGuard; /api/receipts→list, /api/crm→crm, /api/docs→docs, /api/bank-movements→analysis|taxes, /api/planned-payments→analysis, upload-receipt→upload. tabs проброшены в cache/login/CRUD. Health v75.
+- App.js: UsersTab — чекбоксы «Разделы приложения»; навигация фильтруется по user.tabs; useEffect перебрасывает с закрытой вкладки на доступную. Метки · v75 ·.

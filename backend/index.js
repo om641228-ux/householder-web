@@ -149,7 +149,7 @@ async function refreshUsersCache(force) {
     const map = {};
     (data || []).forEach(u => {
       if (u.disabled) return;
-      map[u.id] = { id: u.id, name: u.name || u.id, role: u.role || 'viewer', sections: Array.isArray(u.sections) ? u.sections : null, objects: Array.isArray(u.objects) ? u.objects : null };
+      map[u.id] = { id: u.id, name: u.name || u.id, role: u.role || 'viewer', sections: Array.isArray(u.sections) ? u.sections : null, objects: Array.isArray(u.objects) ? u.objects : null, tabs: Array.isArray(u.tabs) ? u.tabs : null };
     });
     dbUsersCache = { map, loadedAt: Date.now() };
   } catch (e) { console.warn('app_users cache:', e.message); }
@@ -187,6 +187,10 @@ const requireRole = (...roles) => (req, res, next) =>
   roles.includes((req.user || {}).role) ? next() : res.status(403).json({ error: 'Недостаточно прав (роль: ' + ((req.user || {}).role || '?') + ')' });
 // v75: доступ к разделам документов (sections = null/[] — все разделы)
 const canAccessSection = (user, cat) => !user || !Array.isArray(user.sections) || user.sections.length === 0 || user.sections.includes(cat);
+// v75: доступ к разделам приложения (tabs = null/[] — всё открыто; ключи: upload/list/analysis/taxes/crm/docs)
+const canAccessTab = (user, tab) => !user || !Array.isArray(user.tabs) || user.tabs.length === 0 || user.tabs.includes(tab);
+const tabGuard = (tab) => (req, res, next) =>
+  canAccessTab(req.user, tab) ? next() : res.status(403).json({ error: 'Нет доступа к разделу «' + tab + '»' });
 const docSectionGuard = (req, res, next) =>
   canAccessSection(req.user, String(req.params.category || '')) ? next() : res.status(403).json({ error: 'Нет доступа к этому разделу документов' });
 
@@ -202,7 +206,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v74-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v75-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -214,7 +218,7 @@ app.post('/api/login', async (req, res) => {
     const { data } = await supabaseAdmin.from('app_users').select('*');
     const hit = (data || []).find(u => !u.disabled && u.pass_hash === hashPass(u.salt, password));
     if (hit) {
-      const user = { id: hit.id, name: hit.name || hit.id, role: hit.role || 'viewer', sections: Array.isArray(hit.sections) ? hit.sections : null, objects: Array.isArray(hit.objects) ? hit.objects : null };
+      const user = { id: hit.id, name: hit.name || hit.id, role: hit.role || 'viewer', sections: Array.isArray(hit.sections) ? hit.sections : null, objects: Array.isArray(hit.objects) ? hit.objects : null, tabs: Array.isArray(hit.tabs) ? hit.tabs : null };
       const token = generateToken(user.id);
       tokens.set(token, user);
       return res.json({ success: true, token, user });
@@ -231,7 +235,7 @@ app.post('/api/login', async (req, res) => {
 app.get('/api/users', requireAuth, requireRole('admin'), async (req, res) => {
   try {
     await refreshUsersCache(true);
-    const { data, error } = await supabaseAdmin.from('app_users').select('id, name, role, sections, objects, disabled, created_at').order('id');
+    const { data, error } = await supabaseAdmin.from('app_users').select('id, name, role, sections, objects, tabs, disabled, created_at').order('id');
     if (error) {
       if (/does not exist/i.test(error.message || '')) return res.status(500).json({ error: 'Нет таблицы app_users — выполните в SQL Editor: create table app_users (id text primary key, name text, salt text, pass_hash text, role text default \'viewer\', sections jsonb, objects jsonb, disabled boolean default false, created_at timestamptz default now());' });
       throw error;
@@ -242,7 +246,7 @@ app.get('/api/users', requireAuth, requireRole('admin'), async (req, res) => {
 
 app.post('/api/users', requireAuth, requireRole('admin'), async (req, res) => {
   try {
-    const { id, name, password, role, sections, objects, disabled } = req.body || {};
+    const { id, name, password, role, sections, objects, tabs, disabled } = req.body || {};
     const uid = String(id || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 30);
     if (!uid) return res.status(400).json({ error: 'Логин: латиница/цифры' });
     if (!['admin', 'manager', 'buchhalter', 'viewer'].includes(role)) return res.status(400).json({ error: 'Роль: admin/manager/buchhalter/viewer' });
@@ -252,6 +256,7 @@ app.post('/api/users', requireAuth, requireRole('admin'), async (req, res) => {
       role,
       sections: Array.isArray(sections) && sections.length ? sections : null,
       objects: Array.isArray(objects) && objects.length ? objects : null,
+      tabs: Array.isArray(tabs) && tabs.length ? tabs : null,
       disabled: !!disabled
     };
     if (password) { // пароль задан (или меняется) — новая соль+хэш
@@ -2746,6 +2751,7 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     const user = resolveToken(token);
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
         if (user.role === 'viewer') return res.status(403).json({ error: 'Роль «viewer» — только просмотр, загрузка запрещена' });
+    if (!canAccessTab(user, 'upload')) return res.status(403).json({ error: 'Нет доступа к разделу «Загрузка»' });
 
     if (!req.file) return res.status(400).json({ error: 'No image provided' });
     
@@ -3722,7 +3728,7 @@ app.post('/api/translate-receipt', requireAuth, async (req, res) => {
 });
 
 // ========== LIST RECEIPTS ==========
-app.get('/api/receipts', requireAuth, async (req, res) => {
+app.get('/api/receipts', requireAuth, tabGuard('list'), async (req, res) => {
   try {
     const user = req.user;
     let query = supabaseAdmin.from('receipts').select('*').order('created_at', { ascending: false });
@@ -3957,7 +3963,7 @@ const crmTaskToApi = (r) => r && ({
 });
 
 // v74: CRM — только admin/manager
-app.use('/api/crm', requireAuth, requireRole('admin', 'manager'));
+app.use('/api/crm', requireAuth, requireRole('admin', 'manager'), tabGuard('crm'));
 
 // GET /api/crm — все три раздела одним запросом (контрагенты + контакты + задачи)
 app.get('/api/crm', requireAuth, async (req, res) => {
@@ -4161,7 +4167,7 @@ const DOC_CATEGORIES = ['home', 'auto', 'personal'];
 const DOCS_MIGRATION_HINT = 'Если ошибка про отсутствие таблицы — выполни supabase-migration-v25-docs.sql в SQL Editor проекта householder (Supabase)';
 
 // GET /api/docs — все разделы с файлами (командное пространство, как CRM)
-app.get('/api/docs', requireAuth, async (req, res) => {
+app.get('/api/docs', requireAuth, tabGuard('docs'), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('doc_sections').select('*');
     if (error) throw error;
@@ -4725,7 +4731,7 @@ const ppToApi = (r) => r && ({
   createdAt: r.created_at ? Date.parse(r.created_at) : null
 });
 
-app.get('/api/planned-payments', requireAuth, async (req, res) => {
+app.get('/api/planned-payments', requireAuth, tabGuard('analysis'), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('planned_payments').select('*').order('active', { ascending: false }).order('day_of_month', { ascending: true });
     if (error) throw error;
@@ -5430,7 +5436,8 @@ app.post('/api/import-bank-statements', requireAuth, upload.array('statements', 
 });
 
 // Список движений для вкладки «Анализ» (фронт обогащает данными чеков на своей стороне)
-app.get('/api/bank-movements', requireAuth, async (req, res) => {
+app.get('/api/bank-movements', requireAuth, (req, res, next) =>
+  (canAccessTab(req.user, 'analysis') || canAccessTab(req.user, 'taxes')) ? next() : res.status(403).json({ error: 'Нет доступа к банковским данным' }), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('bank_movements')
       .select('*')
