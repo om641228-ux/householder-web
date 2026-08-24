@@ -868,7 +868,7 @@ const fmtDocDate = (iso) => iso ? iso.split('-').reverse().join('.') : '';
 // v74: вкладка «👥 Пользователи» (только admin) — управление доступом: роли, разделы документов, объекты
 function UsersTab({ token, objectsList }) {
   const SEC_LABELS = { home: '🏠 Дома', auto: '🚗 Авто', personal: '👤 Личное' };
-  const TAB_LABELS = { upload: '📤 Загрузка', list: '🧾 Чеки/документы', analysis: '📊 Анализ', taxes: '🧾 Налоги', crm: '🤝 CRM', docs: '📁 Документы' };
+  const TAB_LABELS = { upload: '📤 Загрузка', list: '🧾 Чеки/документы', analysis: '📊 Анализ', taxes: '🧾 Налоги', crm: '🤝 CRM', docs: '📁 Документы', chat: '💬 Чат' };
   const [list, setList] = useState([]);
   const [err, setErr] = useState('');
   const [edit, setEdit] = useState(null); // {id,name,password,role,sections[],objects[],disabled,isNew}
@@ -2059,7 +2059,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v82 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v83 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2196,6 +2196,157 @@ function DocsTab({ user, token }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ===================== v83: ЧАТ (общий + личные сообщения) =====================
+function ChatTab({ user, token }) {
+  const myId = (user && user.id) || 'admin';
+  const myName = (user && user.name) || myId;
+  const [users, setUsers] = useState([]);
+  const [chan, setChan] = useState('general');   // 'general' | {dm:'userId'}
+  const [msgs, setMsgs] = useState([]);
+  const [text, setText] = useState('');
+  const [file, setFile] = useState(null);
+  const [sending, setSending] = useState(false);
+  const [unread, setUnread] = useState({});
+  const [loadErr, setLoadErr] = useState('');
+  const listRef = useRef(null);
+  const fileRef = useRef(null);
+  const hdr = { Authorization: `Bearer ${token}` };
+
+  const chanKey = chan === 'general' ? 'general' : `dm:${[myId, chan.dm].sort().join(':')}`;
+
+  useEffect(() => {
+    if (!token) return;
+    fetch(`${API_URL}/api/users/names?token=${token}`).then(r => r.json()).then(j => {
+      if (Array.isArray(j)) setUsers(j.filter(u => u.id !== myId));
+    }).catch(() => {});
+  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadUnread = useCallback(() => {
+    if (!token) return;
+    fetch(`${API_URL}/api/chat/unread`, { headers: hdr }).then(r => r.json()).then(j => {
+      if (j && typeof j === 'object' && !j.error) setUnread(j);
+    }).catch(() => {});
+  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const markRead = useCallback((key) => {
+    fetch(`${API_URL}/api/chat/read`, { method: 'POST', headers: { ...hdr, 'Content-Type': 'application/json' }, body: JSON.stringify({ channel: key }) })
+      .then(() => loadUnread()).catch(() => {});
+  }, [token, loadUnread]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadMsgs = useCallback(() => {
+    if (!token) return;
+    const q = chan === 'general' ? 'channel=general' : `dm=${encodeURIComponent(chan.dm)}`;
+    fetch(`${API_URL}/api/chat/messages?${q}`, { headers: hdr }).then(r => r.json()).then(j => {
+      if (Array.isArray(j)) { setMsgs(j); setLoadErr(''); markRead(chanKey); }
+      else if (j && j.error) setLoadErr(j.error);
+    }).catch(() => {});
+  }, [token, chan, chanKey, markRead]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { loadMsgs(); const t = setInterval(loadMsgs, 4000); return () => clearInterval(t); }, [loadMsgs]);
+  useEffect(() => { loadUnread(); const t = setInterval(loadUnread, 10000); return () => clearInterval(t); }, [loadUnread]);
+  useEffect(() => { if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight; }, [msgs.length, chan]);
+
+  const send = async () => {
+    if (sending || (!text.trim() && !file)) return;
+    setSending(true);
+    try {
+      let file_url = null, file_name = null;
+      if (file) {
+        const fd = new FormData();
+        fd.append('file', file);
+        const ur = await fetch(`${API_URL}/api/chat/upload`, { method: 'POST', headers: hdr, body: fd }).then(r => r.json());
+        if (ur.error) { alert(ur.error); setSending(false); return; }
+        file_url = ur.url; file_name = ur.name;
+      }
+      const body = { text: text.trim(), file_url, file_name };
+      if (chan !== 'general') body.to = chan.dm; else body.channel = 'general';
+      const r = await fetch(`${API_URL}/api/chat/messages`, { method: 'POST', headers: { ...hdr, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json());
+      if (r.error) { alert(r.error); } else { setText(''); setFile(null); if (fileRef.current) fileRef.current.value = ''; loadMsgs(); }
+    } finally { setSending(false); }
+  };
+
+  const fmtTime = (iso) => { const d = new Date(iso); const today = new Date().toDateString() === d.toDateString();
+    return today ? d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+      : d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); };
+
+  const chanLabel = chan === 'general' ? '📢 Общий чат' : `💬 ${(users.find(u => u.id === chan.dm) || {}).name || chan.dm}`;
+  const isImg = (n) => /\.(png|jpe?g|gif|webp|heic)$/i.test(n || '');
+
+  return (
+    <div style={{ display: 'flex', gap: 12, height: 'calc(100vh - 210px)', minHeight: 420 }}>
+      {/* Каналы */}
+      <div style={{ flex: '0 0 220px', background: '#fff', borderRadius: 14, border: '1px solid #e5e5ea', overflowY: 'auto', padding: 8 }}>
+        <div onClick={() => setChan('general')}
+          style={{ padding: '9px 10px', borderRadius: 10, cursor: 'pointer', fontSize: 14, fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            background: chan === 'general' ? '#e8f0fe' : 'transparent' }}>
+          <span>📢 Общий чат</span>
+          {unread.general > 0 && chan !== 'general' && <span style={{ background: '#ff3b30', color: '#fff', borderRadius: 10, fontSize: 11, padding: '1px 7px' }}>{unread.general}</span>}
+        </div>
+        <div style={{ fontSize: 11, color: '#8e8e93', padding: '8px 10px 4px', fontWeight: 700 }}>ЛИЧНЫЕ СООБЩЕНИЯ</div>
+        {users.map(u => {
+          const key = `dm:${[myId, u.id].sort().join(':')}`;
+          const cnt = unread[key] || 0;
+          const active = chan !== 'general' && chan.dm === u.id;
+          return (
+            <div key={u.id} onClick={() => setChan({ dm: u.id })}
+              style={{ padding: '8px 10px', borderRadius: 10, cursor: 'pointer', fontSize: 13.5, display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                background: active ? '#e8f0fe' : 'transparent' }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>👤 {u.name || u.id}</span>
+              {cnt > 0 && !active && <span style={{ background: '#ff3b30', color: '#fff', borderRadius: 10, fontSize: 11, padding: '1px 7px' }}>{cnt}</span>}
+            </div>
+          );
+        })}
+      </div>
+      {/* Сообщения */}
+      <div style={{ flex: 1, background: '#fff', borderRadius: 14, border: '1px solid #e5e5ea', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ padding: '10px 16px', borderBottom: '1px solid #f0f0f2', fontWeight: 700, fontSize: 14 }}>{chanLabel}</div>
+        <div ref={listRef} style={{ flex: 1, overflowY: 'auto', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8, background: '#fafafc' }}>
+          {loadErr && <div style={{ color: '#b00', fontSize: 13, background: '#fff2f0', padding: 10, borderRadius: 8 }}>{loadErr}</div>}
+          {!loadErr && msgs.length === 0 && <div style={{ color: '#8e8e93', fontSize: 13, textAlign: 'center', marginTop: 30 }}>Сообщений пока нет — напишите первым!</div>}
+          {msgs.map(m => {
+            const mine = m.from_id === myId;
+            return (
+              <div key={m.id} style={{ alignSelf: mine ? 'flex-end' : 'flex-start', maxWidth: '72%' }}>
+                <div style={{ fontSize: 11, color: '#8e8e93', margin: mine ? '0 4px 2px 0' : '0 0 2px 4px', textAlign: mine ? 'right' : 'left' }}>
+                  {!mine && <b style={{ color: '#555' }}>{m.from_name || m.from_id}</b>} {fmtTime(m.created_at)}
+                </div>
+                <div style={{ padding: '8px 12px', borderRadius: 14, fontSize: 14, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                  background: mine ? '#0071e3' : '#fff', color: mine ? '#fff' : '#1d1d1f',
+                  border: mine ? 'none' : '1px solid #e5e5ea', boxShadow: '0 1px 2px rgba(0,0,0,0.04)' }}>
+                  {m.text}
+                  {m.file_url && (
+                    <div style={{ marginTop: m.text ? 6 : 0 }}>
+                      {isImg(m.file_name)
+                        ? <a href={m.file_url} target="_blank" rel="noreferrer"><img src={m.file_url} alt={m.file_name} style={{ maxWidth: 240, maxHeight: 180, borderRadius: 8, display: 'block' }} /></a>
+                        : <a href={m.file_url} target="_blank" rel="noreferrer" style={{ color: mine ? '#d6e9ff' : '#0071e3', fontSize: 13 }}>📎 {m.file_name}</a>}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {/* Ввод */}
+        <div style={{ padding: '10px 12px', borderTop: '1px solid #f0f0f2', display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input ref={fileRef} type="file" style={{ display: 'none' }} onChange={e => setFile(e.target.files[0] || null)} />
+          <button onClick={() => fileRef.current && fileRef.current.click()} title="Прикрепить файл"
+            style={{ border: 'none', background: '#f0f0f2', borderRadius: 10, padding: '8px 11px', cursor: 'pointer', fontSize: 16 }}>📎</button>
+          {file && <span style={{ fontSize: 12, color: '#555', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{file.name}
+            <span onClick={() => { setFile(null); if (fileRef.current) fileRef.current.value = ''; }} style={{ cursor: 'pointer', color: '#b00', marginLeft: 4 }}>✕</span></span>}
+          <input value={text} onChange={e => setText(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+            placeholder={`Сообщение от ${myName}…`}
+            style={{ flex: 1, padding: '9px 13px', borderRadius: 12, border: '1px solid #d0d0d5', fontSize: 14, outline: 'none' }} />
+          <button onClick={send} disabled={sending || (!text.trim() && !file)}
+            style={{ border: 'none', background: '#0071e3', color: '#fff', borderRadius: 12, padding: '9px 18px', cursor: 'pointer', fontSize: 14, fontWeight: 600, opacity: sending ? 0.6 : 1 }}>
+            {sending ? '…' : '➤'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -3747,6 +3898,8 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [authChecking, setAuthChecking] = useState(true);
   const [activeTab, setActiveTab] = useState('upload');
+  const [chatUnread, setChatUnread] = useState({}); // v83: непрочитанные по каналам
+  const chatUnreadTotal = Object.values(chatUnread).reduce((a, b) => a + (b || 0), 0);
   const [password, setPassword] = useState('');
   const [loginName, setLoginName] = useState(''); // v76: вход по логину + паролю
   const [loginError, setLoginError] = useState('');
@@ -3929,6 +4082,16 @@ function App() {
     if (Array.isArray(x)) return !x.length || x.includes(t);
     return x[t] !== 'none';
   };
+  // v83: бейдж непрочитанных в шапке — опрос каждые 15 с
+  useEffect(() => {
+    if (!token) return;
+    const tick = () => fetch(`${API_URL}/api/chat/unread`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json()).then(j => { if (j && typeof j === 'object' && !j.error) setChatUnread(j); }).catch(() => {});
+    tick();
+    const t = setInterval(tick, 15000);
+    return () => clearInterval(t);
+  }, [token]);
+
   // v74/v75: viewer — только просмотр; закрытые разделы (user.tabs) — перебрасываем на доступное
   useEffect(() => {
     if (!user) return;
@@ -7194,6 +7357,13 @@ ${bodyHtml}
                 📁 Документы
               </button>
             )}
+            {/* v83: чат с бейджем непрочитанных */}
+            {tabAllowed('chat') && (
+              <button className={activeTab === 'chat' ? 'active' : ''} onClick={() => setActiveTab('chat')} style={{ position: 'relative' }}>
+                💬 Чат
+                {chatUnreadTotal > 0 && <span style={{ background: '#ff3b30', color: '#fff', borderRadius: 10, fontSize: 11, padding: '1px 7px', marginLeft: 5 }}>{chatUnreadTotal}</span>}
+              </button>
+            )}
             {/* v74: управление пользователями — только admin */}
             {user?.role === 'admin' && (
               <button className={activeTab === 'users' ? 'active' : ''} onClick={() => setActiveTab('users')}>
@@ -8047,7 +8217,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v82 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v83 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9802,6 +9972,7 @@ ${bodyHtml}
 
       {/* Вкладка «CRM» (v32) */}
       {activeTab === 'crm' && <CrmTab user={user} token={token} />}
+      {activeTab === 'chat' && tabAllowed('chat') && <ChatTab user={user} token={token} />}
 
       {/* Вкладка «Документы» (v40) */}
       {activeTab === 'docs' && <DocsTab user={user} token={token} />}

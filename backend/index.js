@@ -235,7 +235,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v81-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v83-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -275,6 +275,93 @@ app.get('/api/users/names', requireAuth, async (req, res) => {
       (data || []).forEach(u => { if (!names.some(n => n.id === u.id)) names.push({ id: u.id, name: u.name || u.id }); });
     } catch (e) { /* app_users может не существовать */ }
     res.json(names);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ========== v83: ЧАТ (общий канал + личные сообщения, вложения, непрочитанные) ==========
+// SQL (один раз, Supabase → SQL Editor):
+// create table chat_messages (id uuid primary key default gen_random_uuid(), channel text not null default 'general',
+//   from_id text not null, from_name text, to_id text, text text, file_url text, file_name text,
+//   created_at timestamptz default now());
+// create index on chat_messages (channel, created_at);
+// create table chat_reads (user_id text not null, channel text not null, last_read timestamptz default now(),
+//   primary key (user_id, channel));
+
+function dmChannel(a, b) { return 'dm:' + [String(a), String(b)].sort().join(':'); }
+function chatCanAccess(user, channel) {
+  if (channel === 'general') return true;
+  if (channel && channel.startsWith('dm:')) return channel.split(':').slice(1).includes(user.id);
+  return false;
+}
+
+// Список сообщений канала (последние 300)
+app.get('/api/chat/messages', requireAuth, tabGuard('chat'), async (req, res) => {
+  try {
+    let channel = req.query.channel ? String(req.query.channel) : null;
+    if (req.query.dm) channel = dmChannel(req.user.id, req.query.dm);
+    if (!channel || !chatCanAccess(req.user, channel)) return res.status(403).json({ error: 'Нет доступа к каналу' });
+    let q = supabaseAdmin.from('chat_messages').select('*').eq('channel', channel).order('created_at', { ascending: false }).limit(300);
+    if (req.query.after) q = q.gt('created_at', String(req.query.after));
+    const { data, error } = await q;
+    if (error) {
+      if (/does not exist/i.test(error.message || '')) return res.status(500).json({ error: 'Нет таблицы chat_messages — выполните SQL из комментария v83 в index.js (create table chat_messages ... + chat_reads)' });
+      throw error;
+    }
+    res.json((data || []).reverse());
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Отправить сообщение (текст и/или файл)
+app.post('/api/chat/messages', requireAuth, tabGuard('chat'), async (req, res) => {
+  try {
+    const { channel: chIn, to, text, file_url, file_name } = req.body || {};
+    let channel = chIn ? String(chIn).slice(0, 120) : 'general';
+    let to_id = null;
+    if (to) { channel = dmChannel(req.user.id, to); to_id = String(to).slice(0, 40); }
+    if (!chatCanAccess(req.user, channel)) return res.status(403).json({ error: 'Нет доступа к каналу' });
+    const txt = String(text || '').slice(0, 4000);
+    if (!txt && !file_url) return res.status(400).json({ error: 'Пустое сообщение' });
+    const row = { channel, from_id: req.user.id, from_name: String(req.user.name || req.user.id).slice(0, 60), to_id, text: txt || null };
+    if (file_url) { row.file_url = String(file_url).slice(0, 1000); row.file_name = String(file_name || 'file').slice(0, 200); }
+    const { data, error } = await supabaseAdmin.from('chat_messages').insert(row).select().single();
+    if (error) throw error;
+    res.json(data);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Загрузка вложения в чат (до 20 МБ) → публичная ссылка
+app.post('/api/chat/upload', requireAuth, tabGuard('chat'), upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Нет файла' });
+    const url = await uploadToStorage(req.file.buffer, req.file.originalname || 'file', 'chat', req.file.mimetype || 'application/octet-stream');
+    res.json({ url, name: req.file.originalname || 'file' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Отметить канал прочитанным
+app.post('/api/chat/read', requireAuth, async (req, res) => {
+  try {
+    const channel = String((req.body || {}).channel || '').slice(0, 120);
+    if (!channel || !chatCanAccess(req.user, channel)) return res.status(400).json({ error: 'channel?' });
+    const { error } = await supabaseAdmin.from('chat_reads').upsert({ user_id: req.user.id, channel, last_read: new Date().toISOString() });
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Счётчики непрочитанных по каналам (для бейджа)
+app.get('/api/chat/unread', requireAuth, async (req, res) => {
+  try {
+    const uid = req.user.id;
+    const { data: reads } = await supabaseAdmin.from('chat_reads').select('channel, last_read').eq('user_id', uid);
+    const readMap = {}; (reads || []).forEach(r => { readMap[r.channel] = r.last_read; });
+    const out = {};
+    const { count: gc } = await supabaseAdmin.from('chat_messages').select('id', { count: 'exact', head: true })
+      .eq('channel', 'general').neq('from_id', uid).gt('created_at', readMap['general'] || '1970-01-01T00:00:00Z');
+    if (gc) out.general = gc;
+    const { data: dms } = await supabaseAdmin.from('chat_messages').select('channel, created_at').eq('to_id', uid).order('created_at', { ascending: false }).limit(500);
+    (dms || []).forEach(m => { const lr = readMap[m.channel]; if (!lr || m.created_at > lr) out[m.channel] = (out[m.channel] || 0) + 1; });
+    res.json(out);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

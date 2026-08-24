@@ -2027,3 +2027,9 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 ## v82 (2026-08-24)
 - UsersTab: убран выпадающий список роли из карточки пользователя (роль сохраняется в state и шлётся как раньше; для новых пользователей по умолчанию manager, чтобы per-tab доступы работали без ограничений viewer)
 - Удалён неиспользуемый ROLE_LABELS
+
+## v83 (2026-08-24)
+- ЧАТ: общий канал + личные сообщения 1-на-1 (dm:<a>:<b>, id сортируются)
+- SQL: create table chat_messages (id uuid pk default gen_random_uuid(), channel text, from_id, from_name, to_id, text, file_url, file_name, created_at); create table chat_reads (user_id, channel, last_read, pk(user_id,channel))
+- Backend: GET/POST /api/chat/messages (tabGuard('chat')), POST /api/chat/upload (multer 20MB → uploadToStorage 'chat'), POST /api/chat/read, GET /api/chat/unread; helpers dmChannel/chatCanAccess; health v83-2026-08-24
+- Frontend: ChatTab (сайдбар каналов, пуллинг сообщений 4с, вложения-фото инлайн, Enter=отправить), бейдж непрочитанных в nav (пуллинг 15с), chat в TAB_LABELS
