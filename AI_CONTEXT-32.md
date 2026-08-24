@@ -1994,3 +1994,6 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - app_users: новая колонка tabs jsonb (SQL: alter table app_users add column tabs jsonb;). Ключи: upload/list/analysis/taxes/crm/docs; NULL/[] = всё открыто.
 - index.js: canAccessTab + tabGuard; /api/receipts→list, /api/crm→crm, /api/docs→docs, /api/bank-movements→analysis|taxes, /api/planned-payments→analysis, upload-receipt→upload. tabs проброшены в cache/login/CRUD. Health v75.
 - App.js: UsersTab — чекбоксы «Разделы приложения»; навигация фильтруется по user.tabs; useEffect перебрасывает с закрытой вкладки на доступную. Метки · v75 ·.
+
+## v76 (2026-08-24)
+- Вход по ЛОГИНУ + ПАРОЛЮ: форма логина получила поле «Логин» (пусто = старые общие пароли admin/user1…). /api/login принимает {login, password}: с логином — строго app_users по id (без учёта регистра), без логина — старое поведение по паролю. Health v76. Метки · v76 ·.

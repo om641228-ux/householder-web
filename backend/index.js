@@ -206,17 +206,19 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v75-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v76-2026-08-24', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
 app.post('/api/login', async (req, res) => {
   const { password } = req.body;
-  // v74: сначала пользователи из базы (app_users), затем хардкод-совместимость
+  const login = String((req.body || {}).login || '').trim().toLowerCase();
+  // v74/v76: сначала пользователи из базы (app_users), затем хардкод-совместимость
   try {
     await refreshUsersCache(true);
     const { data } = await supabaseAdmin.from('app_users').select('*');
-    const hit = (data || []).find(u => !u.disabled && u.pass_hash === hashPass(u.salt, password));
+    // логин указан → ищем строго его; без логина — старое поведение (по паролю)
+    const hit = (data || []).find(u => !u.disabled && (!login || String(u.id).toLowerCase() === login) && u.pass_hash === hashPass(u.salt, password));
     if (hit) {
       const user = { id: hit.id, name: hit.name || hit.id, role: hit.role || 'viewer', sections: Array.isArray(hit.sections) ? hit.sections : null, objects: Array.isArray(hit.objects) ? hit.objects : null, tabs: Array.isArray(hit.tabs) ? hit.tabs : null };
       const token = generateToken(user.id);
@@ -224,6 +226,7 @@ app.post('/api/login', async (req, res) => {
       return res.json({ success: true, token, user });
     }
   } catch (e) { /* таблицы ещё нет — работаем на хардкоде */ }
+  if (login) return res.status(401).json({ error: 'Неверный логин или пароль' });
   const user = USERS[password];
   if (!user) return res.status(401).json({ error: 'Неверный пароль' });
   const token = generateToken(user.id);

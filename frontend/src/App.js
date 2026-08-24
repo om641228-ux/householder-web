@@ -2031,7 +2031,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v75 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v76 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -3713,6 +3713,7 @@ function App() {
   const [authChecking, setAuthChecking] = useState(true);
   const [activeTab, setActiveTab] = useState('upload');
   const [password, setPassword] = useState('');
+  const [loginName, setLoginName] = useState(''); // v76: вход по логину + паролю
   const [loginError, setLoginError] = useState('');
   const [serverStatus, setServerStatus] = useState('checking');
 
@@ -4034,7 +4035,7 @@ function App() {
       const res = await fetch(`${API_URL}/api/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ password, login: loginName.trim() }),
         signal: controller.signal
       });
       clearTimeout(timeout);
@@ -7087,7 +7088,9 @@ ${bodyHtml}
             {serverStatus === 'ok' && '✅ Сервер доступен'}
             {serverStatus === 'error' && `❌ Сервер недоступен: ${API_URL}`}
           </div>
+          <input type="text" placeholder="Логин" value={loginName} onChange={e => setLoginName(e.target.value)} onKeyPress={e => e.key === 'Enter' && login()} autoCapitalize="none" autoCorrect="off" />
           <input type="password" placeholder="Введите пароль" value={password} onChange={e => setPassword(e.target.value)} onKeyPress={e => e.key === 'Enter' && login()} />
+          <div style={{ fontSize: 11.5, color: '#8e8e93', marginTop: 6, textAlign: 'center' }}>Новые пользователи — логин + пароль (выдаёт админ). Старые общие пароли работают с пустым логином.</div>
           <button onClick={login} disabled={serverStatus === 'checking'}>
             {serverStatus === 'checking' ? 'Проверка...' : 'Войти'}
           </button>
@@ -8002,7 +8005,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v75 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v76 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
