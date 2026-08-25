@@ -2041,3 +2041,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - FIX: upload-document-pages игнорировал выбранную модель (всегда gemini vision) — добавлен extractPageTextWithOpenAICompat (kimi/openrouter/github/mistral), assembleDocumentFromPages(..., visionFn); PDF-страницы по-прежнему через Gemini (OpenAI-vision не читает PDF); подпись метода показывает реальную модель
 - FIX: валюта из верхнего меню терялась в постраничном конвейере (finalizeDocumentFromPageTexts не применял currency) — теперь currency !== 'auto' принудительно ставится в data.currency
 - health v84-2026-08-25
+
+## v85 (2026-08-25)
+- Шапка: «Admin/Выйти» перенесены на одну строку с «Выбор модели» (flex space-between внутри header-left, header-right удалён)
+- Новая вкладка 💵 Cash (TAB_LABELS + tabAllowed('cash')): все движения банка, структура списка как в «Налогах», БЕЗ значков фактур/авто-вычетов/обязательных платежей; контрагент/дата/сумма — редактируемые инпуты + «💾 сохранить» (PATCH /api/bank-movements/:id, сумма модулем — знак сохраняется от исходной записи, пересчёт статуса фактуры при смене суммы); «🔗 привязать» переиспользует setLinkPicker/openReceiptById/unlinkMovement
+- Backend: GET bank-movements теперь пускает и tab 'cash'; PATCH guard — canWriteTab(analysis|taxes|cash); health v85-2026-08-25

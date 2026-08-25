@@ -868,7 +868,7 @@ const fmtDocDate = (iso) => iso ? iso.split('-').reverse().join('.') : '';
 // v74: вкладка «👥 Пользователи» (только admin) — управление доступом: роли, разделы документов, объекты
 function UsersTab({ token, objectsList }) {
   const SEC_LABELS = { home: '🏠 Дома', auto: '🚗 Авто', personal: '👤 Личное' };
-  const TAB_LABELS = { upload: '📤 Загрузка', list: '🧾 Чеки/документы', analysis: '📊 Анализ', taxes: '🧾 Налоги', crm: '🤝 CRM', docs: '📁 Документы', chat: '💬 Чат' };
+  const TAB_LABELS = { upload: '📤 Загрузка', list: '🧾 Чеки/документы', analysis: '📊 Анализ', taxes: '🧾 Налоги', cash: '💵 Cash', crm: '🤝 CRM', docs: '📁 Документы', chat: '💬 Чат' };
   const [list, setList] = useState([]);
   const [err, setErr] = useState('');
   const [edit, setEdit] = useState(null); // {id,name,password,role,sections[],objects[],disabled,isNew}
@@ -2059,7 +2059,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v84 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v85 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -3899,6 +3899,9 @@ function App() {
   const [authChecking, setAuthChecking] = useState(true);
   const [activeTab, setActiveTab] = useState('upload');
   const [chatUnread, setChatUnread] = useState({}); // v83: непрочитанные по каналам
+  const [cashQ, setCashQ] = useState('');           // v85: поиск по движениям (Cash)
+  const [cashVals, setCashVals] = useState({});     // v85: редактируемые значения строк {id: {counterparty, operation_date, amount}}
+  const [cashSaving, setCashSaving] = useState({}); // v85: id → true пока идёт сохранение
   const chatUnreadTotal = Object.values(chatUnread).reduce((a, b) => a + (b || 0), 0);
   const [password, setPassword] = useState('');
   const [loginName, setLoginName] = useState(''); // v76: вход по логину + паролю
@@ -7318,10 +7321,16 @@ ${bodyHtml}
     <div className="App">
       <header className="mini-header">
         <div className="header-left">
-          <div className="model-selector-wrap">
-            <button className="model-toggle-btn" onClick={() => { setModelModalOpen(true); loadModels(); }}>
-              Выбор модели
-            </button>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, width: '100%' }}>
+            <div className="model-selector-wrap">
+              <button className="model-toggle-btn" onClick={() => { setModelModalOpen(true); loadModels(); }}>
+                Выбор модели
+              </button>
+            </div>
+            <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span className="user-name">{formatUserName(user)}</span>
+              <button className="logout-btn" onClick={logout}>Выйти</button>
+            </div>
           </div>
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}'}</style>
           <nav className="tabs-inline">
@@ -7343,6 +7352,12 @@ ${bodyHtml}
             {tabAllowed('taxes') && (
               <button className={activeTab === 'taxes' ? 'active' : ''} onClick={() => {setActiveTab('taxes'); loadReceipts(); loadBankMovements();}}>
                 🧾 Налоги
+              </button>
+            )}
+            {/* v85: вкладка «Cash» — все движения банка, редактируемые контрагент/дата/сумма, привязка фактур */}
+            {tabAllowed('cash') && (
+              <button className={activeTab === 'cash' ? 'active' : ''} onClick={() => {setActiveTab('cash'); loadReceipts(); loadBankMovements();}}>
+                💵 Cash
               </button>
             )}
             {/* Вкладка «CRM» (v32): календарь задач, контрагенты, контакты, таймлайн исполнения — локально, без бэкенда */}
@@ -7371,10 +7386,6 @@ ${bodyHtml}
               </button>
             )}
           </nav>
-        </div>
-        <div className="header-right">
-          <span className="user-name">{formatUserName(user)}</span>
-          <button className="logout-btn" onClick={logout}>Выйти</button>
         </div>
       </header>
 
@@ -8217,7 +8228,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v84 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v85 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9972,6 +9983,104 @@ ${bodyHtml}
 
       {/* Вкладка «CRM» (v32) */}
       {activeTab === 'crm' && <CrmTab user={user} token={token} />}
+      {/* ===================== v85: ВКЛАДКА CASH =====================
+          Структура списка — как в «Налогах», но БЕЗ значков «есть фактура»/«авто-вычет»/обязательных платежей.
+          Контрагент, дата и сумма — редактируемые (💾 сохранить в банк). «🔗 привязать» — как в Налогах. */}
+      {activeTab === 'cash' && tabAllowed('cash') && (() => {
+        const q = cashQ.trim().toLowerCase();
+        const vis = bankMovements.filter(m => {
+          if (!q) return true;
+          const linked = m.matched_receipt_id ? receipts.find(r => String(r.id) === String(m.matched_receipt_id)) : null;
+          return [m.counterparty, m.concept, m.operation_date, String(Math.abs(Number(m.amount) || 0)), linked && linked.store_name]
+            .filter(Boolean).join(' ').toLowerCase().includes(q);
+        });
+        const sumIn = vis.filter(m => Number(m.amount) > 0).reduce((a, m) => a + Math.abs(Number(m.amount) || 0), 0);
+        const sumOut = vis.filter(m => Number(m.amount) < 0).reduce((a, m) => a + Math.abs(Number(m.amount) || 0), 0);
+        const rowVal = (m, f) => (cashVals[m.id] && cashVals[m.id][f] !== undefined)
+          ? cashVals[m.id][f]
+          : (f === 'amount' ? Math.abs(Number(m.amount) || 0) : (m[f] || ''));
+        const setRowVal = (m, f, v) => setCashVals(prev => ({ ...prev, [m.id]: { ...(prev[m.id] || {}), [f]: v } }));
+        const isDirty = (m) => {
+          const v = cashVals[m.id];
+          if (!v) return false;
+          return (v.counterparty !== undefined && v.counterparty !== (m.counterparty || ''))
+            || (v.operation_date !== undefined && v.operation_date !== (m.operation_date || ''))
+            || (v.amount !== undefined && Number(v.amount) !== Math.abs(Number(m.amount) || 0));
+        };
+        const saveRow = async (m) => {
+          const v = cashVals[m.id] || {};
+          const body = {};
+          if (v.counterparty !== undefined) body.counterparty = v.counterparty;
+          if (v.operation_date !== undefined) body.operation_date = v.operation_date;
+          if (v.amount !== undefined) body.amount = Number(v.amount);
+          if (!Object.keys(body).length) return;
+          setCashSaving(prev => ({ ...prev, [m.id]: true }));
+          try {
+            const r = await fetch(`${API_URL}/api/bank-movements/${m.id}?token=${token}`, {
+              method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+            }).then(x => x.json());
+            if (r.error) { alert('Не сохранено: ' + r.error); return; }
+            setCashVals(prev => { const nx = { ...prev }; delete nx[m.id]; return nx; });
+            await loadBankMovements();
+          } catch (e) { alert('Ошибка сохранения: ' + e.message); }
+          finally { setCashSaving(prev => ({ ...prev, [m.id]: false })); }
+        };
+        const inp = { padding: '4px 8px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13, background: '#fff' };
+        return (
+          <div className="card" style={{ margin: '10px 15px' }}>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+              <h3 style={{ margin: 0, fontSize: 16 }}>💵 Cash — движения по счетам</h3>
+              <span style={{ fontSize: 12, color: '#1e8449', fontWeight: 700 }}>приход: {formatAmount(sumIn, 'EUR')}</span>
+              <span style={{ fontSize: 12, color: '#c0392b', fontWeight: 700 }}>расход: {formatAmount(sumOut, 'EUR')}</span>
+              <span style={{ fontSize: 12, color: '#6e6e73' }}>строк: {vis.length} из {bankMovements.length}</span>
+              <button disabled={bankLoading} onClick={loadBankMovements} title="Обновить движения из базы"
+                style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>
+                {bankLoading ? '⏳' : '🔄'} обновить
+              </button>
+              <input value={cashQ} onChange={e => setCashQ(e.target.value)} placeholder="🔍 Поиск: контрагент, дата, сумма, фактура…"
+                style={{ ...inp, flex: '1 1 220px', maxWidth: 340 }} />
+              {cashQ && <button onClick={() => setCashQ('')} style={{ ...inp, cursor: 'pointer' }}>✕ показано {vis.length}</button>}
+            </div>
+            {vis.length === 0 && <p style={{ color: '#7f8c8d', fontSize: 13 }}>Нет движений — загрузите выписку банка на вкладке «Загрузка» (🏦 Выписка банка).</p>}
+            {vis.map(m => {
+              const linked = m.matched_receipt_id ? receipts.find(r => String(r.id) === String(m.matched_receipt_id)) : null;
+              const isOut = Number(m.amount) < 0;
+              const dirty = isDirty(m);
+              return (
+                <div key={m.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '5px 0', borderBottom: '1px solid #f0f0f0', fontSize: 13, flexWrap: 'wrap',
+                  background: dirty ? '#fff8e1' : 'transparent', borderRadius: dirty ? 6 : 0 }}>
+                  <input type="date" value={rowVal(m, 'operation_date')} onChange={e => setRowVal(m, 'operation_date', e.target.value)}
+                    title="Дата операции — редактируемая" style={{ ...inp, width: 138 }} />
+                  <input value={rowVal(m, 'counterparty')} onChange={e => setRowVal(m, 'counterparty', e.target.value)}
+                    placeholder={m.concept || 'контрагент'} title={`Контрагент — редактируемый. Концепт из выписки: ${m.concept || '—'}`}
+                    style={{ ...inp, flex: '1 1 220px' }} />
+                  <input type="number" step="0.01" min="0" value={rowVal(m, 'amount')} onChange={e => setRowVal(m, 'amount', e.target.value)}
+                    title="Сумма (модуль) — редактируемая; знак приход/расход сохраняется"
+                    style={{ ...inp, width: 110, textAlign: 'right', fontWeight: 700, color: isOut ? '#c0392b' : '#1e8449' }} />
+                  <span style={{ fontSize: 12, fontWeight: 700, color: isOut ? '#c0392b' : '#1e8449', minWidth: 18, textAlign: 'center' }}>{isOut ? '−' : '+'}</span>
+                  {dirty && (
+                    <button disabled={cashSaving[m.id]} onClick={() => saveRow(m)} title="Сохранить изменения в базу"
+                      style={{ fontSize: 12, border: '1px solid #1e8449', color: '#fff', background: '#27ae60', borderRadius: 6, padding: '3px 10px', cursor: 'pointer', fontWeight: 700 }}>
+                      {cashSaving[m.id] ? '⏳' : '💾 сохранить'}
+                    </button>
+                  )}
+                  {linked
+                    ? (
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        <button onClick={() => openReceiptById(linked.id)} style={{ fontSize: 12, border: '1px solid #27ae60', color: '#1e8449', background: '#eafaf1', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>🔗 {(linked.store_name || 'фактура')} · {formatAmount(linked.total_amount, linked.currency || 'EUR')}</button>
+                        <button onClick={() => { if (window.confirm('Отвязать платёж от этой фактуры?')) unlinkMovement(m.id); }} title="Отвязать платёж от фактуры"
+                          style={{ fontSize: 11, border: '1px solid #e74c3c', color: '#e74c3c', background: '#fff', borderRadius: 6, padding: '3px 7px', cursor: 'pointer' }}>✖</button>
+                      </span>
+                    )
+                    : <button onClick={() => { setLinkSearch(''); setLinkPicker(m); }} title="Привязать платёж к фактуре"
+                        style={{ fontSize: 12, color: '#0071e3', border: '1px solid #0071e3', background: '#fff', borderRadius: 6, padding: '3px 8px', cursor: 'pointer', fontWeight: 700 }}>🔗 привязать</button>}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+
       {activeTab === 'chat' && tabAllowed('chat') && <ChatTab user={user} token={token} />}
 
       {/* Вкладка «Документы» (v40) */}

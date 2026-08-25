@@ -237,7 +237,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v84-2026-08-25', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v85-2026-08-25', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -5622,7 +5622,7 @@ app.post('/api/import-bank-statements', requireAuth, upload.array('statements', 
 
 // Список движений для вкладки «Анализ» (фронт обогащает данными чеков на своей стороне)
 app.get('/api/bank-movements', requireAuth, (req, res, next) =>
-  (canAccessTab(req.user, 'analysis') || canAccessTab(req.user, 'taxes')) ? next() : res.status(403).json({ error: 'Нет доступа к банковским данным' }), async (req, res) => {
+  (canAccessTab(req.user, 'analysis') || canAccessTab(req.user, 'taxes') || canAccessTab(req.user, 'cash')) ? next() : res.status(403).json({ error: 'Нет доступа к банковским данным' }), async (req, res) => {
   try {
     const { data, error } = await supabaseAdmin.from('bank_movements')
       .select('*')
@@ -5749,6 +5749,39 @@ app.delete('/api/bank-movements/manual/:id', requireAuth, async (req, res) => {
     const { error } = await supabaseAdmin.from('bank_movements').delete().eq('id', mv.id);
     if (error) throw error;
     if (oldReceipt) await recomputeReceiptPayment(oldReceipt);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: withDbSchemaHint(e.message) });
+  }
+});
+
+// v85: вкладка Cash — правка контрагента / даты / суммы движения.
+// Сумма приходит модулем — знак (приход/расход) сохраняем от исходной записи.
+app.patch('/api/bank-movements/:id', requireAuth, async (req, res) => {
+  try {
+    if (!(canWriteTab(req.user, 'analysis') || canWriteTab(req.user, 'taxes') || canWriteTab(req.user, 'cash'))) {
+      return res.status(403).json({ error: 'Нет права редактировать банковские движения' });
+    }
+    const { data: mv } = await supabaseAdmin.from('bank_movements').select('id, amount, matched_receipt_id').eq('id', req.params.id).single();
+    if (!mv) return res.status(404).json({ error: 'Движение не найдено' });
+    const { counterparty, operation_date, amount } = req.body || {};
+    const patch = {};
+    if (counterparty !== undefined) patch.counterparty = String(counterparty || '').slice(0, 120) || null;
+    if (operation_date !== undefined) {
+      const d = String(operation_date).slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return res.status(400).json({ error: 'Дата в формате ГГГГ-ММ-ДД' });
+      patch.operation_date = d;
+      patch.value_date = d;
+    }
+    if (amount !== undefined) {
+      const a = Math.abs(Number(amount));
+      if (!isFinite(a) || a > 1e9) return res.status(400).json({ error: 'Некорректная сумма' });
+      patch.amount = Number(mv.amount) < 0 ? -a : a;
+    }
+    if (!Object.keys(patch).length) return res.status(400).json({ error: 'Нечего обновлять' });
+    const { error } = await supabaseAdmin.from('bank_movements').update(patch).eq('id', mv.id);
+    if (error) throw error;
+    if (patch.amount !== undefined && mv.matched_receipt_id) await recomputeReceiptPayment(mv.matched_receipt_id);
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: withDbSchemaHint(e.message) });
