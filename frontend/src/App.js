@@ -2059,7 +2059,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v87 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v88 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -8254,7 +8254,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v87 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v88 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -10035,14 +10035,14 @@ ${bodyHtml}
         const sumOut = vis.filter(m => Number(m.amount) < 0).reduce((a, m) => a + Math.abs(Number(m.amount) || 0), 0);
         const rowVal = (m, f) => (cashVals[m.id] && cashVals[m.id][f] !== undefined)
           ? cashVals[m.id][f]
-          : (f === 'amount' ? Math.abs(Number(m.amount) || 0) : (m[f] || ''));
+          : (f === 'amount' ? (Number(m.amount) || 0) : (m[f] || ''));
         const setRowVal = (m, f, v) => setCashVals(prev => ({ ...prev, [m.id]: { ...(prev[m.id] || {}), [f]: v } }));
         const isDirty = (m) => {
           const v = cashVals[m.id];
           if (!v) return false;
           return (v.counterparty !== undefined && v.counterparty !== (m.counterparty || ''))
             || (v.operation_date !== undefined && v.operation_date !== (m.operation_date || ''))
-            || (v.amount !== undefined && Number(v.amount) !== Math.abs(Number(m.amount) || 0));
+            || (v.amount !== undefined && Number(v.amount) !== (Number(m.amount) || 0));
         };
         const saveRow = async (m) => {
           const v = cashVals[m.id] || {};
@@ -10111,10 +10111,9 @@ ${bodyHtml}
                   <input value={rowVal(m, 'counterparty')} onChange={e => setRowVal(m, 'counterparty', e.target.value)}
                     placeholder={m.concept || 'контрагент'} title={`Контрагент — редактируемый. Концепт из выписки: ${m.concept || '—'}`}
                     style={{ ...inp, flex: '1 1 220px' }} />
-                  <input type="number" step="0.01" min="0" value={rowVal(m, 'amount')} onChange={e => setRowVal(m, 'amount', e.target.value)}
-                    title="Сумма (модуль) — редактируемая; знак приход/расход сохраняется"
-                    style={{ ...inp, width: 110, textAlign: 'right', fontWeight: 700, color: isOut ? '#c0392b' : '#1e8449' }} />
-                  <span style={{ fontSize: 12, fontWeight: 700, color: isOut ? '#c0392b' : '#1e8449', minWidth: 18, textAlign: 'center' }}>{isOut ? '−' : '+'}</span>
+                  <input type="number" step="0.01" value={rowVal(m, 'amount')} onChange={e => setRowVal(m, 'amount', e.target.value)}
+                    title="Сумма со знаком: минус = расход (красная), плюс = приход (зелёная) — редактируемая"
+                    style={{ ...inp, width: 120, textAlign: 'right', fontWeight: 700, color: Number(rowVal(m, 'amount')) < 0 ? '#c0392b' : '#1e8449' }} />
                   {dirty && (
                     <button disabled={cashSaving[m.id]} onClick={() => saveRow(m)} title="Сохранить изменения в базу"
                       style={{ fontSize: 12, border: '1px solid #1e8449', color: '#fff', background: '#27ae60', borderRadius: 6, padding: '3px 10px', cursor: 'pointer', fontWeight: 700 }}>

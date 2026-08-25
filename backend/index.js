@@ -237,7 +237,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v86-2026-08-25', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v88-2026-08-25', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -5756,7 +5756,7 @@ app.delete('/api/bank-movements/manual/:id', requireAuth, async (req, res) => {
 });
 
 // v85: вкладка Cash — правка контрагента / даты / суммы движения.
-// Сумма приходит модулем — знак (приход/расход) сохраняем от исходной записи.
+// v88: сумма приходит СО ЗНАКОМ (минус = расход, плюс = приход) — сохраняем как есть.
 app.patch('/api/bank-movements/:id', requireAuth, async (req, res) => {
   try {
     if (!(canWriteTab(req.user, 'analysis') || canWriteTab(req.user, 'taxes') || canWriteTab(req.user, 'cash'))) {
@@ -5774,9 +5774,9 @@ app.patch('/api/bank-movements/:id', requireAuth, async (req, res) => {
       patch.value_date = d;
     }
     if (amount !== undefined) {
-      const a = Math.abs(Number(amount));
-      if (!isFinite(a) || a > 1e9) return res.status(400).json({ error: 'Некорректная сумма' });
-      patch.amount = Number(mv.amount) < 0 ? -a : a;
+      const a = Number(amount); // v88: сумма со знаком — минус расход, плюс приход
+      if (!isFinite(a) || Math.abs(a) > 1e9) return res.status(400).json({ error: 'Некорректная сумма' });
+      patch.amount = a;
     }
     if (!Object.keys(patch).length) return res.status(400).json({ error: 'Нечего обновлять' });
     const { error } = await supabaseAdmin.from('bank_movements').update(patch).eq('id', mv.id);
