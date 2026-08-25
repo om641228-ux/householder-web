@@ -2059,7 +2059,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v90 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v91 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -3903,6 +3903,9 @@ function App() {
   const [cashVals, setCashVals] = useState({});     // v85: редактируемые значения строк {id: {counterparty, operation_date, amount}}
   const [cashSaving, setCashSaving] = useState({}); // v85: id → true пока идёт сохранение
   const [cashSel, setCashSel] = useState({});       // v86: выбранные строки Cash {id: true}
+  const [cashDir, setCashDir] = useState('all');      // v91: фильтр приход/расход: all | in | out
+  const [cashFrom, setCashFrom] = useState('');       // v91: фильтр дат «с»
+  const [cashTo, setCashTo] = useState('');           // v91: фильтр дат «по»
   const [cashLinkMode, setCashLinkMode] = useState(null); // v87: платёж Cash, к которому выбираем фактуры во вкладке «Чеки»
   const [cashMovements, setCashMovements] = useState([]);     // v90: Cash — ОТДЕЛЬНАЯ таблица cash_movements (не выписки банка)
   const chatUnreadTotal = Object.values(chatUnread).reduce((a, b) => a + (b || 0), 0);
@@ -8281,7 +8284,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v90 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v91 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -10055,6 +10058,10 @@ ${bodyHtml}
         const linkedOf = (m) => (Array.isArray(m.receipt_ids) ? m.receipt_ids : [])
           .map(rid => receipts.find(r => String(r.id) === String(rid))).filter(Boolean);
         const vis = cashMovements.filter(m => {
+          if (cashDir === 'in' && !(Number(m.amount) > 0)) return false;
+          if (cashDir === 'out' && !(Number(m.amount) < 0)) return false;
+          if (cashFrom && (!m.operation_date || m.operation_date < cashFrom)) return false;
+          if (cashTo && (!m.operation_date || m.operation_date > cashTo)) return false;
           if (!q) return true;
           return [m.counterparty, m.concept, m.operation_date, String(m.amount), ...linkedOf(m).map(r => r.store_name)]
             .filter(Boolean).join(' ').toLowerCase().includes(q);
@@ -10099,8 +10106,6 @@ ${bodyHtml}
               <span style={{ fontSize: 12, color: '#e02424', fontWeight: 800 }}>расход: {formatAmount(sumOut, 'EUR')}</span>
               <span style={{ fontSize: 12, fontWeight: 800, color: '#1d1d1f' }}>остаток: {formatAmount(sumIn - sumOut, 'EUR')}</span>
               <span style={{ fontSize: 12, color: '#6e6e73' }}>строк: {vis.length} из {cashMovements.length}</span>
-              <button onClick={loadCashMovements} title="Обновить из базы"
-                style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>🔄 обновить</button>
               <button onClick={async () => {
                   const r = await fetch(`${API_URL}/api/cash-movements?token=${token}`, {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -10110,6 +10115,20 @@ ${bodyHtml}
                   await loadCashMovements();
                 }} title="Добавить пустую строку — затем отредактируйте поля и нажмите 💾"
                 style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #1e8449', background: '#eafaf1', color: '#1e8449', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>➕ добавить строку</button>
+              {[['all', '◈ все'], ['in', '＋ приход'], ['out', '− расход']].map(([k, lbl]) => (
+                <button key={`cd_${k}`} onClick={() => setCashDir(k)}
+                  title={k === 'all' ? 'Показать все строки' : k === 'in' ? 'Только приход (плюс)' : 'Только расход (минус)'}
+                  style={{ ...inp, cursor: 'pointer', fontWeight: 700, whiteSpace: 'nowrap',
+                    border: cashDir === k ? '1px solid #1d4ed8' : '1px solid #d0d0d5',
+                    background: cashDir === k ? '#1d4ed8' : '#fff',
+                    color: cashDir === k ? '#fff' : (k === 'in' ? '#16a34a' : k === 'out' ? '#e02424' : '#1d1d1f') }}>
+                  {lbl}
+                </button>
+              ))}
+              <input type="date" value={cashFrom} onChange={e => setCashFrom(e.target.value)} title="Фильтр: дата С" style={{ ...inp, width: 138 }} />
+              <span style={{ fontSize: 12, color: '#6e6e73' }}>—</span>
+              <input type="date" value={cashTo} onChange={e => setCashTo(e.target.value)} title="Фильтр: дата ПО" style={{ ...inp, width: 138 }} />
+              {(cashFrom || cashTo) && <button onClick={() => { setCashFrom(''); setCashTo(''); }} title="Сбросить фильтр дат" style={{ ...inp, cursor: 'pointer' }}>✕ даты</button>}
               <input value={cashQ} onChange={e => setCashQ(e.target.value)} placeholder="🔍 Поиск: контрагент, дата, сумма, фактура…"
                 style={{ ...inp, flex: '1 1 220px', maxWidth: 340 }} />
               {cashQ && <button onClick={() => setCashQ('')} style={{ ...inp, cursor: 'pointer' }}>✕ показано {vis.length}</button>}
