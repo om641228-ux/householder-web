@@ -2059,7 +2059,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v91 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v92 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -4092,14 +4092,65 @@ function App() {
     return x[t] !== 'none';
   };
   // v83: бейдж непрочитанных в шапке — опрос каждые 15 с
+  // v92: при НОВЫХ личных сообщениях — звук (WebAudio), мигающий заголовок вкладки, системное уведомление
+  const prevUnreadRef = useRef(null);
+  const playChatSound = () => {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      [0, 0.18].forEach((dt, i) => {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.connect(g); g.connect(ctx.destination);
+        o.type = 'sine';
+        o.frequency.value = i === 0 ? 880 : 1174.66; // «динь-дон»
+        g.gain.setValueAtTime(0.001, ctx.currentTime + dt);
+        g.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + dt + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dt + 0.16);
+        o.start(ctx.currentTime + dt); o.stop(ctx.currentTime + dt + 0.18);
+      });
+      setTimeout(() => ctx.close(), 800);
+    } catch (e) { /* звук заблокирован до первого клика — не критично */ }
+  };
   useEffect(() => {
     if (!token) return;
     const tick = () => fetch(`${API_URL}/api/chat/unread`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json()).then(j => { if (j && typeof j === 'object' && !j.error) setChatUnread(j); }).catch(() => {});
+      .then(r => r.json()).then(j => {
+        if (!(j && typeof j === 'object' && !j.error)) return;
+        const prev = prevUnreadRef.current;
+        if (prev) { // не на первом опросе — сравниваем ЛИЧНЫЕ каналы (dm:*)
+          const dmNow = Object.entries(j).filter(([k]) => k.startsWith('dm:')).reduce((a, [, v]) => a + (v || 0), 0);
+          const dmPrev = Object.entries(prev).filter(([k]) => k.startsWith('dm:')).reduce((a, [, v]) => a + (v || 0), 0);
+          if (dmNow > dmPrev) {
+            playChatSound();
+            if ('Notification' in window && Notification.permission === 'granted' && document.hidden) {
+              try { new Notification('💬 Личное сообщение', { body: `Непрочитанных: ${dmNow}`, tag: 'chat-dm' }); } catch (e) { /* noop */ }
+            }
+          }
+        }
+        prevUnreadRef.current = j;
+        setChatUnread(j);
+      }).catch(() => {});
     tick();
     const t = setInterval(tick, 15000);
     return () => clearInterval(t);
   }, [token]);
+
+  // v92: мигающий заголовок вкладки, пока есть непрочитанные личные сообщения
+  const chatDmUnread = Object.entries(chatUnread).filter(([k]) => k.startsWith('dm:')).reduce((a, [, v]) => a + (v || 0), 0);
+  useEffect(() => {
+    const base = 'Receipt Manager';
+    if (!chatDmUnread) { document.title = base; return; }
+    let on = false;
+    const t = setInterval(() => { document.title = (on = !on) ? `💬 (${chatDmUnread}) Новое сообщение!` : base; }, 1200);
+    return () => { clearInterval(t); document.title = base; };
+  }, [chatDmUnread]);
+
+  // v92: запрос разрешения на системные уведомления — при первом открытии чата
+  useEffect(() => {
+    if (activeTab === 'chat' && 'Notification' in window && Notification.permission === 'default') {
+      try { Notification.requestPermission(); } catch (e) { /* noop */ }
+    }
+  }, [activeTab]);
 
   // v74/v75: viewer — только просмотр; закрытые разделы (user.tabs) — перебрасываем на доступное
   useEffect(() => {
@@ -8284,7 +8335,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v91 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v92 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

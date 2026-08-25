@@ -2067,3 +2067,9 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Cash больше НЕ читает bank_movements! Своя таблица cash_movements (SQL: create table cash_movements (id uuid pk default gen_random_uuid(), owner_id text, operation_date date, counterparty text, concept text, amount numeric, receipt_ids jsonb, note text, created_at))
 - Backend: CRUD /api/cash-movements (+ bulk-delete), гварды cashReadGuard/cashWriteGuard (tab 'cash'); receipt_ids — массив привязок; health v90-2026-08-25
 - Frontend: loadCashMovements; строки те же (дата/контрагент/сумма со знаком красная-зелёная, выбор всех, удаление одной/выбранных, ➕ добавить); привязка — cashLinkMode.cash=true → PATCH receipt_ids (массив, можно несколько фактур); заголовок «наличные движения» + остаток
+
+## v91 (2026-08-25)
+- Cash: кнопка «🔄 обновить» убрана; добавлены фильтры: ◈ все / ＋ приход / − расход (cashDir), даты «с — по» (cashFrom/cashTo, включительно, по operation_date)
+
+## v92 (2026-08-25)
+- Уведомления о ЛИЧНЫХ сообщениях чата (dm:*): звук «динь-дон» (WebAudio 880→1174 Гц), мигающий title вкладки «💬 (N) Новое сообщение!», системное Notification (разрешение запрашивается при первом открытии чата; показывается только если вкладка скрыта). Сравнение сумм dm-каналов между опросами (prevUnreadRef), первый опрос молчит
