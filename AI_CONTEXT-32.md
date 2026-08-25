@@ -2057,3 +2057,13 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 
 ## v88 (2026-08-25)
 - Cash: сумма редактируется СО ЗНАКОМ (− расход красным / + приход зелёным, цвет в самом инпуте, отдельный значок знака убран); PATCH /api/bank-movements/:id сохраняет знак как введён; health v88-2026-08-25
+
+## v89 (2026-08-25)
+- Cash: «➕ добавить строку» (POST /api/bank-movements/manual — receipt_id теперь НЕ обязателен, без него знак суммы как ввели); «🗑» в каждой строке (DELETE /api/bank-movements/:id — любые строки, guard canWriteTab analysis|taxes|cash, отвязка фактуры + recompute)
+- Цвет суммы в инпуте усилен (WebkitTextFillColor): расход #e02424, приход #16a34a
+- health v89-2026-08-25
+
+## v90 (2026-08-25) — BREAKING: Cash = отдельная таблица
+- Cash больше НЕ читает bank_movements! Своя таблица cash_movements (SQL: create table cash_movements (id uuid pk default gen_random_uuid(), owner_id text, operation_date date, counterparty text, concept text, amount numeric, receipt_ids jsonb, note text, created_at))
+- Backend: CRUD /api/cash-movements (+ bulk-delete), гварды cashReadGuard/cashWriteGuard (tab 'cash'); receipt_ids — массив привязок; health v90-2026-08-25
+- Frontend: loadCashMovements; строки те же (дата/контрагент/сумма со знаком красная-зелёная, выбор всех, удаление одной/выбранных, ➕ добавить); привязка — cashLinkMode.cash=true → PATCH receipt_ids (массив, можно несколько фактур); заголовок «наличные движения» + остаток

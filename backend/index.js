@@ -237,7 +237,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v88-2026-08-25', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v90-2026-08-25', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -5690,14 +5690,19 @@ app.post('/api/link-bank-movement', requireAuth, async (req, res) => {
 app.post('/api/bank-movements/manual', requireAuth, writeTabGuard('analysis'), async (req, res) => {
   try {
     const { receipt_id, operation_date, amount, counterparty, concept } = req.body || {};
-    if (!receipt_id) return res.status(400).json({ error: 'Нужен receipt_id' });
-    const amt = Math.abs(Number(amount));
+    // v89: receipt_id НЕ обязателен — вкладка Cash добавляет свободные строки без фактуры
+    const amtSigned = Number(amount);
+    const amt = Math.abs(amtSigned);
     if (!isFinite(amt) || amt <= 0) return res.status(400).json({ error: 'Некорректная сумма' });
     const opDate = String(operation_date || '').slice(0, 10) || new Date().toISOString().slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(opDate)) return res.status(400).json({ error: 'Дата в формате ГГГГ-ММ-ДД' });
-    const { data: rc } = await supabaseAdmin.from('receipts')
-      .select('id, store_name, store_name_ru, provider, total_amount, invoice_number').eq('id', receipt_id).single();
-    if (!rc) return res.status(404).json({ error: 'Фактура не найдена' });
+    let rc = null;
+    if (receipt_id) {
+      const { data: rc0 } = await supabaseAdmin.from('receipts')
+        .select('id, store_name, store_name_ru, provider, total_amount, invoice_number').eq('id', receipt_id).single();
+      if (!rc0) return res.status(404).json({ error: 'Фактура не найдена' });
+      rc = rc0;
+    }
     const row = {
       owner_id: req.user?.id || null,
       iban: null,
@@ -5705,25 +5710,27 @@ app.post('/api/bank-movements/manual', requireAuth, writeTabGuard('analysis'), a
       operation_date: opDate,
       value_date: opDate,
       prefix: 'manual',
-      concept: concept || `Оплата фактуры ${rc.invoice_number || ''} ${rc.store_name || ''}`.trim(),
-      counterparty: (counterparty || rc.store_name || rc.provider || '').slice(0, 120) || null,
-      amount: -amt,
+      concept: concept || (rc ? `Оплата фактуры ${rc.invoice_number || ''} ${rc.store_name || ''}`.trim() : 'Ручная строка (Cash)'),
+      counterparty: (counterparty || (rc && (rc.store_name || rc.provider)) || '').slice(0, 120) || null,
+      amount: receipt_id ? -amt : amtSigned, // v89: без фактуры — знак как ввели (Cash); с фактурой — расход
       balance: null,
       entry_number: null,
       import_batch: null,
-      matched_receipt_id: receipt_id,
-      match_status: 'manual',
-      match_score: 100,
-      matched_at: new Date().toISOString()
+      matched_receipt_id: receipt_id || null,
+      match_status: receipt_id ? 'manual' : null,
+      match_score: receipt_id ? 100 : null,
+      matched_at: receipt_id ? new Date().toISOString() : null
     };
     // v67.9.2: защита от дублей — тот же ручной платёж (фактура+дата+сумма) уже есть
-    const { data: dup } = await supabaseAdmin.from('bank_movements')
-      .select('id').eq('matched_receipt_id', receipt_id).eq('operation_date', opDate)
-      .eq('amount', -amt).eq('prefix', 'manual').limit(1);
-    if (dup && dup.length) return res.json({ success: true, movement_id: dup[0].id, duplicate: true });
+    if (receipt_id) {
+      const { data: dup } = await supabaseAdmin.from('bank_movements')
+        .select('id').eq('matched_receipt_id', receipt_id).eq('operation_date', opDate)
+        .eq('amount', -amt).eq('prefix', 'manual').limit(1);
+      if (dup && dup.length) return res.json({ success: true, movement_id: dup[0].id, duplicate: true });
+    }
     const { data: ins, error } = await supabaseAdmin.from('bank_movements').insert(row).select('id').single();
     if (error) throw error;
-    await recomputeReceiptPayment(receipt_id);
+    if (receipt_id) await recomputeReceiptPayment(receipt_id);
     res.json({ success: true, movement_id: ins.id });
   } catch (e) {
     res.status(500).json({ error: withDbSchemaHint(e.message) });
@@ -5808,6 +5815,108 @@ app.post('/api/bank-movements/bulk-delete', requireAuth, async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: withDbSchemaHint(e.message) });
   }
+});
+
+// v89: Cash — удаление ОДНОЙ строки (любой, не только ручной) кнопкой 🗑 в строке
+app.delete('/api/bank-movements/:id', requireAuth, async (req, res) => {
+  try {
+    if (!(canWriteTab(req.user, 'analysis') || canWriteTab(req.user, 'taxes') || canWriteTab(req.user, 'cash'))) {
+      return res.status(403).json({ error: 'Нет права удалять банковские движения' });
+    }
+    const { data: mv } = await supabaseAdmin.from('bank_movements').select('id, matched_receipt_id').eq('id', req.params.id).single();
+    if (!mv) return res.status(404).json({ error: 'Движение не найдено' });
+    const { error } = await supabaseAdmin.from('bank_movements').delete().eq('id', mv.id);
+    if (error) throw error;
+    if (mv.matched_receipt_id) await recomputeReceiptPayment(mv.matched_receipt_id);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: withDbSchemaHint(e.message) });
+  }
+});
+
+// ========== v90: CASH — ОТДЕЛЬНАЯ структура (НЕ банковские выписки, НЕ налоги) ==========
+// SQL (один раз, Supabase → SQL Editor):
+// create table cash_movements (id uuid primary key default gen_random_uuid(), owner_id text,
+//   operation_date date, counterparty text, concept text, amount numeric default 0,
+//   receipt_ids jsonb, note text, created_at timestamptz default now());
+const cashReadGuard = (req, res, next) => canAccessTab(req.user, 'cash') ? next() : res.status(403).json({ error: 'Раздел «Cash» закрыт' });
+const cashWriteGuard = (req, res, next) => canWriteTab(req.user, 'cash') ? next() : res.status(403).json({ error: 'Раздел «Cash» — только просмотр' });
+
+app.get('/api/cash-movements', requireAuth, cashReadGuard, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('cash_movements')
+      .select('*').order('operation_date', { ascending: false }).order('created_at', { ascending: false }).limit(2000);
+    if (error) {
+      if (/does not exist/i.test(error.message || '')) return res.status(500).json({ error: "Нет таблицы cash_movements — SQL Editor: create table cash_movements (id uuid primary key default gen_random_uuid(), owner_id text, operation_date date, counterparty text, concept text, amount numeric default 0, receipt_ids jsonb, note text, created_at timestamptz default now());" });
+      throw error;
+    }
+    res.json({ movements: data || [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/cash-movements', requireAuth, cashWriteGuard, async (req, res) => {
+  try {
+    const { operation_date, counterparty, concept, amount, note } = req.body || {};
+    const a = Number(amount);
+    if (!isFinite(a) || Math.abs(a) > 1e9) return res.status(400).json({ error: 'Некорректная сумма' });
+    const d = String(operation_date || '').slice(0, 10) || new Date().toISOString().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return res.status(400).json({ error: 'Дата в формате ГГГГ-ММ-ДД' });
+    const row = {
+      owner_id: req.user?.id || null,
+      operation_date: d,
+      counterparty: String(counterparty || '').slice(0, 120) || null,
+      concept: String(concept || '').slice(0, 300) || null,
+      amount: a,
+      receipt_ids: [],
+      note: String(note || '').slice(0, 500) || null
+    };
+    const { data: ins, error } = await supabaseAdmin.from('cash_movements').insert(row).select('id').single();
+    if (error) throw error;
+    res.json({ success: true, id: ins.id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.patch('/api/cash-movements/:id', requireAuth, cashWriteGuard, async (req, res) => {
+  try {
+    const { counterparty, operation_date, amount, note, concept, receipt_ids } = req.body || {};
+    const patch = {};
+    if (counterparty !== undefined) patch.counterparty = String(counterparty || '').slice(0, 120) || null;
+    if (concept !== undefined) patch.concept = String(concept || '').slice(0, 300) || null;
+    if (note !== undefined) patch.note = String(note || '').slice(0, 500) || null;
+    if (operation_date !== undefined) {
+      const d = String(operation_date).slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return res.status(400).json({ error: 'Дата в формате ГГГГ-ММ-ДД' });
+      patch.operation_date = d;
+    }
+    if (amount !== undefined) {
+      const a = Number(amount);
+      if (!isFinite(a) || Math.abs(a) > 1e9) return res.status(400).json({ error: 'Некорректная сумма' });
+      patch.amount = a;
+    }
+    if (receipt_ids !== undefined) patch.receipt_ids = Array.isArray(receipt_ids) ? receipt_ids.map(String).slice(0, 50) : [];
+    if (!Object.keys(patch).length) return res.status(400).json({ error: 'Нечего обновлять' });
+    const { error } = await supabaseAdmin.from('cash_movements').update(patch).eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/cash-movements/:id', requireAuth, cashWriteGuard, async (req, res) => {
+  try {
+    const { error } = await supabaseAdmin.from('cash_movements').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/cash-movements/bulk-delete', requireAuth, cashWriteGuard, async (req, res) => {
+  try {
+    const ids = Array.isArray((req.body || {}).ids) ? req.body.ids.slice(0, 500) : [];
+    if (!ids.length) return res.status(400).json({ error: 'Нужен массив ids' });
+    const { error } = await supabaseAdmin.from('cash_movements').delete().in('id', ids);
+    if (error) throw error;
+    res.json({ success: true, deleted: ids.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Отвязка движения от фактуры

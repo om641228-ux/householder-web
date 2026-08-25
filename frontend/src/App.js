@@ -2059,7 +2059,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v88 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v90 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -3904,6 +3904,7 @@ function App() {
   const [cashSaving, setCashSaving] = useState({}); // v85: id → true пока идёт сохранение
   const [cashSel, setCashSel] = useState({});       // v86: выбранные строки Cash {id: true}
   const [cashLinkMode, setCashLinkMode] = useState(null); // v87: платёж Cash, к которому выбираем фактуры во вкладке «Чеки»
+  const [cashMovements, setCashMovements] = useState([]);     // v90: Cash — ОТДЕЛЬНАЯ таблица cash_movements (не выписки банка)
   const chatUnreadTotal = Object.values(chatUnread).reduce((a, b) => a + (b || 0), 0);
   const [password, setPassword] = useState('');
   const [loginName, setLoginName] = useState(''); // v76: вход по логину + паролю
@@ -5854,25 +5855,51 @@ function App() {
     finally { setLinkSaving(false); }
   };
 
+  // v90: загрузка Cash-движений (отдельная таблица cash_movements — НЕ банковская выписка)
+  const loadCashMovements = useCallback(async () => {
+    if (!token) return [];
+    try {
+      const r = await fetch(`${API_URL}/api/cash-movements?token=${token}`);
+      const j = await r.json();
+      if (j.error) { console.warn('cash-movements:', j.error); return []; }
+      const list = j.movements || [];
+      setCashMovements(list);
+      return list;
+    } catch (e) { console.warn('cash-movements:', e.message); return []; }
+  }, [token]);
+
   // v87: привязка платежа из Cash к НЕСКОЛЬКИМ выбранным галками фактурам (вкладка «Чеки»)
   const linkCashSelected = async () => {
     if (!cashLinkMode || !selectedReceiptIds.size) return;
     const ids = [...selectedReceiptIds];
     let okCount = 0, lastErr = null;
-    for (const rid of ids) {
+    if (cashLinkMode.cash) { // v90: строка Cash — привязки хранятся массивом receipt_ids в cash_movements
       try {
-        const res = await fetch(`${API_URL}/api/link-bank-movement?token=${token}`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ movement_id: cashLinkMode.id, receipt_id: rid })
+        const merged = [...new Set([...(cashLinkMode.receipt_ids || []).map(String), ...ids.map(String)])];
+        const res = await fetch(`${API_URL}/api/cash-movements/${cashLinkMode.id}?token=${token}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ receipt_ids: merged })
         });
         const d = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
-        okCount++;
+        okCount = ids.length;
       } catch (e) { lastErr = e.message; }
+    } else {
+      for (const rid of ids) {
+        try {
+          const res = await fetch(`${API_URL}/api/link-bank-movement?token=${token}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ movement_id: cashLinkMode.id, receipt_id: rid })
+          });
+          const d = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+          okCount++;
+        } catch (e) { lastErr = e.message; }
+      }
     }
     setCashLinkMode(null);
     setSelectedReceiptIds(new Set());
-    await loadBankMovements();
+    await loadCashMovements();
     await loadReceipts();
     setActiveTab('cash');
     if (lastErr) alert(`Привязано: ${okCount} из ${ids.length}. Последняя ошибка: ${lastErr}`);
@@ -7382,7 +7409,7 @@ ${bodyHtml}
             )}
             {/* v85: вкладка «Cash» — все движения банка, редактируемые контрагент/дата/сумма, привязка фактур */}
             {tabAllowed('cash') && (
-              <button className={activeTab === 'cash' ? 'active' : ''} onClick={() => {setActiveTab('cash'); loadReceipts(); loadBankMovements();}}>
+              <button className={activeTab === 'cash' ? 'active' : ''} onClick={() => {setActiveTab('cash'); loadReceipts(); loadCashMovements();}}>
                 💵 Cash
               </button>
             )}
@@ -8254,7 +8281,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v88 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v90 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -10020,18 +10047,19 @@ ${bodyHtml}
 
       {/* Вкладка «CRM» (v32) */}
       {activeTab === 'crm' && <CrmTab user={user} token={token} />}
-      {/* ===================== v85: ВКЛАДКА CASH =====================
-          Структура списка — как в «Налогах», но БЕЗ значков «есть фактура»/«авто-вычет»/обязательных платежей.
-          Контрагент, дата и сумма — редактируемые (💾 сохранить в банк). «🔗 привязать» — как в Налогах. */}
+      {/* ===================== v90: ВКЛАДКА CASH — ОТДЕЛЬНАЯ структура (cash_movements) =====================
+          Своя таблица, НЕ связана с банковскими выписками и налогами. Строки: дата, контрагент, сумма со знаком
+          (− расход красным / + приход зелёным), выбор/удаление, добавление, привязка фактур через вкладку «Чеки». */}
       {activeTab === 'cash' && tabAllowed('cash') && (() => {
         const q = cashQ.trim().toLowerCase();
-        const vis = bankMovements.filter(m => {
+        const linkedOf = (m) => (Array.isArray(m.receipt_ids) ? m.receipt_ids : [])
+          .map(rid => receipts.find(r => String(r.id) === String(rid))).filter(Boolean);
+        const vis = cashMovements.filter(m => {
           if (!q) return true;
-          const linked = m.matched_receipt_id ? receipts.find(r => String(r.id) === String(m.matched_receipt_id)) : null;
-          return [m.counterparty, m.concept, m.operation_date, String(Math.abs(Number(m.amount) || 0)), linked && linked.store_name]
+          return [m.counterparty, m.concept, m.operation_date, String(m.amount), ...linkedOf(m).map(r => r.store_name)]
             .filter(Boolean).join(' ').toLowerCase().includes(q);
         });
-        const sumIn = vis.filter(m => Number(m.amount) > 0).reduce((a, m) => a + Math.abs(Number(m.amount) || 0), 0);
+        const sumIn = vis.filter(m => Number(m.amount) > 0).reduce((a, m) => a + (Number(m.amount) || 0), 0);
         const sumOut = vis.filter(m => Number(m.amount) < 0).reduce((a, m) => a + Math.abs(Number(m.amount) || 0), 0);
         const rowVal = (m, f) => (cashVals[m.id] && cashVals[m.id][f] !== undefined)
           ? cashVals[m.id][f]
@@ -10053,12 +10081,12 @@ ${bodyHtml}
           if (!Object.keys(body).length) return;
           setCashSaving(prev => ({ ...prev, [m.id]: true }));
           try {
-            const r = await fetch(`${API_URL}/api/bank-movements/${m.id}?token=${token}`, {
+            const r = await fetch(`${API_URL}/api/cash-movements/${m.id}?token=${token}`, {
               method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
             }).then(x => x.json());
             if (r.error) { alert('Не сохранено: ' + r.error); return; }
             setCashVals(prev => { const nx = { ...prev }; delete nx[m.id]; return nx; });
-            await loadBankMovements();
+            await loadCashMovements();
           } catch (e) { alert('Ошибка сохранения: ' + e.message); }
           finally { setCashSaving(prev => ({ ...prev, [m.id]: false })); }
         };
@@ -10066,14 +10094,22 @@ ${bodyHtml}
         return (
           <div className="card" style={{ margin: '10px 15px' }}>
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
-              <h3 style={{ margin: 0, fontSize: 16 }}>💵 Cash — движения по счетам</h3>
-              <span style={{ fontSize: 12, color: '#1e8449', fontWeight: 700 }}>приход: {formatAmount(sumIn, 'EUR')}</span>
-              <span style={{ fontSize: 12, color: '#c0392b', fontWeight: 700 }}>расход: {formatAmount(sumOut, 'EUR')}</span>
-              <span style={{ fontSize: 12, color: '#6e6e73' }}>строк: {vis.length} из {bankMovements.length}</span>
-              <button disabled={bankLoading} onClick={loadBankMovements} title="Обновить движения из базы"
-                style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>
-                {bankLoading ? '⏳' : '🔄'} обновить
-              </button>
+              <h3 style={{ margin: 0, fontSize: 16 }}>💵 Cash — наличные движения</h3>
+              <span style={{ fontSize: 12, color: '#16a34a', fontWeight: 800 }}>приход: {formatAmount(sumIn, 'EUR')}</span>
+              <span style={{ fontSize: 12, color: '#e02424', fontWeight: 800 }}>расход: {formatAmount(sumOut, 'EUR')}</span>
+              <span style={{ fontSize: 12, fontWeight: 800, color: '#1d1d1f' }}>остаток: {formatAmount(sumIn - sumOut, 'EUR')}</span>
+              <span style={{ fontSize: 12, color: '#6e6e73' }}>строк: {vis.length} из {cashMovements.length}</span>
+              <button onClick={loadCashMovements} title="Обновить из базы"
+                style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>🔄 обновить</button>
+              <button onClick={async () => {
+                  const r = await fetch(`${API_URL}/api/cash-movements?token=${token}`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ operation_date: new Date().toISOString().slice(0, 10), amount: 0, counterparty: 'новая строка' })
+                  }).then(x => x.json()).catch(e => ({ error: e.message }));
+                  if (r.error) { alert('Не добавлено: ' + r.error); return; }
+                  await loadCashMovements();
+                }} title="Добавить пустую строку — затем отредактируйте поля и нажмите 💾"
+                style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #1e8449', background: '#eafaf1', color: '#1e8449', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>➕ добавить строку</button>
               <input value={cashQ} onChange={e => setCashQ(e.target.value)} placeholder="🔍 Поиск: контрагент, дата, сумма, фактура…"
                 style={{ ...inp, flex: '1 1 220px', maxWidth: 340 }} />
               {cashQ && <button onClick={() => setCashQ('')} style={{ ...inp, cursor: 'pointer' }}>✕ показано {vis.length}</button>}
@@ -10084,22 +10120,22 @@ ${bodyHtml}
               {Object.keys(cashSel).length > 0 && (
                 <button onClick={async () => {
                     const ids = Object.keys(cashSel);
-                    if (!window.confirm(`Удалить выбранные движения (${ids.length} шт.)? Привязанные фактуры будут отвязаны. Действие необратимо!`)) return;
-                    const r = await fetch(`${API_URL}/api/bank-movements/bulk-delete?token=${token}`, {
+                    if (!window.confirm(`Удалить выбранные строки Cash (${ids.length} шт.)? Действие необратимо!`)) return;
+                    const r = await fetch(`${API_URL}/api/cash-movements/bulk-delete?token=${token}`, {
                       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids })
                     }).then(x => x.json()).catch(e => ({ error: e.message }));
                     if (r.error) { alert('Не удалено: ' + r.error); return; }
                     setCashSel({});
-                    await loadBankMovements();
-                  }} title="Удалить выбранные движения из базы (необратимо)"
+                    await loadCashMovements();
+                  }} title="Удалить выбранные строки (необратимо)"
                   style={{ ...inp, cursor: 'pointer', fontWeight: 700, border: '1px solid #e74c3c', color: '#e74c3c', background: '#fff' }}>🗑 удалить выбранные ({Object.keys(cashSel).length})</button>
               )}
             </div>
-            {vis.length === 0 && <p style={{ color: '#7f8c8d', fontSize: 13 }}>Нет движений — загрузите выписку банка на вкладке «Загрузка» (🏦 Выписка банка).</p>}
+            {vis.length === 0 && <p style={{ color: '#7f8c8d', fontSize: 13 }}>Строк пока нет — нажмите «➕ добавить строку».</p>}
             {vis.map(m => {
-              const linked = m.matched_receipt_id ? receipts.find(r => String(r.id) === String(m.matched_receipt_id)) : null;
-              const isOut = Number(m.amount) < 0;
+              const linked = linkedOf(m);
               const dirty = isDirty(m);
+              const amtN = Number(rowVal(m, 'amount'));
               return (
                 <div key={m.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '5px 0', borderBottom: '1px solid #f0f0f0', fontSize: 13, flexWrap: 'wrap',
                   background: cashSel[m.id] ? '#eef4ff' : dirty ? '#fff8e1' : 'transparent', borderRadius: (dirty || cashSel[m.id]) ? 6 : 0 }}>
@@ -10107,29 +10143,42 @@ ${bodyHtml}
                     onChange={() => setCashSel(prev => { const nx = { ...prev }; if (nx[m.id]) delete nx[m.id]; else nx[m.id] = true; return nx; })}
                     style={{ cursor: 'pointer', accentColor: '#1d4ed8' }} />
                   <input type="date" value={rowVal(m, 'operation_date')} onChange={e => setRowVal(m, 'operation_date', e.target.value)}
-                    title="Дата операции — редактируемая" style={{ ...inp, width: 138 }} />
+                    title="Дата — редактируемая" style={{ ...inp, width: 138 }} />
                   <input value={rowVal(m, 'counterparty')} onChange={e => setRowVal(m, 'counterparty', e.target.value)}
-                    placeholder={m.concept || 'контрагент'} title={`Контрагент — редактируемый. Концепт из выписки: ${m.concept || '—'}`}
+                    placeholder="контрагент" title="Контрагент — редактируемый"
                     style={{ ...inp, flex: '1 1 220px' }} />
                   <input type="number" step="0.01" value={rowVal(m, 'amount')} onChange={e => setRowVal(m, 'amount', e.target.value)}
                     title="Сумма со знаком: минус = расход (красная), плюс = приход (зелёная) — редактируемая"
-                    style={{ ...inp, width: 120, textAlign: 'right', fontWeight: 700, color: Number(rowVal(m, 'amount')) < 0 ? '#c0392b' : '#1e8449' }} />
+                    style={{ ...inp, width: 120, textAlign: 'right', fontWeight: 800, WebkitTextFillColor: amtN < 0 ? '#e02424' : '#16a34a', color: amtN < 0 ? '#e02424' : '#16a34a' }} />
                   {dirty && (
                     <button disabled={cashSaving[m.id]} onClick={() => saveRow(m)} title="Сохранить изменения в базу"
                       style={{ fontSize: 12, border: '1px solid #1e8449', color: '#fff', background: '#27ae60', borderRadius: 6, padding: '3px 10px', cursor: 'pointer', fontWeight: 700 }}>
                       {cashSaving[m.id] ? '⏳' : '💾 сохранить'}
                     </button>
                   )}
-                  {linked
-                    ? (
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                        <button onClick={() => openReceiptById(linked.id)} style={{ fontSize: 12, border: '1px solid #27ae60', color: '#1e8449', background: '#eafaf1', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>🔗 {(linked.store_name || 'фактура')} · {formatAmount(linked.total_amount, linked.currency || 'EUR')}</button>
-                        <button onClick={() => { if (window.confirm('Отвязать платёж от этой фактуры?')) unlinkMovement(m.id); }} title="Отвязать платёж от фактуры"
-                          style={{ fontSize: 11, border: '1px solid #e74c3c', color: '#e74c3c', background: '#fff', borderRadius: 6, padding: '3px 7px', cursor: 'pointer' }}>✖</button>
-                      </span>
-                    )
-                    : <button onClick={() => { setCashLinkMode(m); setSelectedReceiptIds(new Set()); setActiveTab('list'); loadReceipts(); }} title="Перейти в «Чеки/фактуры» и выбрать галками одну или несколько фактур для этого платежа"
-                        style={{ fontSize: 12, color: '#0071e3', border: '1px solid #0071e3', background: '#fff', borderRadius: 6, padding: '3px 8px', cursor: 'pointer', fontWeight: 700 }}>🔗 привязать</button>}
+                  {linked.length > 0 && linked.map(r => (
+                    <span key={r.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      <button onClick={() => openReceiptById(r.id)} style={{ fontSize: 12, border: '1px solid #27ae60', color: '#1e8449', background: '#eafaf1', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>🔗 {(r.store_name || 'фактура')} · {formatAmount(r.total_amount, r.currency || 'EUR')}</button>
+                    </span>
+                  ))}
+                  {linked.length > 0 && (
+                    <button onClick={async () => {
+                        if (!window.confirm('Отвязать все фактуры от этой строки?')) return;
+                        await fetch(`${API_URL}/api/cash-movements/${m.id}?token=${token}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ receipt_ids: [] }) });
+                        await loadCashMovements();
+                      }} title="Отвязать все фактуры от строки"
+                      style={{ fontSize: 11, border: '1px solid #e74c3c', color: '#e74c3c', background: '#fff', borderRadius: 6, padding: '3px 7px', cursor: 'pointer' }}>✖</button>
+                  )}
+                  <button onClick={() => { setCashLinkMode({ ...m, cash: true }); setSelectedReceiptIds(new Set()); setActiveTab('list'); loadReceipts(); }}
+                    title="Перейти в «Чеки/фактуры» и выбрать галками одну или несколько фактур для этой строки"
+                    style={{ fontSize: 12, color: '#0071e3', border: '1px solid #0071e3', background: '#fff', borderRadius: 6, padding: '3px 8px', cursor: 'pointer', fontWeight: 700 }}>🔗 привязать</button>
+                  <button onClick={async () => {
+                      if (!window.confirm(`Удалить строку «${m.counterparty || '—'}» ${formatAmount(Math.abs(Number(m.amount) || 0), 'EUR')} от ${m.operation_date}?`)) return;
+                      const r = await fetch(`${API_URL}/api/cash-movements/${m.id}?token=${token}`, { method: 'DELETE' }).then(x => x.json()).catch(e => ({ error: e.message }));
+                      if (r.error) { alert('Не удалено: ' + r.error); return; }
+                      await loadCashMovements();
+                    }} title="Удалить эту строку (необратимо)"
+                    style={{ fontSize: 11, border: '1px solid #e74c3c', color: '#e74c3c', background: '#fff', borderRadius: 6, padding: '3px 7px', cursor: 'pointer' }}>🗑</button>
                 </div>
               );
             })}
