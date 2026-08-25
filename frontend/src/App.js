@@ -2059,7 +2059,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v86 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v87 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -3903,6 +3903,7 @@ function App() {
   const [cashVals, setCashVals] = useState({});     // v85: редактируемые значения строк {id: {counterparty, operation_date, amount}}
   const [cashSaving, setCashSaving] = useState({}); // v85: id → true пока идёт сохранение
   const [cashSel, setCashSel] = useState({});       // v86: выбранные строки Cash {id: true}
+  const [cashLinkMode, setCashLinkMode] = useState(null); // v87: платёж Cash, к которому выбираем фактуры во вкладке «Чеки»
   const chatUnreadTotal = Object.values(chatUnread).reduce((a, b) => a + (b || 0), 0);
   const [password, setPassword] = useState('');
   const [loginName, setLoginName] = useState(''); // v76: вход по логину + паролю
@@ -5851,6 +5852,30 @@ function App() {
       await loadReceipts();
     } catch (err) { alert('Ошибка привязки: ' + err.message); }
     finally { setLinkSaving(false); }
+  };
+
+  // v87: привязка платежа из Cash к НЕСКОЛЬКИМ выбранным галками фактурам (вкладка «Чеки»)
+  const linkCashSelected = async () => {
+    if (!cashLinkMode || !selectedReceiptIds.size) return;
+    const ids = [...selectedReceiptIds];
+    let okCount = 0, lastErr = null;
+    for (const rid of ids) {
+      try {
+        const res = await fetch(`${API_URL}/api/link-bank-movement?token=${token}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ movement_id: cashLinkMode.id, receipt_id: rid })
+        });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+        okCount++;
+      } catch (e) { lastErr = e.message; }
+    }
+    setCashLinkMode(null);
+    setSelectedReceiptIds(new Set());
+    await loadBankMovements();
+    await loadReceipts();
+    setActiveTab('cash');
+    if (lastErr) alert(`Привязано: ${okCount} из ${ids.length}. Последняя ошибка: ${lastErr}`);
   };
 
   // Отвязка платежа от фактуры
@@ -8229,7 +8254,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v86 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v87 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8481,6 +8506,17 @@ ${bodyHtml}
 
       {activeTab === 'list' && (
         <div className="list-section">
+          {cashLinkMode && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#eef7ee', border: '1px solid #1e8449', borderRadius: 10, padding: '8px 12px', marginBottom: 10, fontSize: 14, flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 700, color: '#1e8449' }}>💵 Привязка платежа: {cashLinkMode.counterparty || cashLinkMode.concept || '—'} · {formatAmount(Math.abs(Number(cashLinkMode.amount) || 0), 'EUR')} · {cashLinkMode.operation_date}</span>
+              <span style={{ color: '#6e6e73', fontSize: 13 }}>Отметьте галками одну или несколько фактур и нажмите «Привязать»</span>
+              <button disabled={!selectedReceiptIds.size} onClick={linkCashSelected}
+                style={{ border: 'none', background: selectedReceiptIds.size ? '#27ae60' : '#b9c8bd', color: '#fff', borderRadius: 8, padding: '5px 14px', fontSize: 13, fontWeight: 700, cursor: selectedReceiptIds.size ? 'pointer' : 'default' }}>
+                🔗 Привязать выбранные ({selectedReceiptIds.size})
+              </button>
+              <button onClick={() => { setCashLinkMode(null); setActiveTab('cash'); }} style={{ marginLeft: 'auto', border: '1px solid #1e8449', background: '#fff', color: '#1e8449', borderRadius: 8, padding: '5px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>← Отмена (назад в Cash)</button>
+            </div>
+          )}
           {plannedPickMode && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#f4ecfb', border: '1px solid #8e44ad', borderRadius: 10, padding: '8px 12px', marginBottom: 10, fontSize: 14, flexWrap: 'wrap' }}>
               <span style={{ fontWeight: 700, color: '#8e44ad' }}>🧾 Выбор фактуры для планового платежа</span>
@@ -10093,7 +10129,7 @@ ${bodyHtml}
                           style={{ fontSize: 11, border: '1px solid #e74c3c', color: '#e74c3c', background: '#fff', borderRadius: 6, padding: '3px 7px', cursor: 'pointer' }}>✖</button>
                       </span>
                     )
-                    : <button onClick={() => { setLinkSearch(''); setLinkPicker(m); }} title="Привязать платёж к фактуре"
+                    : <button onClick={() => { setCashLinkMode(m); setSelectedReceiptIds(new Set()); setActiveTab('list'); loadReceipts(); }} title="Перейти в «Чеки/фактуры» и выбрать галками одну или несколько фактур для этого платежа"
                         style={{ fontSize: 12, color: '#0071e3', border: '1px solid #0071e3', background: '#fff', borderRadius: 6, padding: '3px 8px', cursor: 'pointer', fontWeight: 700 }}>🔗 привязать</button>}
                 </div>
               );

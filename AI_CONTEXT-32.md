@@ -2050,3 +2050,7 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 ## v86 (2026-08-25)
 - Cash: чекбокс на каждой строке, «☑ выбрать все» (видимые), «☐ снять выделение», «🗑 удалить выбранные (N)» с confirm
 - Backend: POST /api/bank-movements/bulk-delete {ids} (до 500, guard canWriteTab analysis|taxes|cash; привязанные фактуры отвязываются + recomputeReceiptPayment); health v86-2026-08-25
+
+## v87 (2026-08-25)
+- Cash «🔗 привязать» теперь НЕ открывает модалку (она не работала), а переводит во вкладку «Чеки/фактуры»: сверху зелёная плашка с данными платежа, фактуры отмечаются галками (можно несколько — разбитая оплата), «🔗 Привязать выбранные (N)» шлёт POST /api/link-bank-movement по каждой и возвращает в Cash; «← Отмена»
+- state cashLinkMode, fn linkCashSelected; backend без изменений
