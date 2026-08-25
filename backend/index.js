@@ -237,7 +237,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v85-2026-08-25', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v86-2026-08-25', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -5783,6 +5783,28 @@ app.patch('/api/bank-movements/:id', requireAuth, async (req, res) => {
     if (error) throw error;
     if (patch.amount !== undefined && mv.matched_receipt_id) await recomputeReceiptPayment(mv.matched_receipt_id);
     res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: withDbSchemaHint(e.message) });
+  }
+});
+
+// v86: Cash — массовое удаление выбранных движений (до 500 за раз).
+// Привязанные фактуры отвязываются, их статус оплаты пересчитывается.
+app.post('/api/bank-movements/bulk-delete', requireAuth, async (req, res) => {
+  try {
+    if (!(canWriteTab(req.user, 'analysis') || canWriteTab(req.user, 'taxes') || canWriteTab(req.user, 'cash'))) {
+      return res.status(403).json({ error: 'Нет права удалять банковские движения' });
+    }
+    const ids = Array.isArray((req.body || {}).ids) ? req.body.ids.slice(0, 500) : [];
+    if (!ids.length) return res.status(400).json({ error: 'Нужен массив ids' });
+    const { data: rows } = await supabaseAdmin.from('bank_movements').select('id, matched_receipt_id').in('id', ids);
+    const list = rows || [];
+    if (!list.length) return res.json({ success: true, deleted: 0 });
+    const affected = [...new Set(list.map(r => r.matched_receipt_id).filter(Boolean))];
+    const { error } = await supabaseAdmin.from('bank_movements').delete().in('id', list.map(r => r.id));
+    if (error) throw error;
+    for (const rid of affected) await recomputeReceiptPayment(rid);
+    res.json({ success: true, deleted: list.length });
   } catch (e) {
     res.status(500).json({ error: withDbSchemaHint(e.message) });
   }

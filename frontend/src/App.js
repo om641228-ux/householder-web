@@ -2059,7 +2059,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v85 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v86 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -3902,6 +3902,7 @@ function App() {
   const [cashQ, setCashQ] = useState('');           // v85: поиск по движениям (Cash)
   const [cashVals, setCashVals] = useState({});     // v85: редактируемые значения строк {id: {counterparty, operation_date, amount}}
   const [cashSaving, setCashSaving] = useState({}); // v85: id → true пока идёт сохранение
+  const [cashSel, setCashSel] = useState({});       // v86: выбранные строки Cash {id: true}
   const chatUnreadTotal = Object.values(chatUnread).reduce((a, b) => a + (b || 0), 0);
   const [password, setPassword] = useState('');
   const [loginName, setLoginName] = useState(''); // v76: вход по логину + паролю
@@ -8228,7 +8229,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v85 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-20 · v86 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -10040,6 +10041,23 @@ ${bodyHtml}
               <input value={cashQ} onChange={e => setCashQ(e.target.value)} placeholder="🔍 Поиск: контрагент, дата, сумма, фактура…"
                 style={{ ...inp, flex: '1 1 220px', maxWidth: 340 }} />
               {cashQ && <button onClick={() => setCashQ('')} style={{ ...inp, cursor: 'pointer' }}>✕ показано {vis.length}</button>}
+              <button onClick={() => setCashSel(Object.fromEntries(vis.map(m => [m.id, true])))} title="Выбрать все показанные строки"
+                style={{ ...inp, cursor: 'pointer', fontWeight: 700 }}>☑ выбрать все</button>
+              <button onClick={() => setCashSel({})} title="Снять выделение со всех строк"
+                style={{ ...inp, cursor: 'pointer' }}>☐ снять выделение</button>
+              {Object.keys(cashSel).length > 0 && (
+                <button onClick={async () => {
+                    const ids = Object.keys(cashSel);
+                    if (!window.confirm(`Удалить выбранные движения (${ids.length} шт.)? Привязанные фактуры будут отвязаны. Действие необратимо!`)) return;
+                    const r = await fetch(`${API_URL}/api/bank-movements/bulk-delete?token=${token}`, {
+                      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids })
+                    }).then(x => x.json()).catch(e => ({ error: e.message }));
+                    if (r.error) { alert('Не удалено: ' + r.error); return; }
+                    setCashSel({});
+                    await loadBankMovements();
+                  }} title="Удалить выбранные движения из базы (необратимо)"
+                  style={{ ...inp, cursor: 'pointer', fontWeight: 700, border: '1px solid #e74c3c', color: '#e74c3c', background: '#fff' }}>🗑 удалить выбранные ({Object.keys(cashSel).length})</button>
+              )}
             </div>
             {vis.length === 0 && <p style={{ color: '#7f8c8d', fontSize: 13 }}>Нет движений — загрузите выписку банка на вкладке «Загрузка» (🏦 Выписка банка).</p>}
             {vis.map(m => {
@@ -10048,7 +10066,10 @@ ${bodyHtml}
               const dirty = isDirty(m);
               return (
                 <div key={m.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '5px 0', borderBottom: '1px solid #f0f0f0', fontSize: 13, flexWrap: 'wrap',
-                  background: dirty ? '#fff8e1' : 'transparent', borderRadius: dirty ? 6 : 0 }}>
+                  background: cashSel[m.id] ? '#eef4ff' : dirty ? '#fff8e1' : 'transparent', borderRadius: (dirty || cashSel[m.id]) ? 6 : 0 }}>
+                  <input type="checkbox" checked={!!cashSel[m.id]} title="Выбрать строку — затем «🗑 удалить выбранные»"
+                    onChange={() => setCashSel(prev => { const nx = { ...prev }; if (nx[m.id]) delete nx[m.id]; else nx[m.id] = true; return nx; })}
+                    style={{ cursor: 'pointer', accentColor: '#1d4ed8' }} />
                   <input type="date" value={rowVal(m, 'operation_date')} onChange={e => setRowVal(m, 'operation_date', e.target.value)}
                     title="Дата операции — редактируемая" style={{ ...inp, width: 138 }} />
                   <input value={rowVal(m, 'counterparty')} onChange={e => setRowVal(m, 'counterparty', e.target.value)}
