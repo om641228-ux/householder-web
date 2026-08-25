@@ -237,7 +237,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v83.1-2026-08-25', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v84-2026-08-25', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -897,6 +897,32 @@ async function extractPageTextWithGemini(pageBuffer, mimeType, pageNum, totalPag
       if (!looksLikeEmptySkeleton(t2) || t2.length > t.length) t = t2;
     } catch (e) { console.warn(`Страница ${pageNum}: повтор не удался: ${e.message}`); }
   }
+  return t || '(страница без текста)';
+}
+
+// v84: то же извлечение текста страницы, но через OpenAI-совместимую vision-модель
+// (Kimi K3, OpenRouter, GitHub, Mistral). Только ИЗОБРАЖЕНИЯ (jpeg) — PDF-страницы читает Gemini.
+async function extractPageTextWithOpenAICompat(pageBuffer, pageNum, totalPages, modelName, providerKey) {
+  const cfg = OPENAI_COMPAT_PROVIDERS[providerKey];
+  if (!cfg || !cfg.apiKey) throw new Error(`${providerKey}: API key not configured`);
+  const body = {
+    model: modelName || cfg.defaultModel,
+    messages: [{ role: 'user', content: [
+      { type: 'text', text: `Это страница ${pageNum} из ${totalPages} отсканированного документа. Извлеки ВЕСЬ текст этой страницы ДОСЛОВНО, на языке оригинала (НЕ переводи), сохраняя порядок строк. Таблицы — построчно, ячейки через " | ". Заполнители форм (длинные ряды точек/звёздочек) не выводи. Без JSON, markdown и комментариев — только текст страницы. Если текста нет — верни одну строку: (страница без текста)` },
+      { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${pageBuffer.toString('base64')}` } }
+    ] }],
+    max_tokens: 8192,
+    temperature: 0.1
+  };
+  if (providerKey === 'kimi') {
+    delete body.temperature;
+    if (/kimi-k3/i.test(body.model)) { delete body.max_tokens; body.max_completion_tokens = 8192; body.reasoning_effort = 'low'; }
+  }
+  const res = await axios.post(`${cfg.baseURL}/chat/completions`, body, {
+    headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', ...cfg.extraHeaders },
+    timeout: 240000
+  });
+  const t = (res.data && res.data.choices && res.data.choices[0] && res.data.choices[0].message && res.data.choices[0].message.content || '').trim();
   return t || '(страница без текста)';
 }
 
@@ -1940,6 +1966,8 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
   }
   if (docType && docType !== 'auto') data.document_type = docType;
   else if (!data.store_name && !data.receipt_date) data.document_type = 'other';
+  // v84: валюта, выбранная пользователем в верхнем меню ДО распознавания — в приоритете над автоопределением LLM
+  if (currency && currency !== 'auto') data.currency = currency;
   data._pagesRaw = pageTexts; // v33: исходные тексты vision/OCR (до табличной конвертации) → document_pages
   return data;
 }
@@ -2086,11 +2114,13 @@ async function finalizeReceiptFromPageTexts(pageTexts, currency, docType) {
 // каждая страница — отдельный vision-запрос, затем общая финализация.
 // Если передан userId — все страницы также сохраняются в Storage (page_urls).
 // onProgress('vision'|'translate') — колбэк прогресса для асинхронных задач
-async function assembleDocumentFromPages(pageBuffers, mimeTypes, currency, docType, userId = null, onProgress = null) {
+async function assembleDocumentFromPages(pageBuffers, mimeTypes, currency, docType, userId = null, onProgress = null, visionFn = null) {
   console.log(`Постраничный режим: документ ${pageBuffers.length} стр.`);
   const pageTexts = await runWithConcurrency(pageBuffers, async (buf, i) => {
     try {
-      return await extractPageTextWithGemini(buf, mimeTypes[i] || 'application/pdf', i + 1, pageBuffers.length);
+      return visionFn
+        ? await visionFn(buf, mimeTypes[i] || 'application/pdf', i + 1, pageBuffers.length)
+        : await extractPageTextWithGemini(buf, mimeTypes[i] || 'application/pdf', i + 1, pageBuffers.length);
     } finally {
       if (onProgress) onProgress('vision');
     }
@@ -3413,6 +3443,9 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
     const object = req.body.object || 'other';
     const subtypeOverride = req.body.subtype && req.body.subtype !== 'auto' ? req.body.subtype : null;
     const paymentStatusOverride = sanitizePaymentStatus(req.body.payment_status);
+    // v84: выбранная в интерфейсе модель (kimi-*/openrouter-*/github-*/mistral-*) — для vision по страницам
+    const pageModel = String(req.body.model || '');
+    const pageProvider = ['kimi', 'openrouter', 'github', 'mistral'].find(pr => pageModel.startsWith(pr + '-') && OPENAI_COMPAT_PROVIDERS[pr]);
 
     // WORD/ТЕКСТ (v32.3): OCR не нужен — страницы извлекаем из текста файла
     const isWordFile = f => /\.(docx?|html?|txt)$/i.test(f.originalname || '') || /wordprocessingml|msword|text\/(html|plain)/.test(f.mimetype || '');
@@ -3636,12 +3669,19 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
 
     try {
       // Распознаём страницы и сохраняем КАЖДУЮ в Storage (page_urls)
+      const visionFn = pageProvider
+        ? (buf, mime, n, total) => (mime === 'application/pdf'
+            ? extractPageTextWithGemini(buf, mime, n, total) // OpenAI-совместимые vision не читают PDF — эти страницы через Gemini
+            : extractPageTextWithOpenAICompat(buf, n, total, pageModel.slice(pageProvider.length + 1), pageProvider))
+        : null;
       const receiptData = await assembleDocumentFromPages(pageBuffers, mimeTypes, currency, docType, user.id, (stage) => {
         if (stage === 'vision') job.visionDone++;
         else if (stage === 'translate') { job.stage = 'translate'; job.translateDone++; }
-      });
+      }, visionFn);
       job.stage = 'finalize';
-      const recognitionMethod = `page-by-page ${files.length}f (gemini vision, async)`;
+      const recognitionMethod = pageProvider
+        ? `page-by-page ${files.length}f (${pageModel}${pageBuffers.some((_, i) => mimeTypes[i] === 'application/pdf') ? ', PDF-стр. через gemini' : ''}, async)`
+        : `page-by-page ${files.length}f (gemini vision, async)`;
       receiptData.docType = docType === 'auto' ? (receiptData.document_type || 'other') : docType;
       receiptData.object = (object && object !== 'other') ? object : (receiptData.object || 'other');
       if (subtypeOverride) receiptData.subtype = subtypeOverride;

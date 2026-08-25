@@ -2036,3 +2036,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 
 ## v83.1 (2026-08-25)
 - FIX: чат слал токен в Authorization: Bearer, а requireAuth читал только query/x-token/body → 401 Unauthorized. requireAuth теперь принимает и Bearer (полезно всем endpoint'ам). health v83.1-2026-08-25
+
+## v84 (2026-08-25)
+- FIX: upload-document-pages игнорировал выбранную модель (всегда gemini vision) — добавлен extractPageTextWithOpenAICompat (kimi/openrouter/github/mistral), assembleDocumentFromPages(..., visionFn); PDF-страницы по-прежнему через Gemini (OpenAI-vision не читает PDF); подпись метода показывает реальную модель
+- FIX: валюта из верхнего меню терялась в постраничном конвейере (finalizeDocumentFromPageTexts не применял currency) — теперь currency !== 'auto' принудительно ставится в data.currency
+- health v84-2026-08-25
