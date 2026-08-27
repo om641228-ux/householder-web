@@ -236,8 +236,58 @@ app.use(express.json({ limit: '300mb' })); // v73: 300 МБ — восстано
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ========== HEALTH ==========
+// ========== v94: ЖУРНАЛ ДЕЙСТВИЙ (activity_log) ==========
+// SQL (один раз, Supabase → SQL Editor):
+// create table activity_log (id uuid primary key default gen_random_uuid(),
+//   user_id text, user_name text, section text, action text, details text,
+//   ip text, user_agent text, created_at timestamptz default now());
+// create index on activity_log (created_at desc);
+async function logActivity(user, section, action, details, req) {
+  try {
+    const ip = ((req && req.headers['x-forwarded-for']) || '').split(',')[0].trim() || (req && req.socket && req.socket.remoteAddress) || '';
+    const ua = req ? String(req.headers['user-agent'] || '').slice(0, 200) : '';
+    await supabaseAdmin.from('activity_log').insert({
+      user_id: (user && user.id) || null, user_name: String((user && user.name) || (user && user.id) || '').slice(0, 60),
+      section, action, details: String(details || '').slice(0, 500), ip, user_agent: ua
+    });
+  } catch (e) { /* журнал не должен мешать основной логике */ }
+}
+
+// Авто-журнал всех изменяющих запросов (POST/PUT/PATCH/DELETE), кроме служебных
+const LOG_SECTION_MAP = [
+  [/^\/api\/receipts/, 'Чеки'], [/^\/api\/upload/, 'Чеки'],
+  [/^\/api\/bank-movements/, 'Банк'], [/^\/api\/import-bank-statement/, 'Банк'], [/^\/api\/link-bank-movement/, 'Банк'], [/^\/api\/unlink-bank-movement/, 'Банк'],
+  [/^\/api\/cash-movements/, 'Cash'], [/^\/api\/chat/, 'Чат'],
+  [/^\/api\/docs/, 'Документы'], [/^\/api\/crm/, 'CRM'],
+  [/^\/api\/users/, 'Пользователи'], [/^\/api\/backup/, 'Бэкап'], [/^\/api\/restore/, 'Бэкап'],
+  [/^\/api\/planned-payments/, 'Налоги'], [/^\/api\/objects/, 'Объекты']
+];
+const LOG_SKIP = [/^\/api\/chat\/read/, /^\/api\/login/, /^\/api\/upload-ocr-text/, /^\/api\/upload-document-pages/];
+const LOG_BODY_KEYS = ['id', 'ids', 'counterparty', 'amount', 'concept', 'store_name', 'name', 'category', 'title', 'operation_date', 'currency', 'receipt_id'];
+const LOG_ACTION_BY_METHOD = { POST: 'создание/отправка', PUT: 'изменение', PATCH: 'изменение', DELETE: 'удаление' };
+app.use((req, res, next) => {
+  if (req.method === 'GET' || !req.path.startsWith('/api/') || LOG_SKIP.some(r => r.test(req.path))) return next();
+  const origJson = res.json.bind(res);
+  res.json = (body) => {
+    try {
+      if (res.statusCode < 400 && req.user) {
+        const sec = (LOG_SECTION_MAP.find(r => r[0].test(req.path)) || [null, 'Прочее'])[1];
+        const bits = [];
+        const b = req.body || {};
+        for (const k of LOG_BODY_KEYS) {
+          if (b[k] === undefined || b[k] === null || b[k] === '') continue;
+          bits.push(`${k}: ${Array.isArray(b[k]) ? b[k].length + ' шт.' : String(b[k]).slice(0, 80)}`);
+        }
+        logActivity(req.user, sec, LOG_ACTION_BY_METHOD[req.method] || req.method, `${req.method} ${req.path}${bits.length ? ' · ' + bits.join(', ') : ''}`, req);
+      }
+    } catch (e) { /* ignore */ }
+    return origJson(body);
+  };
+  next();
+});
+
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v90-2026-08-25', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v94-2026-08-26', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -254,15 +304,35 @@ app.post('/api/login', async (req, res) => {
       const user = { id: hit.id, name: hit.name || hit.id, role: hit.role || 'viewer', sections: Array.isArray(hit.sections) ? hit.sections : null, objects: Array.isArray(hit.objects) ? hit.objects : null, tabs: Array.isArray(hit.tabs) ? hit.tabs : null, can_view: Array.isArray(hit.can_view) ? hit.can_view : null, can_view_crm: Array.isArray(hit.can_view_crm) ? hit.can_view_crm : null };
       const token = generateToken(user.id);
       tokens.set(token, user);
+      logActivity(user, 'Вход', 'вход в систему', `логин: ${user.id}`, req);
       return res.json({ success: true, token, user });
     }
   } catch (e) { /* таблицы ещё нет — работаем на хардкоде */ }
-  if (login) return res.status(401).json({ error: 'Неверный логин или пароль' });
+  if (login) { logActivity({ id: login, name: login }, 'Вход', 'неудачный вход', 'неверный логин или пароль', req); return res.status(401).json({ error: 'Неверный логин или пароль' }); }
   const user = USERS[password];
-  if (!user) return res.status(401).json({ error: 'Неверный пароль' });
+  if (!user) { logActivity({ id: '?', name: '?' }, 'Вход', 'неудачный вход', 'неверный пароль', req); return res.status(401).json({ error: 'Неверный пароль' }); }
   const token = generateToken(user.id);
   tokens.set(token, user);
+  logActivity(user, 'Вход', 'вход в систему', `логин: ${user.id}`, req);
   res.json({ success: true, token, user });
+});
+
+// GET /api/activity-log — журнал действий (только admin). Фильтры: user_id, section, q, from, to, limit, offset
+app.get('/api/activity-log', requireAuth, async (req, res) => {
+  try {
+    if ((req.user || {}).role !== 'admin') return res.status(403).json({ error: 'Журнал доступен только администратору' });
+    const limit = Math.min(1000, Math.max(1, Number(req.query.limit) || 500));
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+    let q = supabaseAdmin.from('activity_log').select('*', { count: 'exact' }).order('created_at', { ascending: false }).range(offset, offset + limit - 1);
+    if (req.query.user_id) q = q.eq('user_id', String(req.query.user_id));
+    if (req.query.section) q = q.eq('section', String(req.query.section));
+    if (req.query.from) q = q.gte('created_at', String(req.query.from).slice(0, 10) + 'T00:00:00Z');
+    if (req.query.to) q = q.lte('created_at', String(req.query.to).slice(0, 10) + 'T23:59:59Z');
+    if (req.query.q) q = q.or(`details.ilike.%${String(req.query.q).slice(0, 80)}%,action.ilike.%${String(req.query.q).slice(0, 80)}%,user_name.ilike.%${String(req.query.q).slice(0, 80)}%`);
+    const { data, error, count } = await q;
+    if (error) throw error;
+    res.json({ rows: data || [], total: count || 0 });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ========== v74: УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ (только admin) ==========
@@ -327,6 +397,7 @@ app.post('/api/chat/messages', requireAuth, tabGuard('chat'), async (req, res) =
     if (file_url) { row.file_url = String(file_url).slice(0, 1000); row.file_name = String(file_name || 'file').slice(0, 200); }
     const { data, error } = await supabaseAdmin.from('chat_messages').insert(row).select().single();
     if (error) throw error;
+    logActivity(req.user, 'Чат', 'сообщение', to_id ? `личное → ${to_id}${file_url ? ' + файл: ' + row.file_name : ''}` : `общий чат${file_url ? ' + файл: ' + row.file_name : ''}`, req);
     res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -3961,8 +4032,10 @@ app.delete('/api/receipts/:id', requireAuth, requireRole('admin', 'manager'), wr
     const user = req.user;
     if (user.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
     
+    const { data: rc } = await supabaseAdmin.from('receipts').select('store_name, total_amount, currency, receipt_date').eq('id', req.params.id).maybeSingle();
     const { error } = await supabaseAdmin.from('receipts').delete().eq('id', req.params.id);
     if (error) throw error;
+    logActivity(req.user, 'Чеки', 'удаление чека', rc ? `${rc.store_name || 'без названия'}, ${rc.total_amount ?? '?'} ${rc.currency || ''} от ${rc.receipt_date || '?'}` : `id: ${req.params.id}`, req);
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -4652,10 +4725,10 @@ app.post('/api/restore', requireAuth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Восстановление не удалось: ' + e.message }); }
 });
 
-app.get('/api/backup.zip', requireAuth, async (req, res) => {
+// v93: общий конструктор бэкапа (используется и endpoint'ом, и автобэкапом в R2)
+async function buildBackupZip() {
   try {
-    if ((req.user || {}).role !== 'admin') return res.status(403).json({ error: 'Бэкап доступен только администратору' });
-    const TABLES = ['receipts', 'doc_sections', 'objects', 'shares', 'document_pages', 'bank_movements', 'planned_payments', 'proposals', 'contract_documents', 'crm_contacts', 'crm_counterparties', 'crm_tasks'];
+    const TABLES = ['receipts', 'doc_sections', 'objects', 'shares', 'document_pages', 'bank_movements', 'cash_movements', 'planned_payments', 'proposals', 'contract_documents', 'crm_contacts', 'crm_counterparties', 'crm_tasks', 'chat_messages', 'chat_reads', 'app_users', 'activity_log'];
     const entries = [];
     const manifest = [];
     const stats = {};
@@ -4700,9 +4773,47 @@ app.get('/api/backup.zip', requireAuth, async (req, res) => {
     entries.unshift({ name: 'README.txt', data: Buffer.from(readme, 'utf8') });
     const zip = buildZipBackup(entries);
     const fname = `householder-backup-${new Date().toISOString().slice(0, 10)}.zip`;
+    return { zip, fname, stats, manifestCount: manifest.length };
+  } catch (e) { throw new Error('Бэкап не удался: ' + e.message); }
+}
+
+app.get('/api/backup.zip', requireAuth, async (req, res) => {
+  try {
+    if ((req.user || {}).role !== 'admin') return res.status(403).json({ error: 'Бэкап доступен только администратору' });
+    const { zip, fname } = await buildBackupZip();
     res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${fname}"`, 'Content-Length': zip.length });
     res.send(zip);
-  } catch (e) { res.status(500).json({ error: 'Бэкап не удался: ' + e.message }); }
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v93: залить бэкап в R2 (backups/<fname>) + ротация: хранить последние 14
+async function uploadBackupToR2() {
+  if (!r2Configured()) throw new Error('Облако не настроено (R2_* Variables)');
+  const s3 = require('@aws-sdk/client-s3');
+  const { zip, fname, stats } = await buildBackupZip();
+  const key = `backups/${fname}`;
+  await getR2(s3.S3Client).send(new s3.PutObjectCommand({ Bucket: R2_BUCKET, Key: key, Body: zip, ContentType: 'application/zip' }));
+  // ротация: удаляем всё старше последних 14 копий
+  let kept = 1, deleted = 0;
+  try {
+    const list = await getR2(s3.S3Client).send(new s3.ListObjectsV2Command({ Bucket: R2_BUCKET, Prefix: 'backups/' }));
+    const items = (list.Contents || []).filter(o => o.Key.endsWith('.zip')).sort((a, b) => (a.Key < b.Key ? 1 : -1));
+    for (const o of items.slice(14)) {
+      await getR2(s3.S3Client).send(new s3.DeleteObjectCommand({ Bucket: R2_BUCKET, Key: o.Key }));
+      deleted++;
+    }
+    kept = Math.min(items.length, 14);
+  } catch (e) { console.warn('backup rotation warn:', e.message); }
+  return { key, size: zip.length, kept, deleted, stats };
+}
+
+// POST /api/backup-to-cloud — ручной запуск бэкапа в R2 (админ)
+app.post('/api/backup-to-cloud', requireAuth, async (req, res) => {
+  try {
+    if ((req.user || {}).role !== 'admin') return res.status(403).json({ error: 'Бэкап доступен только администратору' });
+    const r = await uploadBackupToR2();
+    res.json({ ok: true, ...r });
+  } catch (e) { res.status(500).json({ error: 'Бэкап в облако не удался: ' + e.message }); }
 });
 
 // POST /api/docs/recognize-text (v57.6): распознавание текста файла из вкладки «Документы» —
@@ -6324,3 +6435,28 @@ app.listen(PORT, () => {
   console.log(`Receipt Manager API running on port ${PORT}`);
   console.log(`Health: http://localhost:${PORT}/health`);
 });
+
+// v93: автобэкап в R2 раз в сутки (первый запуск через 10 мин после старта)
+if (r2Configured()) {
+  const dailyBackup = async () => {
+    try {
+      const r = await uploadBackupToR2();
+      console.log(`[backup] OK ${r.key} (${(r.size / 1024 / 1024).toFixed(1)} MB, хранится копий: ${r.kept})`);
+    } catch (e) { console.error('[backup] FAIL:', e.message); }
+  };
+  setTimeout(dailyBackup, 10 * 60 * 1000);
+  setInterval(dailyBackup, 24 * 60 * 60 * 1000);
+  console.log('Auto-backup to R2: every 24h (first run in 10 min), keep last 14');
+
+// v94: ротация журнала действий — удалять записи старше 90 дней
+const cleanActivityLog = async () => {
+  try {
+    const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    await supabaseAdmin.from('activity_log').delete().lt('created_at', cutoff);
+  } catch (e) { /* таблица может ещё не существовать */ }
+};
+setTimeout(cleanActivityLog, 60 * 1000);
+setInterval(cleanActivityLog, 24 * 60 * 60 * 1000);
+} else {
+  console.log('Auto-backup to R2 disabled: R2_* Variables not set');
+}

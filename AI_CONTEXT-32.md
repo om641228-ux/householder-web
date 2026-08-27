@@ -2073,3 +2073,23 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 
 ## v92 (2026-08-25)
 - Уведомления о ЛИЧНЫХ сообщениях чата (dm:*): звук «динь-дон» (WebAudio 880→1174 Гц), мигающий title вкладки «💬 (N) Новое сообщение!», системное Notification (разрешение запрашивается при первом открытии чата; показывается только если вкладка скрыта). Сравнение сумм dm-каналов между опросами (prevUnreadRef), первый опрос молчит
+
+## v93 (2026-08-26) — автобэкап в R2 + кнопка «В облако»
+- index.js: логика GET /api/backup.zip вынесена в `async function buildBackupZip()` → {zip, fname, stats, manifestCount}; endpoint теперь просто вызывает её.
+- TABLES бэкапа дополнены: cash_movements, chat_messages, chat_reads, app_users (теперь 16 таблиц).
+- Новая `async uploadBackupToR2()`: buildBackupZip() → PutObjectCommand в R2 (`backups/householder-backup-YYYY-MM-DD.zip`, ContentType application/zip) → ротация ListObjectsV2 prefix 'backups/', хранятся последние 14 ZIP, остальные DeleteObject.
+- POST /api/backup-to-cloud (admin) — ручной запуск бэкапа в R2, ответ {ok, key, size, kept, deleted, stats}.
+- Планировщик в конце index.js: если r2Configured() — setTimeout(10 мин) + setInterval(24ч) на dailyBackup; лог в консоль; иначе «disabled».
+- App.js: `backupToCloud()` + кнопка «☁️ В облако» (#0a84ff) рядом с «📦 Бэкап» (admin), alert с key/size/kept.
+- Health: v93-2026-08-26. Env не нужны новые (R2_* уже есть).
+
+## v94 (2026-08-26) — журнал действий пользователей (activity_log)
+- Таблица activity_log (id, user_id, user_name, section, action, details, ip, user_agent, created_at). SQL в отдельном файле.
+- index.js: logActivity(user, section, action, details, req) — fire-and-forget, ошибки гасятся.
+- Авто-лог middleware (app.use перед /health): все POST/PUT/PATCH/DELETE под /api/ с req.user и status<400; секция по LOG_SECTION_MAP (Чеки/Банк/Cash/Чат/Документы/CRM/Пользователи/Бэкап/Налоги/Объекты); details = method+path+безопасные поля тела (LOG_BODY_KEYS, без паролей/токенов); LOG_SKIP: login, chat/read, upload-ocr-text, upload-document-pages.
+- Точечные логи: login (успех + неудача), удаление чека (магазин, сумма, дата), сообщение чата (без текста — только канал/файл).
+- GET /api/activity-log (только admin): фильтры user_id/section/from/to/q, limit<=1000, offset, возвращает {rows,total}.
+- Ротация: чистка записей старше 90 дней при старте (через 60с) и раз в сутки.
+- activity_log добавлена в TABLES бэкапа (17 таблиц).
+- App.js: компонент LogTab (фильтры пользователь/раздел/даты/поиск, таблица, «Показать ещё»); кнопка 📋 Журнал в навигации только для admin; TAB_LABELS += log.
+- Health: v94-2026-08-26.

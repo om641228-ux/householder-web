@@ -868,7 +868,7 @@ const fmtDocDate = (iso) => iso ? iso.split('-').reverse().join('.') : '';
 // v74: вкладка «👥 Пользователи» (только admin) — управление доступом: роли, разделы документов, объекты
 function UsersTab({ token, objectsList }) {
   const SEC_LABELS = { home: '🏠 Дома', auto: '🚗 Авто', personal: '👤 Личное' };
-  const TAB_LABELS = { upload: '📤 Загрузка', list: '🧾 Чеки/документы', analysis: '📊 Анализ', taxes: '🧾 Налоги', cash: '💵 Cash', crm: '🤝 CRM', docs: '📁 Документы', chat: '💬 Чат' };
+  const TAB_LABELS = { upload: '📤 Загрузка', list: '🧾 Чеки/документы', analysis: '📊 Анализ', taxes: '🧾 Налоги', cash: '💵 Cash', crm: '🤝 CRM', docs: '📁 Документы', chat: '💬 Чат', log: '📋 Журнал' };
   const [list, setList] = useState([]);
   const [err, setErr] = useState('');
   const [edit, setEdit] = useState(null); // {id,name,password,role,sections[],objects[],disabled,isNew}
@@ -2059,7 +2059,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v92 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v94 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2201,6 +2201,100 @@ function DocsTab({ user, token }) {
 }
 
 // ===================== v83: ЧАТ (общий + личные сообщения) =====================
+// v94: Журнал действий пользователей — только для админа (бэкенд тоже проверяет роль)
+function LogTab({ token }) {
+  const [rows, setRows] = React.useState([]);
+  const [total, setTotal] = React.useState(0);
+  const [loading, setLoading] = React.useState(false);
+  const [users, setUsers] = React.useState([]);
+  const [fUser, setFUser] = React.useState('');
+  const [fSection, setFSection] = React.useState('');
+  const [fFrom, setFFrom] = React.useState('');
+  const [fTo, setFTo] = React.useState('');
+  const [fQ, setFQ] = React.useState('');
+  const SECTIONS = ['Вход', 'Чеки', 'Банк', 'Cash', 'Налоги', 'Чат', 'Документы', 'CRM', 'Пользователи', 'Бэкап', 'Объекты', 'Прочее'];
+
+  const load = React.useCallback(async (offset = 0) => {
+    setLoading(true);
+    try {
+      const qs = new URLSearchParams({ limit: '500', offset: String(offset) });
+      if (fUser) qs.set('user_id', fUser);
+      if (fSection) qs.set('section', fSection);
+      if (fFrom) qs.set('from', fFrom);
+      if (fTo) qs.set('to', fTo);
+      if (fQ.trim()) qs.set('q', fQ.trim());
+      const r = await fetch(`${API_URL}/api/activity-log?${qs}`, { headers: { Authorization: `Bearer ${token}` } });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setRows(prev => offset === 0 ? (j.rows || []) : prev.concat(j.rows || []));
+      setTotal(j.total || 0);
+    } catch (e) { alert('Журнал: ' + e.message); }
+    finally { setLoading(false); }
+  }, [token, fUser, fSection, fFrom, fTo, fQ]);
+
+  React.useEffect(() => { load(0); }, [load]); // eslint-disable-line
+  React.useEffect(() => {
+    fetch(`${API_URL}/api/users/names`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json()).then(j => setUsers(Array.isArray(j) ? j : [])).catch(() => {});
+  }, [token]);
+
+  const fmtDT = (iso) => { const d = new Date(iso); return d.toLocaleDateString('ru-RU') + ' ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' }); };
+  const inp = { padding: '6px 10px', borderRadius: 8, border: '1px solid #d1d1d6', fontSize: 13, background: '#fff' };
+  return (
+    <div style={{ padding: '0 15px 30px' }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12, background: '#fff', padding: 12, borderRadius: 12, border: '1px solid #e5e5ea' }}>
+        <select value={fUser} onChange={e => setFUser(e.target.value)} style={inp}>
+          <option value=''>👤 Все пользователи</option>
+          {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+        </select>
+        <select value={fSection} onChange={e => setFSection(e.target.value)} style={inp}>
+          <option value=''>📂 Все разделы</option>
+          {SECTIONS.map(x => <option key={x} value={x}>{x}</option>)}
+        </select>
+        <input type='date' value={fFrom} onChange={e => setFFrom(e.target.value)} style={inp} title='С даты' />
+        <span style={{ color: '#8e8e93' }}>—</span>
+        <input type='date' value={fTo} onChange={e => setFTo(e.target.value)} style={inp} title='По дату' />
+        <input type='text' value={fQ} onChange={e => setFQ(e.target.value)} placeholder='🔍 поиск по тексту…' style={{ ...inp, minWidth: 180 }} />
+        <button type='button' className='btn-folder' style={{ background: '#5e5ce6' }} onClick={() => load(0)} disabled={loading}>{loading ? '⏳' : 'Применить'}</button>
+        <button type='button' className='btn-folder' style={{ background: '#8e8e93' }} onClick={() => { setFUser(''); setFSection(''); setFFrom(''); setFTo(''); setFQ(''); }}>Сбросить</button>
+        <span style={{ marginLeft: 'auto', fontSize: 12, color: '#8e8e93' }}>записей: {total} · хранятся 90 дней</span>
+      </div>
+      <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e5e5ea', overflow: 'hidden' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead>
+            <tr style={{ background: '#f5f5f7', textAlign: 'left' }}>
+              <th style={{ padding: '10px 12px' }}>Время</th>
+              <th style={{ padding: '10px 12px' }}>Пользователь</th>
+              <th style={{ padding: '10px 12px' }}>Раздел</th>
+              <th style={{ padding: '10px 12px' }}>Действие</th>
+              <th style={{ padding: '10px 12px' }}>Детали</th>
+              <th style={{ padding: '10px 12px' }}>IP</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={r.id} style={{ borderTop: '1px solid #f0f0f2' }}>
+                <td style={{ padding: '8px 12px', whiteSpace: 'nowrap', color: '#6e6e73' }}>{fmtDT(r.created_at)}</td>
+                <td style={{ padding: '8px 12px', fontWeight: 600 }}>{r.user_name || r.user_id || '—'}</td>
+                <td style={{ padding: '8px 12px' }}><span style={{ background: '#ececf0', borderRadius: 6, padding: '2px 8px', fontSize: 12 }}>{r.section}</span></td>
+                <td style={{ padding: '8px 12px', color: r.action && r.action.includes('удал') ? '#e02424' : (r.action && r.action.includes('неудач') ? '#ff9f0a' : '#1d1d1f') }}>{r.action}</td>
+                <td style={{ padding: '8px 12px', color: '#3a3a3c', wordBreak: 'break-word', maxWidth: 420 }}>{r.details}</td>
+                <td style={{ padding: '8px 12px', color: '#8e8e93', fontSize: 12 }}>{r.ip || ''}</td>
+              </tr>
+            ))}
+            {!rows.length && !loading && <tr><td colSpan={6} style={{ padding: 30, textAlign: 'center', color: '#8e8e93' }}>Записей пока нет — журнал начнёт наполняться с этой версии</td></tr>}
+          </tbody>
+        </table>
+        {rows.length < total && (
+          <div style={{ textAlign: 'center', padding: 12 }}>
+            <button type='button' className='btn-folder' onClick={() => load(rows.length)} disabled={loading}>{loading ? '⏳ Загрузка…' : `Показать ещё (осталось ${total - rows.length})`}</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ChatTab({ user, token }) {
   const myId = (user && user.id) || 'admin';
   const myName = (user && user.name) || myId;
@@ -5359,6 +5453,18 @@ function App() {
     finally { setBackupBusy(false); }
   };
 
+  // v93: «Бэкап в облако» — сохранить копию ZIP в Cloudflare R2 (папка backups/, хранятся последние 14)
+  const backupToCloud = async () => {
+    setBackupBusy(true);
+    try {
+      const r = await fetch(`${API_URL}/api/backup-to-cloud`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ token }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      alert(`✅ Бэкап сохранён в облако:\n${j.key}\nРазмер: ${(j.size / 1024 / 1024).toFixed(1)} MB\nХранится копий: ${j.kept}`);
+    } catch (e) { alert('Бэкап в облако не удался: ' + e.message); }
+    finally { setBackupBusy(false); }
+  };
+
   // v73: восстановление из бэкапа — читаем tables/*.json из ZIP, показываем сводку, шлём на сервер
   const handleRestoreFile = async (e) => {
     const file = e.target.files && e.target.files[0];
@@ -7492,6 +7598,12 @@ ${bodyHtml}
                 👥 Доступ
               </button>
             )}
+            {/* v94: журнал действий — только admin */}
+            {user?.role === 'admin' && (
+              <button className={activeTab === 'log' ? 'active' : ''} onClick={() => setActiveTab('log')}>
+                📋 Журнал
+              </button>
+            )}
           </nav>
         </div>
       </header>
@@ -8186,6 +8298,10 @@ ${bodyHtml}
                   title="Скачать полный бэкап: все таблицы (JSON) + манифест файлов (URL) одним ZIP">
                   {backupBusy ? '⏳ Бэкап…' : '📦 Бэкап'}
                 </button>
+                <button type="button" className="btn-folder" style={{ background: '#0a84ff' }} onClick={backupToCloud} disabled={backupBusy || restoreBusy}
+                  title="Сохранить бэкап в облако (Cloudflare R2, папка backups/). Автоматически делается раз в сутки, хранятся последние 14 копий">
+                  ☁️ В облако
+                </button>
                 <label className="btn-folder" style={{ background: '#bf5af2', opacity: restoreBusy ? 0.6 : 1 }}
                   title="Восстановить таблицы из файла бэкапа (.zip): существующие записи обновятся, недостающие добавятся">
                   {restoreBusy ? '⏳ Восстановление…' : '♻ Восстановить'}
@@ -8335,7 +8451,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-20 · v92 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-26 · v94 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -10257,6 +10373,7 @@ ${bodyHtml}
       })()}
 
       {activeTab === 'chat' && tabAllowed('chat') && <ChatTab user={user} token={token} />}
+      {activeTab === 'log' && user?.role === 'admin' && <LogTab token={token} />}
 
       {/* Вкладка «Документы» (v40) */}
       {activeTab === 'docs' && <DocsTab user={user} token={token} />}
