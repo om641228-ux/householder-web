@@ -149,7 +149,7 @@ async function refreshUsersCache(force) {
     const map = {};
     (data || []).forEach(u => {
       if (u.disabled) return;
-      map[u.id] = { id: u.id, name: u.name || u.id, role: u.role || 'viewer', sections: Array.isArray(u.sections) ? u.sections : null, objects: Array.isArray(u.objects) ? u.objects : null, tabs: Array.isArray(u.tabs) ? u.tabs : null, can_view: Array.isArray(u.can_view) ? u.can_view : null, can_view_crm: Array.isArray(u.can_view_crm) ? u.can_view_crm : null };
+      map[u.id] = { id: u.id, name: u.name || u.id, role: u.role || 'viewer', sections: Array.isArray(u.sections) ? u.sections : null, objects: Array.isArray(u.objects) ? u.objects : null, tabs: normTabs(u.tabs), can_view: Array.isArray(u.can_view) ? u.can_view : null, can_view_crm: Array.isArray(u.can_view_crm) ? u.can_view_crm : null };
     });
     dbUsersCache = { map, loadedAt: Date.now() };
   } catch (e) { console.warn('app_users cache:', e.message); }
@@ -184,6 +184,17 @@ async function requireAuth(req, res, next) {
   req.user = user;
   next();
 }
+
+// v96: права на разделы — принимаем ОБА формата (раньше объект терялся → слетали права)
+const normTabs = (t) => {
+  if (Array.isArray(t)) return t.length ? t : null;
+  if (t && typeof t === 'object') {
+    const o = {};
+    for (const [k, v] of Object.entries(t)) if (['full', 'read', 'none'].includes(v)) o[k] = v;
+    return Object.keys(o).length ? o : null;
+  }
+  return null;
+};
 
 const requireRole = (...roles) => (req, res, next) =>
   roles.includes((req.user || {}).role) ? next() : res.status(403).json({ error: 'Недостаточно прав (роль: ' + ((req.user || {}).role || '?') + ')' });
@@ -294,7 +305,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v95-2026-08-27', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v96-2026-08-27', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -308,7 +319,7 @@ app.post('/api/login', async (req, res) => {
     // логин указан → ищем строго его; без логина — старое поведение (по паролю)
     const hit = (data || []).find(u => !u.disabled && (!login || String(u.id).toLowerCase() === login) && u.pass_hash === hashPass(u.salt, password));
     if (hit) {
-      const user = { id: hit.id, name: hit.name || hit.id, role: hit.role || 'viewer', sections: Array.isArray(hit.sections) ? hit.sections : null, objects: Array.isArray(hit.objects) ? hit.objects : null, tabs: Array.isArray(hit.tabs) ? hit.tabs : null, can_view: Array.isArray(hit.can_view) ? hit.can_view : null, can_view_crm: Array.isArray(hit.can_view_crm) ? hit.can_view_crm : null };
+      const user = { id: hit.id, name: hit.name || hit.id, role: hit.role || 'viewer', sections: Array.isArray(hit.sections) ? hit.sections : null, objects: Array.isArray(hit.objects) ? hit.objects : null, tabs: normTabs(hit.tabs), can_view: Array.isArray(hit.can_view) ? hit.can_view : null, can_view_crm: Array.isArray(hit.can_view_crm) ? hit.can_view_crm : null };
       const token = generateToken(user.id);
       tokens.set(token, user);
       logActivity(user, 'Вход', 'вход в систему', `логин: ${user.id}`, req);
@@ -469,7 +480,7 @@ app.post('/api/users', requireAuth, requireRole('admin'), async (req, res) => {
       role,
       sections: Array.isArray(sections) && sections.length ? sections : null,
       objects: Array.isArray(objects) && objects.length ? objects : null,
-      tabs: Array.isArray(tabs) && tabs.length ? tabs : null,
+      tabs: normTabs(tabs),
       can_view: Array.isArray(can_view) && can_view.length ? can_view : null,
       can_view_crm: Array.isArray(can_view_crm) && can_view_crm.length ? can_view_crm : null,
       disabled: !!disabled
