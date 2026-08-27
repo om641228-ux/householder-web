@@ -981,18 +981,52 @@ function UsersTab({ token, objectsList }) {
             onChange={e => setEdit({ ...edit, password: e.target.value })} />
           <div style={{ fontSize: 12.5, fontWeight: 700, margin: '6px 0 4px' }}>Разделы приложения — свой уровень доступа к каждому:</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 6 }}>
-            {Object.entries(TAB_LABELS).map(([k, l]) => (
-              <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ fontSize: 13, flex: '0 0 150px' }}>{l}</span>
-                <select value={edit.tabs[k] || 'full'} onChange={e => {
-                  const v = e.target.value;
-                  setEdit(prev => { const t = { ...prev.tabs }; if (v === 'full') delete t[k]; else t[k] = v; return { ...prev, tabs: t }; });
-                }} style={{ flex: 1, padding: '6px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13,
-                  background: (edit.tabs[k] || 'full') === 'none' ? '#ffe9e7' : (edit.tabs[k] || 'full') === 'read' ? '#fff8e1' : '#eafaef' }}>
-                  {Object.entries(TAB_LEVELS).map(([v, tl]) => <option key={v} value={v}>{tl}</option>)}
-                </select>
+            {Object.entries(TAB_LABELS).map(([k, l]) => {
+              const lvl = tabLvlOf(edit.tabs[k]);
+              const vis = tabVisOf(edit.tabs[k]);
+              const visTxt = vis ? (vis.includes('*') ? ' · записи: все' : (vis.length ? ` · записи: свои + ${vis.length}` : ' · записи: только свои')) : '';
+              const isOpen = openTabDrop === k;
+              return (
+              <div key={k} style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                <span style={{ fontSize: 13, flex: '0 0 150px', paddingTop: 7 }}>{l}</span>
+                <div style={{ flex: 1, position: 'relative' }}>
+                  <button type="button" onClick={() => setOpenTabDrop(isOpen ? null : k)}
+                    style={{ width: '100%', textAlign: 'left', padding: '6px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13, cursor: 'pointer',
+                      background: lvl === 'none' ? '#ffe9e7' : lvl === 'read' ? '#fff8e1' : '#eafaef' }}>
+                    {TAB_LEVELS[lvl]}<span style={{ color: '#6e6e73', fontSize: 12 }}>{visTxt}</span>
+                    <span style={{ float: 'right', color: '#8e8e93' }}>{isOpen ? '▴' : '▾'}</span>
+                  </button>
+                  {isOpen && (
+                    <div style={{ position: 'absolute', zIndex: 50, top: '100%', left: 0, right: 0, marginTop: 4, background: '#fff', border: '1px solid #d0d0d5', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', overflow: 'hidden' }}>
+                      {Object.entries(TAB_LEVELS).map(([v, tl]) => (
+                        <div key={v} onClick={() => setTabLevel(k, v)}
+                          style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', fontSize: 13, cursor: 'pointer', background: lvl === v ? '#f0f6ff' : '#fff' }}>
+                          <span style={{ width: 16, color: '#0071e3', fontWeight: 700 }}>{lvl === v ? '✓' : ''}</span> {tl}
+                        </div>
+                      ))}
+                      {VIS_TABS[k] && (
+                        <React.Fragment>
+                          <div style={{ borderTop: '1px solid #eee', padding: '6px 12px 4px', fontSize: 11.5, color: '#8e8e93', fontWeight: 700 }}>ЧЬИ {VIS_TABS[k].toUpperCase()} ВИДНЫ (галочки):</div>
+                          <div onClick={() => toggleVisUser(k, '*')} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', fontSize: 13, cursor: 'pointer' }}>
+                            <input type="checkbox" readOnly checked={!!vis && vis.includes('*')} style={{ accentColor: '#0071e3' }} /> Все пользователи
+                          </div>
+                          {list.filter(x => x.id !== edit.id).map(x => (
+                            <div key={x.id} onClick={() => toggleVisUser(k, x.id)} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', fontSize: 13, cursor: 'pointer' }}>
+                              <input type="checkbox" readOnly checked={!!vis && !vis.includes('*') && vis.includes(x.id)} style={{ accentColor: '#0071e3' }} /> {x.name || x.id}
+                            </div>
+                          ))}
+                          <div style={{ padding: '4px 12px 8px', fontSize: 11, color: '#aeaeb2' }}>Свои записи видны всегда. «Все» — записи всех. Ни одной галочки — только свои.</div>
+                        </React.Fragment>
+                      )}
+                      <div style={{ borderTop: '1px solid #eee', padding: 6, textAlign: 'right' }}>
+                        <button type="button" onClick={() => setOpenTabDrop(null)} style={{ padding: '4px 14px', borderRadius: 8, border: 'none', background: '#0071e3', color: '#fff', fontSize: 12.5, cursor: 'pointer' }}>Готово</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
-            ))}
+              );
+            })}
           </div>
           <div style={{ fontSize: 11.5, color: '#8e8e93', marginBottom: 8 }}>«Полный доступ» — как у всех; «Просмотр» — смотреть, но не менять; «Нет доступа» — раздел скрыт.</div>
           <div style={{ fontSize: 12.5, fontWeight: 700, margin: '6px 0 4px' }}>Разделы документов (ничего не отмечено = все):</div>
