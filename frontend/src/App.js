@@ -921,7 +921,7 @@ function UsersTab({ token, objectsList }) {
       {list.filter(x => x.id !== edit.id).map(x => (
         <label key={x.id} style={{ fontSize: 13 }}><input type="checkbox" checked={edit[field].includes(x.id)} onChange={() => setEdit({ ...edit, [field]: toggleArr(edit[field], x.id) })} /> {x.name || x.id}</label>
       ))}
-      {['admin', ...Array.from({ length: 10 }, (_, i) => `user${i + 1}`)].filter(id => id !== edit.id && !list.some(x => x.id === id)).map(id => (
+      {['admin'].filter(id => id !== edit.id && !list.some(x => x.id === id)).map(id => (
         <label key={id} style={{ fontSize: 13, color: '#6e6e73' }}><input type="checkbox" checked={edit[field].includes(id)} onChange={() => setEdit({ ...edit, [field]: toggleArr(edit[field], id) })} /> {id} <span style={{ fontSize: 10.5, color: '#aeaeb2' }}>(встроенный)</span></label>
       ))}
     </div>
@@ -965,10 +965,10 @@ function UsersTab({ token, objectsList }) {
               style={{ padding: '4px 12px', borderRadius: 8, border: '1px solid #ffd2cc', background: '#fff', color: '#e74c3c', fontSize: 12.5, cursor: 'pointer' }}>🗑</button>
           </div>
         ))}
-        {!list.length && !err && <div style={{ fontSize: 13, color: '#8e8e93' }}>Пользователей в базе нет — работают встроенные admin/user1…10. Добавьте первого ниже.</div>}
+        {!list.length && !err && <div style={{ fontSize: 13, color: '#8e8e93' }}>Пользователей в базе нет — работает только встроенный admin. Добавьте первого ниже.</div>}
         <button onClick={() => setEdit({ ...blank })}
           style={{ marginTop: 10, padding: '7px 16px', borderRadius: 980, border: 'none', background: '#0071e3', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>＋ Добавить пользователя</button>
-        <div style={{ fontSize: 11.5, color: '#8e8e93', marginTop: 8 }}>Встроенные admin/user1…10 продолжают работать и сюда не попадают — удалите их из кода, когда все перейдут на свои пароли.</div>
+        <div style={{ fontSize: 11.5, color: '#8e8e93', marginTop: 8 }}>Встроенный admin работает всегда и сюда не попадает. Встроенные user1…10 удалены (v98).</div>
       </div>
       {edit && (
         <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #e3e6ea', padding: 16 }}>
@@ -2119,7 +2119,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v97 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v98 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -8575,7 +8575,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-27 · v97 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-27 · v98 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

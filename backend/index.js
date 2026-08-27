@@ -86,18 +86,9 @@ const OPENAI_COMPAT_PROVIDERS = {
 };
 
 // ========== AUTH ==========
+// v98: встроенные user1…user10 удалены — только admin + пользователи из базы (app_users)
 const USERS = {
   'admin': { id: 'admin', name: 'Admin', role: 'admin' },
-  'user1': { id: 'user1', name: 'User 1', role: 'user' },
-  'user2': { id: 'user2', name: 'User 2', role: 'user' },
-  'user3': { id: 'user3', name: 'User 3', role: 'user' },
-  'user4': { id: 'user4', name: 'User 4', role: 'user' },
-  'user5': { id: 'user5', name: 'User 5', role: 'user' },
-  'user6': { id: 'user6', name: 'User 6', role: 'user' },
-  'user7': { id: 'user7', name: 'User 7', role: 'user' },
-  'user8': { id: 'user8', name: 'User 8', role: 'user' },
-  'user9': { id: 'user9', name: 'User 9', role: 'user' },
-  'user10': { id: 'user10', name: 'User 10', role: 'user' },
 };
 
 const tokens = new Map();
@@ -324,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v97-2026-08-27', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v98-2026-08-27', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -377,7 +368,6 @@ app.get('/api/activity-log', requireAuth, async (req, res) => {
 app.get('/api/users/names', requireAuth, async (req, res) => {
   try {
     const names = [{ id: 'admin', name: 'Admin' }];
-    for (let i = 1; i <= 10; i++) names.push({ id: `user${i}`, name: `User ${i}` });
     try {
       await refreshUsersCache(false);
       const { data } = await supabaseAdmin.from('app_users').select('id, name').eq('disabled', false);
