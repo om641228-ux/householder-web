@@ -278,7 +278,14 @@ app.use((req, res, next) => {
           if (b[k] === undefined || b[k] === null || b[k] === '') continue;
           bits.push(`${k}: ${Array.isArray(b[k]) ? b[k].length + ' шт.' : String(b[k]).slice(0, 80)}`);
         }
-        logActivity(req.user, sec, LOG_ACTION_BY_METHOD[req.method] || req.method, `${req.method} ${req.path}${bits.length ? ' · ' + bits.join(', ') : ''}`, req);
+        // v95.1: id созданного/изменённого объекта из ответа — для ссылки «открыть» в журнале
+        let objRef = '';
+        try {
+          const pm = req.path.match(/^\/api\/(receipts|cash-movements|bank-movements)/);
+          const nid = body && typeof body === 'object' ? (body.id || (body.receipt && body.receipt.id) || (body.movement && body.movement.id) || null) : null;
+          if (pm && nid && !req.path.includes(`/${nid}`)) objRef = ` · obj: ${pm[1]}/${nid}`;
+        } catch (e) { /* ignore */ }
+        logActivity(req.user, sec, LOG_ACTION_BY_METHOD[req.method] || req.method, `${req.method} ${req.path}${objRef}${bits.length ? ' · ' + bits.join(', ') : ''}`, req);
       }
     } catch (e) { /* ignore */ }
     return origJson(body);
@@ -287,7 +294,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v94-2026-08-26', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v95-2026-08-27', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========

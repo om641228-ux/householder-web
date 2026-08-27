@@ -2283,9 +2283,10 @@ function LogTab({ token, onJump }) {
                     // v95: переход к объекту действия — ищем id в пути (/api/receipts/<id> и т.п.) или в receipt_id:
                     const d = String(r.details || '');
                     const mPath = d.match(/\/api\/(receipts|cash-movements|bank-movements)\/([0-9a-fA-F-]{8,})/);
+                    const mObj = d.match(/obj: (receipts|cash-movements|bank-movements)\/([0-9a-fA-F-]{8,})/);
                     const mRef = d.match(/receipt_id: ([0-9a-fA-F-]{8,})/);
-                    const kind = mPath ? mPath[1] : (mRef ? 'receipts' : null);
-                    const eid = mPath ? mPath[2] : (mRef ? mRef[1] : null);
+                    const kind = mPath ? mPath[1] : (mObj ? mObj[1] : (mRef ? 'receipts' : null));
+                    const eid = mPath ? mPath[2] : (mObj ? mObj[2] : (mRef ? mRef[1] : null));
                     return (
                       <span>
                         {d}

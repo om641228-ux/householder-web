@@ -2099,3 +2099,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - App: jumpFromLog(kind, id) — переключает вкладку (list/cash/taxes), ставит hlReceiptId/hlCashId/hlMvtId (8 сек), scrollIntoView по id элемента (rc-<id>, cash-row-<id>, mvt-row-<id>).
 - Подсветка: receipt-card (boxShadow #f0c36d + фон #fffbe6), cash row (#fff3bf + рамка), bank movement — существующий механизм hlMvtId.
 - Бэкенд не менялся (health v94-2026-08-26). App.js: сборка v95.
+
+## v95.1 (2026-08-27) — ссылки на СОЗДАННЫЕ объекты в журнале
+- index.js: middleware достаёт id из тела ответа (body.id / body.receipt.id / body.movement.id) для POST на /api/(receipts|cash-movements|bank-movements) и дописывает `· obj: <kind>/<id>` в details.
+- App.js: LogTab дополнительно парсит `obj: kind/id` → кнопка «🔗 открыть» у записей создания.
+- Health: v95-2026-08-27. Старые записи без obj ссылок не получат (id не сохранён).
