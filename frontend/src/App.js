@@ -882,6 +882,32 @@ function UsersTab({ token, objectsList }) {
   };
   useEffect(() => { load(); }, []); // eslint-disable-line
   const TAB_LEVELS = { none: '⛔ Нет доступа', read: '👁 Просмотр', full: '✏️ Полный доступ' };
+  const [openTabDrop, setOpenTabDrop] = useState(null); // v97: какой раздел сейчас с открытым меню
+  const VIS_TABS = { list: 'чеки', crm: 'CRM-записи', cash: 'строки Cash' }; // v97: разделы с настройкой «чьи записи видны»
+  // v97: helpers для значений tabs[k]: строка 'full'|'read'|'none' или объект {l, v}
+  const tabLvlOf = (v) => (v && typeof v === 'object') ? (v.l || 'full') : (v || 'full');
+  const tabVisOf = (v) => (v && typeof v === 'object' && Array.isArray(v.v)) ? v.v : null; // null = не задано (старая логика)
+  const setTabLevel = (k, lvl) => setEdit(prev => {
+    const t = { ...prev.tabs };
+    const vis = tabVisOf(t[k]);
+    if (lvl === 'full' && !vis) delete t[k];
+    else t[k] = vis ? { l: lvl, v: vis } : (lvl === 'full' ? undefined : lvl);
+    if (t[k] === undefined) delete t[k];
+    return { ...prev, tabs: t };
+  });
+  const setTabVis = (k, visArr) => setEdit(prev => {
+    const t = { ...prev.tabs };
+    const lvl = tabLvlOf(t[k]);
+    t[k] = visArr && visArr.length ? { l: lvl, v: visArr } : { l: lvl, v: [] };
+    return { ...prev, tabs: t };
+  });
+  const toggleVisUser = (k, uid) => {
+    const cur = tabVisOf(edit.tabs[k]) || [];
+    let nx;
+    if (uid === '*') nx = cur.includes('*') ? [] : ['*'];
+    else nx = cur.includes(uid) ? cur.filter(x => x !== uid) : cur.filter(x => x !== '*').concat([uid]);
+    setTabVis(k, nx);
+  };
   const tabsObj = (t) => { // старый формат-массив → объект full
     if (t && !Array.isArray(t) && typeof t === 'object') return { ...t };
     const o = {};
@@ -930,7 +956,7 @@ function UsersTab({ token, objectsList }) {
             <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 8, background: u.role === 'admin' ? '#ffe9e7' : '#eef4ff', color: u.role === 'admin' ? '#c0392b' : '#0071e3', fontWeight: 700 }}>{u.role}</span>
             {u.disabled && <span style={{ fontSize: 12, color: '#e74c3c', fontWeight: 700 }}>отключён</span>}
             <span style={{ fontSize: 11.5, color: '#8e8e93' }}>
-              {(Array.isArray(u.tabs) && u.tabs.length) ? `разделы: ${u.tabs.map(t => (TAB_LABELS[t] || t).replace(/^\S+ /, '')).join(', ')}` : (u.tabs && typeof u.tabs === 'object' && Object.keys(u.tabs).length) ? `разделы: ${Object.entries(u.tabs).map(([k, v]) => `${(TAB_LABELS[k] || k).replace(/^\S+ /, '')}=${v}`).join(', ')}` : 'все разделы'} · {Array.isArray(u.objects) && u.objects.length ? `объекты: ${u.objects.join(', ')}` : 'все объекты'} · {Array.isArray(u.sections) && u.sections.length ? `документы: ${u.sections.join(', ')}` : 'все документы'} · {Array.isArray(u.can_view) && u.can_view.length ? `чеки: ${u.can_view.join(', ')}` : 'чеки: свои'} · {Array.isArray(u.can_view_crm) && u.can_view_crm.length ? `crm: ${u.can_view_crm.join(', ')}` : 'crm: свои'}
+              {(Array.isArray(u.tabs) && u.tabs.length) ? `разделы: ${u.tabs.map(t => (TAB_LABELS[t] || t).replace(/^\S+ /, '')).join(', ')}` : (u.tabs && typeof u.tabs === 'object' && Object.keys(u.tabs).length) ? `разделы: ${Object.entries(u.tabs).map(([k, v]) => `${(TAB_LABELS[k] || k).replace(/^\S+ /, '')}=${v && typeof v === 'object' ? v.l : v}`).join(', ')}` : 'все разделы'} · {Array.isArray(u.objects) && u.objects.length ? `объекты: ${u.objects.join(', ')}` : 'все объекты'} · {Array.isArray(u.sections) && u.sections.length ? `документы: ${u.sections.join(', ')}` : 'все документы'} · {Array.isArray(u.can_view) && u.can_view.length ? `чеки: ${u.can_view.join(', ')}` : 'чеки: свои'} · {Array.isArray(u.can_view_crm) && u.can_view_crm.length ? `crm: ${u.can_view_crm.join(', ')}` : 'crm: свои'}
             </span>
             <span style={{ flex: 1 }} />
             <button onClick={() => setEdit({ ...u, password: '', sections: u.sections || [], objects: u.objects || [], tabs: tabsObj(u.tabs), can_view: u.can_view || [], can_view_crm: u.can_view_crm || [], isNew: false })}
@@ -2059,7 +2085,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v95.2 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v97 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -8515,7 +8541,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-27 · v95 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-27 · v97 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -10561,9 +10587,5 @@ ${bodyHtml}
     </div>
   );
 }
-////
-////
-////
-////
 
 export default App;

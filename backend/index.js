@@ -1,6 +1,3 @@
-////
-////
-////
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -193,7 +190,14 @@ const normTabs = (t) => {
   if (Array.isArray(t)) return t.length ? t : null;
   if (t && typeof t === 'object') {
     const o = {};
-    for (const [k, v] of Object.entries(t)) if (['full', 'read', 'none'].includes(v)) o[k] = v;
+    for (const [k, v] of Object.entries(t)) {
+      if (['full', 'read', 'none'].includes(v)) { o[k] = v; continue; }
+      // v97: расширенный формат {l: уровень, v: чьи записи видны ('*' = все)}
+      if (v && typeof v === 'object' && ['full', 'read', 'none'].includes(v.l)) {
+        const vv = Array.isArray(v.v) ? v.v.map(String).slice(0, 50) : [];
+        o[k] = vv.length ? { l: v.l, v: vv } : { l: v.l };
+      }
+    }
     return Object.keys(o).length ? o : null;
   }
   return null;
@@ -211,7 +215,10 @@ const tabLevel = (user, tab) => {
   const t = user.tabs;
   if (!t) return 'full';
   if (Array.isArray(t)) return (t.length === 0 || t.includes(tab)) ? 'full' : 'none';
-  return t[tab] === undefined ? 'full' : t[tab];
+  const v = t[tab];
+  if (v === undefined) return 'full';
+  if (v && typeof v === 'object') return v.l || 'full'; // v97: {l, v}
+  return v;
 };
 const canAccessTab = (user, tab) => tabLevel(user, tab) !== 'none';
 const canWriteTab = (user, tab) => tabLevel(user, tab) === 'full';
@@ -219,6 +226,15 @@ const tabGuard = (tab) => (req, res, next) =>
   canAccessTab(req.user, tab) ? next() : res.status(403).json({ error: 'Нет доступа к разделу «' + tab + '»' });
 const writeTabGuard = (tab) => (req, res, next) =>
   canWriteTab(req.user, tab) ? next() : res.status(403).json({ error: 'Раздел «' + tab + '» — только просмотр' });
+// v97: явная настройка «чьи записи видны» из tabs[tab].v: undefined — нет настройки; null — все; массив — свои + перечисленные
+const explicitVis = (user, tab) => {
+  const t = user && user.tabs;
+  if (t && !Array.isArray(t) && typeof t === 'object' && t[tab] && typeof t[tab] === 'object' && Array.isArray(t[tab].v)) {
+    if (t[tab].v.includes('*')) return null;
+    return [user.id].concat(t[tab].v.filter(x => x !== user.id));
+  }
+  return undefined;
+};
 // v79: видимость чужих записей (чеки/CRM): null — видит всех (admin), иначе массив owner_id
 const visibleOwners = (user, scope) => {
   if (!user || user.role === 'admin') return null;
@@ -308,7 +324,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v96-2026-08-27', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v97-2026-08-27', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -4006,8 +4022,9 @@ app.get('/api/receipts', requireAuth, tabGuard('list'), async (req, res) => {
     // can_view — список пользователей, чьи чеки видно (свои всегда видны).
     // objects — ограничение по объектам. Фильтры комбинируются.
     if (user.role !== 'admin') {
-      const seeOwners = [user.id].concat(Array.isArray(user.can_view) ? user.can_view : []);
-      if (user.role === 'user' || seeOwners.length > 1) query = query.in('owner_id', seeOwners);
+      const ev = explicitVis(user, 'list'); // v97: настройка из выпадающего меню раздела
+      const seeOwners = ev !== undefined ? ev : [user.id].concat(Array.isArray(user.can_view) ? user.can_view : []);
+      if (seeOwners && (user.role === 'user' || seeOwners.length > 1)) query = query.in('owner_id', seeOwners);
       if (Array.isArray(user.objects) && user.objects.length) query = query.in('object', user.objects);
     }
     
@@ -4242,7 +4259,8 @@ app.use('/api/crm', (req, res, next) => req.method === 'GET' ? next() : writeTab
 app.get('/api/crm', requireAuth, async (req, res) => {
   try {
     // v79: видны свои записи + записи пользователей из can_view (admin — все)
-    const owners = visibleOwners(req.user, 'crm');
+    const ev97 = explicitVis(req.user, 'crm');
+    const owners = ev97 !== undefined ? ev97 : visibleOwners(req.user, 'crm');
     let qCps = supabaseAdmin.from('crm_counterparties').select('*').order('name');
     let qContacts = supabaseAdmin.from('crm_contacts').select('*').order('name');
     let qTasks = supabaseAdmin.from('crm_tasks').select('*').order('created_at', { ascending: false });
@@ -5976,8 +5994,11 @@ const cashWriteGuard = (req, res, next) => canWriteTab(req.user, 'cash') ? next(
 
 app.get('/api/cash-movements', requireAuth, cashReadGuard, async (req, res) => {
   try {
-    const { data, error } = await supabaseAdmin.from('cash_movements')
+    let qCash = supabaseAdmin.from('cash_movements')
       .select('*').order('operation_date', { ascending: false }).order('created_at', { ascending: false }).limit(2000);
+    const evCash = explicitVis(req.user, 'cash'); // v97
+    if (evCash) qCash = qCash.or(`owner_id.in.(${evCash.join(',')}),owner_id.is.null`);
+    const { data, error } = await qCash;
     if (error) {
       if (/does not exist/i.test(error.message || '')) return res.status(500).json({ error: "Нет таблицы cash_movements — SQL Editor: create table cash_movements (id uuid primary key default gen_random_uuid(), owner_id text, operation_date date, counterparty text, concept text, amount numeric default 0, receipt_ids jsonb, note text, created_at timestamptz default now());" });
       throw error;
