@@ -2059,7 +2059,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v95 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v95.2 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -5999,18 +5999,38 @@ function App() {
     if (kind === 'receipts') {
       setActiveTab('list');
       setHlReceiptId(id);
-      setTimeout(() => { const el = document.getElementById(`rc-${id}`); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 700);
-      setTimeout(() => setHlReceiptId(null), 8000);
+      loadReceipts();
+      // v95.2: ждём загрузки данных, пробуем несколько раз
+      let tries = 0;
+      const t = setInterval(() => {
+        const el = document.getElementById(`rc-${id}`);
+        if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); clearInterval(t); }
+        else if (++tries > 10) clearInterval(t);
+      }, 400);
+      setTimeout(() => setHlReceiptId(null), 10000);
     } else if (kind === 'cash-movements') {
       setActiveTab('cash');
       setHlCashId(id);
-      setTimeout(() => { const el = document.getElementById(`cash-row-${id}`); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 700);
-      setTimeout(() => setHlCashId(null), 8000);
+      loadCashMovements();
+      let tries = 0;
+      const t = setInterval(() => {
+        const el = document.getElementById(`cash-row-${id}`);
+        if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); clearInterval(t); }
+        else if (++tries > 10) clearInterval(t);
+      }, 400);
+      setTimeout(() => setHlCashId(null), 10000);
     } else if (kind === 'bank-movements') {
       setActiveTab('taxes');
       setHlMvtId(id);
-      setTimeout(() => { const el = document.getElementById(`mvt-row-${id}`); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 700);
-      setTimeout(() => setHlMvtId(null), 8000);
+      loadReceipts();
+      loadBankMovements();
+      let tries = 0;
+      const t = setInterval(() => {
+        const el = document.getElementById(`mvt-row-${id}`);
+        if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); clearInterval(t); }
+        else if (++tries > 10) clearInterval(t);
+      }, 400);
+      setTimeout(() => setHlMvtId(null), 10000);
     }
   };
   // v63: слоты запоминания выбранных платежей (1..5) — сохранить выбор / вывести сохранённый (localStorage)
