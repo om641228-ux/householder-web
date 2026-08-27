@@ -2059,7 +2059,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v94 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v95 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2202,7 +2202,7 @@ function DocsTab({ user, token }) {
 
 // ===================== v83: ЧАТ (общий + личные сообщения) =====================
 // v94: Журнал действий пользователей — только для админа (бэкенд тоже проверяет роль)
-function LogTab({ token }) {
+function LogTab({ token, onJump }) {
   const [rows, setRows] = React.useState([]);
   const [total, setTotal] = React.useState(0);
   const [loading, setLoading] = React.useState(false);
@@ -2278,7 +2278,28 @@ function LogTab({ token }) {
                 <td style={{ padding: '8px 12px', fontWeight: 600 }}>{r.user_name || r.user_id || '—'}</td>
                 <td style={{ padding: '8px 12px' }}><span style={{ background: '#ececf0', borderRadius: 6, padding: '2px 8px', fontSize: 12 }}>{r.section}</span></td>
                 <td style={{ padding: '8px 12px', color: r.action && r.action.includes('удал') ? '#e02424' : (r.action && r.action.includes('неудач') ? '#ff9f0a' : '#1d1d1f') }}>{r.action}</td>
-                <td style={{ padding: '8px 12px', color: '#3a3a3c', wordBreak: 'break-word', maxWidth: 420 }}>{r.details}</td>
+                <td style={{ padding: '8px 12px', color: '#3a3a3c', wordBreak: 'break-word', maxWidth: 420 }}>
+                  {(() => {
+                    // v95: переход к объекту действия — ищем id в пути (/api/receipts/<id> и т.п.) или в receipt_id:
+                    const d = String(r.details || '');
+                    const mPath = d.match(/\/api\/(receipts|cash-movements|bank-movements)\/([0-9a-fA-F-]{8,})/);
+                    const mRef = d.match(/receipt_id: ([0-9a-fA-F-]{8,})/);
+                    const kind = mPath ? mPath[1] : (mRef ? 'receipts' : null);
+                    const eid = mPath ? mPath[2] : (mRef ? mRef[1] : null);
+                    return (
+                      <span>
+                        {d}
+                        {kind && eid && onJump && (
+                          <button type='button' onClick={() => onJump(kind, eid)}
+                            title='Перейти к записи'
+                            style={{ marginLeft: 8, background: '#e8f0fe', color: '#1a56db', border: '1px solid #bfd3f8', borderRadius: 6, padding: '1px 8px', fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                            🔗 открыть
+                          </button>
+                        )}
+                      </span>
+                    );
+                  })()}
+                </td>
                 <td style={{ padding: '8px 12px', color: '#8e8e93', fontSize: 12 }}>{r.ip || ''}</td>
               </tr>
             ))}
@@ -5969,6 +5990,28 @@ function App() {
   };
   const [qCpSearch, setQCpSearch] = useState(''); // v60.1: фильтр по контрагенту в блоке «Платежи из банка» (Налоги)
   const [hlMvtId, setHlMvtId] = useState(null); // v67.8: подсветка строки платежа после перехода из карточки фактуры
+  const [hlReceiptId, setHlReceiptId] = useState(null); // v95: подсветка фактуры после перехода из журнала
+  const [hlCashId, setHlCashId] = useState(null); // v95: подсветка строки Cash после перехода из журнала
+  // v95: переход из журнала действий к записи (вкладка + подсветка + прокрутка)
+  const jumpFromLog = (kind, eid) => {
+    const id = String(eid);
+    if (kind === 'receipts') {
+      setActiveTab('list');
+      setHlReceiptId(id);
+      setTimeout(() => { const el = document.getElementById(`rc-${id}`); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 700);
+      setTimeout(() => setHlReceiptId(null), 8000);
+    } else if (kind === 'cash-movements') {
+      setActiveTab('cash');
+      setHlCashId(id);
+      setTimeout(() => { const el = document.getElementById(`cash-row-${id}`); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 700);
+      setTimeout(() => setHlCashId(null), 8000);
+    } else if (kind === 'bank-movements') {
+      setActiveTab('taxes');
+      setHlMvtId(id);
+      setTimeout(() => { const el = document.getElementById(`mvt-row-${id}`); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 700);
+      setTimeout(() => setHlMvtId(null), 8000);
+    }
+  };
   // v63: слоты запоминания выбранных платежей (1..5) — сохранить выбор / вывести сохранённый (localStorage)
   const [pmSelected, setPmSelected] = useState({}); // id → true (текущий выбор галками в строках)
   const [pmSlots, setPmSlots] = useState(() => { try { return JSON.parse(localStorage.getItem('bankPaySlots') || '{}'); } catch { return {}; } });
@@ -8451,7 +8494,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-26 · v94 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-27 · v95 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9007,7 +9050,7 @@ ${bodyHtml}
                         <div style={{ flex: 1, height: 1, background: '#e3e6ea' }} />
                       </div>
                     )}
-                    <div className="receipt-card">
+                    <div className="receipt-card" id={`rc-${receipt.id}`} style={hlReceiptId === String(receipt.id) ? { boxShadow: '0 0 0 3px #f0c36d', background: '#fffbe6', scrollMarginTop: 110 } : { scrollMarginTop: 110 }}>
                       {/* flexWrap + min-ширина заголовка: длинный бейдж типа (🤝 КОММ. ПРЕДЛОЖЕНИЕ)
                           на узком экране уходит ПОД заголовок, а не сжимает его до 3 букв в строке */}
                       <div className="receipt-header" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, paddingTop: 2, flexWrap: 'wrap' }}>
@@ -10323,8 +10366,9 @@ ${bodyHtml}
               const dirty = isDirty(m);
               const amtN = Number(rowVal(m, 'amount'));
               return (
-                <div key={m.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '5px 0', borderBottom: '1px solid #f0f0f0', fontSize: 13, flexWrap: 'wrap',
-                  background: cashSel[m.id] ? '#eef4ff' : dirty ? '#fff8e1' : 'transparent', borderRadius: (dirty || cashSel[m.id]) ? 6 : 0 }}>
+                <div key={m.id} id={`cash-row-${m.id}`} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '5px 0', borderBottom: '1px solid #f0f0f0', fontSize: 13, flexWrap: 'wrap', scrollMarginTop: 120,
+                  background: hlCashId === String(m.id) ? '#fff3bf' : cashSel[m.id] ? '#eef4ff' : dirty ? '#fff8e1' : 'transparent', borderRadius: (dirty || cashSel[m.id] || hlCashId === String(m.id)) ? 6 : 0,
+                  boxShadow: hlCashId === String(m.id) ? '0 0 0 2px #f0c36d' : 'none' }}>
                   <input type="checkbox" checked={!!cashSel[m.id]} title="Выбрать строку — затем «🗑 удалить выбранные»"
                     onChange={() => setCashSel(prev => { const nx = { ...prev }; if (nx[m.id]) delete nx[m.id]; else nx[m.id] = true; return nx; })}
                     style={{ cursor: 'pointer', accentColor: '#1d4ed8' }} />
@@ -10373,7 +10417,7 @@ ${bodyHtml}
       })()}
 
       {activeTab === 'chat' && tabAllowed('chat') && <ChatTab user={user} token={token} />}
-      {activeTab === 'log' && user?.role === 'admin' && <LogTab token={token} />}
+      {activeTab === 'log' && user?.role === 'admin' && <LogTab token={token} onJump={jumpFromLog} />}
 
       {/* Вкладка «Документы» (v40) */}
       {activeTab === 'docs' && <DocsTab user={user} token={token} />}

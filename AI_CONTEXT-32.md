@@ -2093,3 +2093,9 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - activity_log добавлена в TABLES бэкапа (17 таблиц).
 - App.js: компонент LogTab (фильтры пользователь/раздел/даты/поиск, таблица, «Показать ещё»); кнопка 📋 Журнал в навигации только для admin; TAB_LABELS += log.
 - Health: v94-2026-08-26.
+
+## v95 (2026-08-27) — кликабельные ссылки в журнале (frontend-only)
+- LogTab: prop onJump; из details парсится /api/(receipts|cash-movements|bank-movements)/<id> или receipt_id: <id> → кнопка «🔗 открыть» рядом с деталями.
+- App: jumpFromLog(kind, id) — переключает вкладку (list/cash/taxes), ставит hlReceiptId/hlCashId/hlMvtId (8 сек), scrollIntoView по id элемента (rc-<id>, cash-row-<id>, mvt-row-<id>).
+- Подсветка: receipt-card (boxShadow #f0c36d + фон #fffbe6), cash row (#fff3bf + рамка), bank movement — существующий механизм hlMvtId.
+- Бэкенд не менялся (health v94-2026-08-26). App.js: сборка v95.
