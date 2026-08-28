@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v99-2026-08-28', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v100-2026-08-28', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -1031,11 +1031,26 @@ async function runWithConcurrency(items, worker, concurrency = 3) {
   const lanes = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
     while (idx < items.length) {
       const i = idx++;
-      try {
-        results[i] = await worker(items[i], i);
-      } catch (e) {
-        console.error(`page ${i + 1} failed:`, e.message);
-        results[i] = `(ошибка распознавания страницы: ${String(e.message).slice(0, 150)})`;
+      // v100: 429 (rate limit) — повторные попытки с нарастающей паузой, страница не теряется
+      let lastErr = null;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        try {
+          results[i] = await worker(items[i], i);
+          lastErr = null;
+          break;
+        } catch (e) {
+          lastErr = e;
+          const msg = String(e.message || '');
+          const is429 = /429|rate.?limit|too many|quota/i.test(msg);
+          if (!is429 || attempt === 4) break;
+          const wait = [5000, 15000, 30000, 60000][attempt];
+          console.warn(`page ${i + 1}: 429 rate limit — повтор через ${wait / 1000}с (попытка ${attempt + 2}/5)`);
+          await new Promise(r => setTimeout(r, wait));
+        }
+      }
+      if (lastErr) {
+        console.error(`page ${i + 1} failed:`, lastErr.message);
+        results[i] = `(ошибка распознавания страницы: ${String(lastErr.message).slice(0, 150)})`;
       }
     }
   });
