@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v98-2026-08-27', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v99-2026-08-28', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -1955,9 +1955,17 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
 
   // JSON-сводка полей (начало + конец документа; для годовой отчётности — страницы с балансом/P&L,
   // уже сконвертированные в таблицы — касильи извлекаются точнее)
-  const sample = isFormDoc
-    ? buildAnnualAccountsSample(effTexts)
-    : `${raw_text.slice(0, 12000)}\n\n…(середина документа опущена)…\n\n${raw_text.slice(-5000)}`;
+  let sample;
+  if (isFormDoc) {
+    sample = buildAnnualAccountsSample(effTexts);
+  } else if (pageCount > 1 && raw_text.length > 18000) {
+    // v99: ОДИН документ из нескольких файлов/страниц — AI получает начало и конец КАЖДОЙ страницы,
+    // иначе позиции со средних страниц (длинные чеки/фактуры) теряются в «опущенной середине»
+    sample = `ИНСТРУКЦИЯ: все ${pageCount} страниц — это ОДИН документ. Список товаров/позиций может ПРОДОЛЖАТЬСЯ со страницы на страницу — собери позиции СО ВСЕХ страниц. total_amount — ФИНАЛЬНЫЙ итог документа (TOTAL / Total factura, обычно на последней странице), а НЕ сумма итогов страниц. Ниже — начало и конец каждой страницы:\n\n` +
+      effTexts.map((t, i) => `══════ СТРАНИЦА ${i + 1} из ${pageCount} ══════\n${t.slice(0, 3500)}${t.length > 5200 ? `\n…(середина страницы опущена)…\n${t.slice(-1700)}` : ''}`).join('\n\n').slice(0, 32000);
+  } else {
+    sample = `${raw_text.slice(0, 12000)}\n\n…(середина документа опущена)…\n\n${raw_text.slice(-5000)}`;
+  }
   let data;
   try {
     data = parseAIResponse(await callTextChain(
