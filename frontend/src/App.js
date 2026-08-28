@@ -2119,7 +2119,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v101 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v102 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -7432,12 +7432,17 @@ ${bodyHtml}
       String(r.valid_from || ''), String(r.valid_to || ''),
       String(r.supply_address || ''), String(r.invoice_number || ''), String(r.contract_number || ''),
       String(r.cups || ''), String(r.meter_number || ''),
+      // v102: контрагенты, содержание, статус оплаты, даты создания — поиск действительно по всему
+      String(r.party_a || ''), String(r.party_b || ''), String(r.summary || ''),
+      String(r.payment_status || ''), String((PAYMENT_STATUS_META[r.payment_status]||{}).label || ''),
+      String(r.created_at || ''), String(r.store_address || ''), String(r.doc_kind || ''),
     ];
     const itemsText = (r.items || []).map(i =>
       `${i.name || ''} ${i.name_ru || ''} ${i.price || ''} ${i.quantity || ''} ${i.total || ''} ${i.category || ''} ${i.sku || ''}`
     ).join(' ');
-    const allText = searchFields.join(' ') + ' ' + itemsText;
-    return allText.toLowerCase().includes(q);
+    const allText = (searchFields.join(' ') + ' ' + itemsText).toLowerCase();
+    // v102: запрос из нескольких слов — ищем ВСЕ слова (в любом порядке, по всем полям)
+    return q.split(/\s+/).every(w => allText.includes(w));
   });
 
   // Поиск дубликатов: одинаковые магазин + дата чека + итоговая сумма.
@@ -8599,7 +8604,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-28 · v101 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-28 · v102 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8876,7 +8881,8 @@ ${bodyHtml}
               <button onClick={() => { setPlannedPickMode(false); setActiveTab('analysis'); setPlannedModal(true); }} style={{ marginLeft: 'auto', border: '1px solid #8e44ad', background: '#fff', color: '#8e44ad', borderRadius: 980, padding: '4px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>← Назад к платежу без выбора</button>
             </div>
           )}
-          <div className="filters" style={{ flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
+          <div className="filters" style={{ flexWrap: 'wrap', gap: '8px', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', flex: '1 1 auto' }}>
             <ExcelFilter label="Год" options={availableYears.map(y => ({ value: y, label: String(y) }))} selected={filterYears} onChange={v => { setFilterYears(v); setCurrentPage(1); }} />
             <ExcelFilter label="Месяц" options={MONTH_NAMES.map((n, i) => ({ value: i + 1, label: n }))} selected={filterMonths} onChange={v => { setFilterMonths(v); setCurrentPage(1); }} />
             <ExcelFilter label="Тип" options={Object.entries(DOC_TYPE_LABELS).map(([v, l]) => ({ value: v, label: l }))} selected={filterTypes} onChange={v => { setFilterTypes(v); setCurrentPage(1); }} />
@@ -8890,8 +8896,10 @@ ${bodyHtml}
               { value: 'huge', label: 'Δ более 20' },
               { value: 'empty', label: '— Нет сумм' }
             ]} selected={filterDiffs} onChange={v => { setFilterDiffs(v); setCurrentPage(1); }} />
-            <input type="text" placeholder="🔍 Поиск..." value={searchQuery} onChange={e => {setSearchQuery(e.target.value); setCurrentPage(1);}}
-              style={{ flex: '1 1 140px', maxWidth: 200, padding: '6px 10px', fontSize: 13, borderRadius: 6, border: '1px solid #ccc' }} />
+            <input type="text" placeholder="🔍 Поиск по всему: название, товары, текст, контрагент, сумма, адрес…" value={searchQuery} onChange={e => {setSearchQuery(e.target.value); setCurrentPage(1);}}
+              style={{ flex: '1 1 260px', maxWidth: 460, padding: '6px 10px', fontSize: 13, borderRadius: 6, border: '1px solid #ccc' }} />
+            </div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
             <select value={itemsPerPage} onChange={e => {setItemsPerPage(e.target.value === 'all' ? 'all' : parseInt(e.target.value)); setCurrentPage(1);}}
               style={{ padding: '6px 8px', fontSize: 13, borderRadius: 6, border: '1px solid #ccc', width: 'auto' }}>
               {ITEMS_PER_PAGE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt === 'all' ? 'Все' : opt}</option>)}
@@ -8910,6 +8918,7 @@ ${bodyHtml}
             >
               🔍 Дубликаты{dupCopyIds.size > 0 ? ` (${dupCopyIds.size})` : ''}
             </button>
+            </div>
           </div>
 
           {selectedReceiptIds.size > 0 && (

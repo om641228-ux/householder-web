@@ -2131,3 +2131,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - POST /api/receipts/:id/recognize-failed-pages (writeTabGuard('list'), owner-or-admin): raw_text режется по маркерам «СТРАНИЦА N из M», ищутся страницы «(ошибка распознавания…», их фото качаются из page_urls, OCR extractPageTextWithGemini с ретраями 5/15/30с при 429; затем finalizeDocumentFromPageTexts по всем страницам и update receipts (raw_text, raw_text_ru, items + заполненные поля). Лог в activity_log.
 - App.js: reocrBusy + recognizeFailedPages(receipt); кнопка «🔄 Исправить ошибки» в шапке текстовой панели карточки, видна когда raw_text содержит «ошибка распознавания».
 - Health v101-2026-08-28, сборка v101.
+
+## v102 (2026-08-28) — поиск по всему + выравнивание тулбара (frontend-only)
+- Поиск чеков: +party_a, party_b, summary, payment_status (с русской меткой), created_at, store_address, doc_kind; многословный запрос = ВСЕ слова (AND) в любом порядке.
+- Тулбара «Фактуры»: контейнер justify-content: space-between; левая группа (фильтры+поиск, поиск flex до 460px), правая группа (20/Excel/Обновить/Дубликаты) marginLeft auto.
+- Placeholder поиска: «Поиск по всему: название, товары, текст, контрагент, сумма, адрес…». Сборка v102.
