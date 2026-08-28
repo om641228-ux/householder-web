@@ -2126,3 +2126,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - index.js finalizeDocumentFromPageTexts: при pageCount>1 и тексте >18000 — sample = инструкция слияния + начало/конец КАЖДОЙ страницы (3500+1700, всего ≤32000) вместо глобальных начала/конца — позиции со средних страниц не теряются; AI предупреждён, что это ОДИН документ, итог — финальный TOTAL, не сумма страниц.
 - App.js: при выбранных нескольких файлах в режиме «Авто» — кнопка «📑 Один чек из N файлов» → recognizeDocumentPages.
 - Health v99-2026-08-28, сборка v99.
+
+## v101 (2026-08-28) — «🔄 Исправить ошибки» — перераспознавание битых страниц
+- POST /api/receipts/:id/recognize-failed-pages (writeTabGuard('list'), owner-or-admin): raw_text режется по маркерам «СТРАНИЦА N из M», ищутся страницы «(ошибка распознавания…», их фото качаются из page_urls, OCR extractPageTextWithGemini с ретраями 5/15/30с при 429; затем finalizeDocumentFromPageTexts по всем страницам и update receipts (raw_text, raw_text_ru, items + заполненные поля). Лог в activity_log.
+- App.js: reocrBusy + recognizeFailedPages(receipt); кнопка «🔄 Исправить ошибки» в шапке текстовой панели карточки, видна когда raw_text содержит «ошибка распознавания».
+- Health v101-2026-08-28, сборка v101.

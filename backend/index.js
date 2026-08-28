@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v100-2026-08-28', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v101-2026-08-28', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -4091,6 +4091,59 @@ app.delete('/api/receipts/:id', requireAuth, requireRole('admin', 'manager'), wr
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// v101: перераспознать страницы с ошибками (429 и т.п.) — фото страниц уже в Storage (page_urls)
+app.post('/api/receipts/:id/recognize-failed-pages', requireAuth, requireRole('admin', 'manager', 'buchhalter', 'user'), writeTabGuard('list'), async (req, res) => {
+  try {
+    const { data: r, error: e0 } = await supabaseAdmin.from('receipts').select('id, owner_id, raw_text, raw_text_ru, page_urls, currency, document_type').eq('id', req.params.id).maybeSingle();
+    if (e0) throw e0;
+    if (!r) return res.status(404).json({ error: 'Документ не найден' });
+    if (req.user.role !== 'admin' && r.owner_id && r.owner_id !== req.user.id) return res.status(403).json({ error: 'Это запись другого пользователя' });
+    const pages = Array.isArray(r.page_urls) ? r.page_urls.filter(Boolean) : [];
+    if (!pages.length) return res.status(400).json({ error: 'У документа нет сохранённых изображений страниц (page_urls) — перезагрузите файлы' });
+    // Разбираем raw_text на страницы по маркерам «══════ СТРАНИЦА N из M ══════»
+    const parts = String(r.raw_text || '').split(/══════ СТРАНИЦА \d+ из \d+ ══════/);
+    const pageTexts = parts.length > 1 ? parts.slice(1) : [String(r.raw_text || '')];
+    const failedIdx = [];
+    pageTexts.forEach((t, i) => { if (/^\s*\((ошибка|страница не распознана)/i.test(t) || /ошибка распознавания страницы/i.test(t.slice(0, 200))) failedIdx.push(i); });
+    if (!failedIdx.length) return res.json({ ok: true, retried: 0, message: 'Страниц с ошибками нет' });
+    const axios = require('axios');
+    let fixed = 0;
+    const stillFailed = [];
+    for (const i of failedIdx) {
+      const url = pages[i];
+      if (!url) { stillFailed.push(i + 1); continue; }
+      try {
+        const resp = await axios.get(url, { responseType: 'arraybuffer', timeout: 60000 });
+        const mime = /\.pdf(\?|$)/i.test(url) ? 'application/pdf' : (/\.png(\?|$)/i.test(url) ? 'image/png' : 'image/jpeg');
+        // до 4 попыток с паузой при 429
+        let txt = null, lastE = null;
+        for (let a = 0; a < 4; a++) {
+          try { txt = await extractPageTextWithGemini(Buffer.from(resp.data), mime, i + 1, pageTexts.length); lastE = null; break; }
+          catch (e2) {
+            lastE = e2;
+            if (!/429|rate.?limit|too many|quota/i.test(String(e2.message)) || a === 3) break;
+            await new Promise(rr => setTimeout(rr, [5000, 15000, 30000][a]));
+          }
+        }
+        if (txt && !/^\(ошибка/i.test(txt)) { pageTexts[i] = txt; fixed++; }
+        else { stillFailed.push(i + 1); if (lastE) console.warn(`стр. ${i + 1}: повтор не удался —`, lastE.message); }
+      } catch (e3) { stillFailed.push(i + 1); console.warn(`стр. ${i + 1}: загрузка/OCR не удался —`, e3.message); }
+    }
+    if (!fixed) return res.status(502).json({ error: `Не удалось перераспознать (страницы: ${stillFailed.join(', ')}) — попробуйте позже` });
+    // Пересобираем документ из всех страниц (старая логика сводки)
+    const data = await finalizeDocumentFromPageTexts(pageTexts, r.currency || 'EUR', r.document_type || null);
+    const upd = { raw_text: data.raw_text, raw_text_ru: data.raw_text_ru, items: Array.isArray(data.items) ? data.items : [] };
+    for (const k of ['store_name', 'store_name_ru', 'receipt_date', 'total_amount', 'subtotal', 'tax_amount', 'document_type', 'subtype', 'invoice_number', 'provider', 'summary']) {
+      if (data[k] !== undefined && data[k] !== null && data[k] !== '') upd[k] = data[k];
+    }
+    const columns = await getTableColumns();
+    const { error: e1 } = await supabaseAdmin.from('receipts').update(filterRecordByColumns(upd, columns)).eq('id', r.id);
+    if (e1) throw e1;
+    logActivity(req.user, 'Чеки', 'перераспознавание страниц', `id: ${r.id} · исправлено страниц: ${fixed}${stillFailed.length ? ', остались ошибки: стр. ' + stillFailed.join(',') : ''}`, req);
+    res.json({ ok: true, retried: failedIdx.length, fixed, stillFailed, total: pageTexts.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ========== UPDATE RECEIPT (редактирование полей документа) ==========

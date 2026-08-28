@@ -2119,7 +2119,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v99 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v101 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -5523,6 +5523,23 @@ function App() {
   };
 
   // v69.7: «Загрузить ZIP» — подтверждение, затем сборка одного архива (папка на каждый чек)
+  // v101: перераспознать страницы с ошибками (429) — бэкенд берёт фото из Storage и повторяет OCR
+  const [reocrBusy, setReocrBusy] = useState(false);
+  const recognizeFailedPages = async (receipt) => {
+    if (!receipt || reocrBusy) return;
+    setReocrBusy(true);
+    try {
+      const r = await fetch(`${API_URL}/api/receipts/${receipt.id}/recognize-failed-pages?token=${token}`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      if (j.retried === 0) { alert('Страниц с ошибками нет — всё распознано.'); return; }
+      alert(`🔄 Готово: исправлено страниц ${j.fixed} из ${j.retried}${j.stillFailed && j.stillFailed.length ? `\nНе удалось: стр. ${j.stillFailed.join(', ')} — попробуйте позже` : ''}\nКарточка обновлена (текст, позиции, сумма).`);
+      setViewModal(null);
+      await loadReceipts();
+    } catch (e) { alert('Перераспознавание не удалось: ' + e.message); }
+    finally { setReocrBusy(false); }
+  };
+
   // v72: скачать полный бэкап проекта (admin): все таблицы + манифест файлов, ZIP
   const downloadBackup = async () => {
     setBackupBusy(true);
@@ -7988,6 +8005,13 @@ ${bodyHtml}
                           {langBtn('ru', '🇷🇺 Перевод', !!pageRu)}
                           {langBtn('orig', 'Оригинал', !!pageOrig)}
                           <span style={{ fontSize: 11, color: '#95a5a6', alignSelf: 'center' }}>стр. {idx + 1}</span>
+                          {String(viewModal.raw_text || '').includes('ошибка распознавания') && (
+                            <button type="button" onClick={() => recognizeFailedPages(viewModal)} disabled={reocrBusy}
+                              title="Страницы с ошибкой (лимит AI 429) — повторить распознавание по сохранённым фото"
+                              style={{ marginLeft: 'auto', padding: '3px 10px', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer', border: '1px solid #e67e22', background: '#fff7ec', color: '#d35400' }}>
+                              {reocrBusy ? '⏳ Распознаю…' : '🔄 Исправить ошибки'}
+                            </button>
+                          )}
                         </div>
                         {bothMode ? (
                           <div style={{ maxHeight: isNarrowModal ? '45vh' : '55vh', overflowY: 'auto', overflowX: 'hidden', background: '#f8f9fa', border: '1px solid #e0e6ed', borderRadius: 8, padding: '10px 12px', fontSize: 13, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere', color: '#2c3e50' }}>
@@ -8575,7 +8599,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-28 · v99 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-28 · v101 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
