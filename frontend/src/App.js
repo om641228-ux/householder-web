@@ -1,3 +1,6 @@
+/////
+/////
+/////
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import './App.css';
 import './apple-theme.css'; // Apple-стиль (apple.com): пилюльные кнопки, мягкие карточки, #0071e3 — v31
