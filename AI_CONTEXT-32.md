@@ -2173,3 +2173,9 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Карточка на мобильном: supply_address скрыт.
 - PWA: backend GET /manifest.json + /pwa-icon-192.png + /pwa-icon-512.png (sharp растеризует SVG 🧾 на #0071e3), CORS *; frontend useEffect добавляет link manifest, apple-touch-icon, theme-color и пр. Service worker НЕ регистрируем (риск старого кэша).
 - health build v106-2026-08-29. App.js md5 ниже, index.js md5 ниже.
+
+## v106.2 (2026-08-29) — мобильная версия: правки UX
+- body.mobile-view .tabs-inline{display:none} — верхнее меню вкладок скрыто, только нижняя навигация.
+- body.mobile-view .recognize-bar{display:none} — кнопки «Распознать»/«Mac OCR» перенесены в шапку (между «Выбор модели» и «Выйти»), видны только на вкладке upload; ⚡ показывает % прогресса.
+- Свайп влево/вправо по экрану: onTouchStart/onTouchEnd на div.App, dx>70, dy<60, порядок mobileTabsOrder (list, upload, cash, crm, analysis, taxes, docs, chat, users, log — с tabAllowed), игнор при касании модалок/инпутов.
+- App.js md5 de2661e1d69546bcf4511cba5ad03412.

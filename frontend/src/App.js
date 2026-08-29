@@ -767,6 +767,8 @@ const MOBILE_CSS = `
   .receipt-thumb { max-height: 220px; }
 }
 body.mobile-view { padding-bottom: 72px; } /* место под нижнюю навигацию */
+body.mobile-view .tabs-inline { display: none !important; } /* v106.2: верхнее меню скрыто — его заменяет нижняя навигация */
+body.mobile-view .recognize-bar { display: none !important; } /* v106.2: кнопки распознавания переехали в шапку */
 .mobile-bottomnav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1100; display: flex; background: rgba(255,255,255,0.96); backdrop-filter: blur(12px); border-top: 1px solid #d8dce1; padding: 4px 2px calc(4px + env(safe-area-inset-bottom)); }
 .mobile-bottomnav button { flex: 1; border: none; background: none; font-size: 10px; color: #6e6e73; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 5px 0; min-height: 48px; cursor: pointer; }
 .mobile-bottomnav button.active { color: #0071e3; font-weight: 700; }
@@ -2157,7 +2159,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.1 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.2 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -4424,6 +4426,44 @@ function App() {
     document.body.classList.toggle('mobile-view', isMobileView);
     return () => document.body.classList.remove('mobile-view');
   }, [isMobileView]);
+
+  // v106.2: свайп влево/вправо по экрану — переход между разделами (порядок нижней навигации + «Ещё»)
+  const gotoTab = (t) => {
+    setActiveTab(t);
+    if (t === 'list') loadReceipts();
+    if (t === 'analysis') { loadReceipts(); loadBankMovements(); loadPlannedPayments(); }
+    if (t === 'taxes') { loadReceipts(); loadBankMovements(); }
+    if (t === 'cash') { loadReceipts(); loadCashMovements(); }
+  };
+  const mobileTabsOrder = [
+    tabAllowed('list') && 'list',
+    user?.role !== 'viewer' && tabAllowed('upload') && 'upload',
+    tabAllowed('cash') && 'cash',
+    (user?.role === 'admin' || user?.role === 'manager' || user?.role === 'user') && tabAllowed('crm') && 'crm',
+    tabAllowed('analysis') && 'analysis',
+    tabAllowed('taxes') && 'taxes',
+    tabAllowed('docs') && 'docs',
+    tabAllowed('chat') && 'chat',
+    user?.role === 'admin' && 'users',
+    user?.role === 'admin' && 'log'
+  ].filter(Boolean);
+  const swipeRef = useRef(null);
+  const onAppTouchStart = (e) => {
+    if (!isMobileView) return;
+    if (e.target.closest('.modal-overlay, .modal-content, .model-modal-overlay, .mobile-more-sheet, input, textarea, select')) return;
+    swipeRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  };
+  const onAppTouchEnd = (e) => {
+    if (!isMobileView || !swipeRef.current) return;
+    const dx = e.changedTouches[0].clientX - swipeRef.current.x;
+    const dy = e.changedTouches[0].clientY - swipeRef.current.y;
+    swipeRef.current = null;
+    if (Math.abs(dx) < 70 || Math.abs(dy) > 60) return; // только чёткий горизонтальный свайп
+    const i = mobileTabsOrder.indexOf(activeTab);
+    if (i < 0) return;
+    const next = dx < 0 ? mobileTabsOrder[i + 1] : mobileTabsOrder[i - 1];
+    if (next) gotoTab(next);
+  };
 
   // v106: PWA — манифест отдаёт бэкенд (/manifest.json + иконки), подключаем динамически.
   // Service worker НЕ регистрируем сознательно: SW-кэш уже дважды показывал старую сборку.
@@ -7800,7 +7840,7 @@ ${bodyHtml}
   }
 
   return (
-    <div className="App">
+    <div className="App" onTouchStart={onAppTouchStart} onTouchEnd={onAppTouchEnd}>
       <header className="mini-header" style={{ borderRadius: 16, margin: '10px 12px 0', overflow: 'hidden' }}>
         <div className="header-left">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, width: '100%' }}>
@@ -7814,6 +7854,23 @@ ${bodyHtml}
                 style={{ border: '1px solid #d0d0d5', background: uiMode === 'auto' ? '#fff' : '#e8f0fe', borderRadius: 8, padding: '5px 9px', fontSize: 14, cursor: 'pointer' }}
               >{uiMode === 'desktop' ? '🖥' : '📱'}</button>
             </div>
+            {/* v106.2: на мобильном кнопки распознавания — в шапке, между «Выбор модели» и «Выйти» */}
+            {isMobileView && activeTab === 'upload' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <button
+                  onClick={() => recognizeAndSave()}
+                  disabled={!selectedFiles.length || recognizing}
+                  title="Распознать и сохранить (AI)"
+                  style={{ border: 'none', background: (!selectedFiles.length || recognizing) ? '#c7d7ea' : '#0071e3', color: '#fff', borderRadius: 9, padding: '7px 12px', fontSize: 14, fontWeight: 700, cursor: (!selectedFiles.length || recognizing) ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}
+                >{recognizing && progressStage ? `⚡ ${uploadProgress}%` : '⚡ Распознать'}</button>
+                <button
+                  onClick={recognizeViaMacOcr}
+                  disabled={!selectedFiles.length || recognizing}
+                  title="Локально (Mac OCR, бесплатно)"
+                  style={{ border: '1.5px solid #27ae60', background: '#f0faf4', color: '#1e8449', borderRadius: 9, padding: '6px 10px', fontSize: 14, fontWeight: 700, cursor: (!selectedFiles.length || recognizing) ? 'not-allowed' : 'pointer', opacity: (!selectedFiles.length || recognizing) ? 0.55 : 1, whiteSpace: 'nowrap' }}
+                >🖥</button>
+              </div>
+            )}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <span className="user-name">{formatUserName(user)}</span>
               <button className="logout-btn" onClick={logout}>Выйти</button>
@@ -8789,7 +8846,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-29 · v106.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-29 · v106.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
