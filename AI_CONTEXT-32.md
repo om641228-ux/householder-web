@@ -2165,3 +2165,11 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Failover в /api/upload-document-pages: baseVisionFn обёрнут; при 404/429/no endpoints/unavailable/suspended/decommission → упавшая модель помечается active:false в кэше, берётся первая активная openrouter/github/mistral/kimi из кэша, logActivity 'model-failover', job.result.failover={from,to}, recognitionMethod содержит «→ failover X».
 - Frontend: loadModels(force), строка «фоновая проверка: <дата>» в модалке, кнопка 🔍 в каждой строке, тост об автопереключении (одиночная загрузка — alert; папка — строка status:'info' в результатах).
 - health build v105-2026-08-29. App.js md5 42ca294f2f8bd688cade9dd39cccf8dd, index.js md5 52816eea8614e104c6d5b752cb539059.
+
+## v106 (2026-08-29) — мобильная адаптация (1+2+3)
+- ui_mode в localStorage: auto|mobile|desktop; isMobileView = mobile || (auto && (winWidth≤768 || mobileUA && ≤1024)); кнопка 📱/🖥 в шапке (cycleUiMode); body.mobile-view.
+- MOBILE_CSS (модульный const): @media ≤768px или coarse-pointer ≤1024 — шапка компактная, табы горизонт. скролл, карточки 1 колонка, фильтры в столбец, модалки fullscreen (100dvh), input font-size 16px (анти-зум iOS), тач-зоны ≥36px, .mobile-bottomnav, .mobile-more-sheet (safe-area-inset-bottom).
+- Нижняя навигация (isMobileView): Фактуры/Загрузка/Cash/CRM/⋯Ещё (шторка: Анализ, Налоги, Документы, Чат, Доступ, Журнал, Выбор модели, переключатель версии).
+- Карточка на мобильном: supply_address скрыт.
+- PWA: backend GET /manifest.json + /pwa-icon-192.png + /pwa-icon-512.png (sharp растеризует SVG 🧾 на #0071e3), CORS *; frontend useEffect добавляет link manifest, apple-touch-icon, theme-color и пр. Service worker НЕ регистрируем (риск старого кэша).
+- health build v106-2026-08-29. App.js md5 ниже, index.js md5 ниже.

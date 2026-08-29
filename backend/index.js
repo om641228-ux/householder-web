@@ -315,7 +315,50 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v105-2026-08-29', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v106-2026-08-29', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'pwa'] }));
+
+// ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
+// Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
+// SW-кэш дважды отдавал пользователям старую сборку, обновления важнее офлайна.
+const PWA_ICON_SVG = (size) => `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">
+  <rect width="${size}" height="${size}" rx="${Math.round(size * 0.22)}" fill="#0071e3"/>
+  <text x="50%" y="54%" font-size="${Math.round(size * 0.52)}" text-anchor="middle" dominant-baseline="middle">🧾</text>
+</svg>`;
+
+app.get('/manifest.json', (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Content-Type', 'application/manifest+json');
+  res.json({
+    name: 'Фактуры — Householder',
+    short_name: 'Фактуры',
+    description: 'Учёт чеков, фактур и документов',
+    start_url: '.',
+    scope: '.',
+    display: 'standalone',
+    orientation: 'portrait',
+    background_color: '#f5f5f7',
+    theme_color: '#0071e3',
+    icons: [
+      { src: '/pwa-icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: '/pwa-icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+      { src: '/pwa-icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }
+    ]
+  });
+});
+
+const pwaIcon = (size) => async (req, res) => {
+  try {
+    const png = await sharp(Buffer.from(PWA_ICON_SVG(size))).png().toBuffer();
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Content-Type', 'image/png');
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.send(png);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+};
+app.get('/pwa-icon-192.png', pwaIcon(192));
+app.get('/pwa-icon-512.png', pwaIcon(512));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========

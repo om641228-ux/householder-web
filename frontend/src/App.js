@@ -744,6 +744,37 @@ function HighlightText({ text, query, style = {} }) {
 // v104: флажок «полное совпадение» — App выставляет этот флаг, HighlightText его читает
 let HL_EXACT = false;
 
+// v106: мобильный CSS-пакет — срабатывает по ширине ≤768px (адаптив) и/или по классу .mobile-view
+// на <body> (когда пользователь принудительно включил мобильную версию переключателем 📱/🖥)
+const MOBILE_CSS = `
+@media (max-width: 768px), (max-width: 1024px) and (pointer: coarse) {
+  body.mobile-view .mini-header, .mini-header { margin: 6px 6px 0 !important; border-radius: 12px !important; }
+  .tabs-inline { flex-wrap: nowrap !important; overflow-x: auto !important; -webkit-overflow-scrolling: touch; scrollbar-width: none; padding-bottom: 2px; }
+  .tabs-inline::-webkit-scrollbar { display: none; }
+  .tabs-inline button { flex: 0 0 auto; min-height: 38px; font-size: 13px; padding: 8px 12px; }
+  .receipts-grid { grid-template-columns: 1fr !important; }
+  .filters { flex-direction: column !important; align-items: stretch !important; }
+  .filters > div { width: 100%; margin-left: 0 !important; justify-content: flex-start !important; flex-wrap: wrap !important; }
+  .filters input[type="text"] { max-width: none !important; flex: 1 1 100% !important; }
+  .filters select, .filters button { min-height: 38px; }
+  .modal-overlay { padding: 0 !important; }
+  .modal-content { width: 100vw !important; max-width: 100vw !important; height: 100dvh !important; max-height: 100dvh !important; border-radius: 0 !important; margin: 0 !important; }
+  .model-modal-content { width: 100vw !important; max-width: 100vw !important; height: 100dvh !important; max-height: 100dvh !important; border-radius: 0 !important; margin: 0 !important; }
+  .model-modal-body table { font-size: 12px; }
+  input, select, textarea { font-size: 16px !important; } /* против авто-зума iOS при фокусе */
+  button { min-height: 36px; }
+  table { font-size: 12px; }
+  .receipt-thumb { max-height: 220px; }
+}
+body.mobile-view { padding-bottom: 72px; } /* место под нижнюю навигацию */
+.mobile-bottomnav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1100; display: flex; background: rgba(255,255,255,0.96); backdrop-filter: blur(12px); border-top: 1px solid #d8dce1; padding: 4px 2px calc(4px + env(safe-area-inset-bottom)); }
+.mobile-bottomnav button { flex: 1; border: none; background: none; font-size: 10px; color: #6e6e73; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 5px 0; min-height: 48px; cursor: pointer; }
+.mobile-bottomnav button.active { color: #0071e3; font-weight: 700; }
+.mobile-bottomnav button .mbn-ico { font-size: 20px; line-height: 1.2; }
+.mobile-more-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1200; background: #fff; border-radius: 16px 16px 0 0; box-shadow: 0 -8px 30px rgba(0,0,0,0.25); padding: 10px 14px calc(14px + env(safe-area-inset-bottom)); }
+.mobile-more-sheet button { display: block; width: 100%; text-align: left; border: none; background: none; padding: 13px 8px; font-size: 16px; border-bottom: 1px solid #f0f0f2; cursor: pointer; }
+`;
+
 const ReceiptScanner = registerPlugin('ReceiptScannerPlugin');
 
 // ========== CRM (вкладка «🤝 CRM», v34): календарь с задачами, контрагенты, справочник ==========
@@ -2126,7 +2157,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v105 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -4376,6 +4407,41 @@ function App() {
     const onResize = () => setWinWidth(window.innerWidth);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // v106: мобильный режим интерфейса.
+  // ui_mode: 'auto' (телефон/узкий экран → мобильная версия), 'mobile' (всегда), 'desktop' (всегда)
+  const [uiMode, setUiMode] = useState(() => { try { return localStorage.getItem('ui_mode') || 'auto'; } catch { return 'auto'; } });
+  const isMobileUA = /iPhone|iPad|iPod|Android|Mobile/i.test(navigator.userAgent || '');
+  const isMobileView = uiMode === 'mobile' || (uiMode === 'auto' && (winWidth <= 768 || (isMobileUA && winWidth <= 1024)));
+  const cycleUiMode = () => {
+    const next = uiMode === 'auto' ? 'mobile' : uiMode === 'mobile' ? 'desktop' : 'auto';
+    setUiMode(next);
+    try { localStorage.setItem('ui_mode', next); } catch {}
+  };
+  const [moreNavOpen, setMoreNavOpen] = useState(false); // нижняя навигация — меню «Ещё»
+  useEffect(() => {
+    document.body.classList.toggle('mobile-view', isMobileView);
+    return () => document.body.classList.remove('mobile-view');
+  }, [isMobileView]);
+
+  // v106: PWA — манифест отдаёт бэкенд (/manifest.json + иконки), подключаем динамически.
+  // Service worker НЕ регистрируем сознательно: SW-кэш уже дважды показывал старую сборку.
+  useEffect(() => {
+    const add = (tag, attrs) => {
+      if (document.head.querySelector(`${tag}[data-v106="1"]`)) return;
+      const el = document.createElement(tag);
+      Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+      el.setAttribute('data-v106', '1');
+      document.head.appendChild(el);
+    };
+    add('link', { rel: 'manifest', href: `${API_URL}/manifest.json` });
+    add('link', { rel: 'apple-touch-icon', href: `${API_URL}/pwa-icon-192.png` });
+    add('meta', { name: 'theme-color', content: '#0071e3' });
+    add('meta', { name: 'mobile-web-app-capable', content: 'yes' });
+    add('meta', { name: 'apple-mobile-web-app-capable', content: 'yes' });
+    add('meta', { name: 'apple-mobile-web-app-status-bar-style', content: 'default' });
+    add('meta', { name: 'apple-mobile-web-app-title', content: 'Фактуры' });
   }, []);
 
   // Закрытие полноэкранного просмотра по Escape
@@ -7744,11 +7810,16 @@ ${bodyHtml}
               </button>
             </div>
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <button
+                onClick={cycleUiMode}
+                title={uiMode === 'auto' ? 'Режим: авто (по устройству) — нажмите, чтобы включить мобильную версию' : uiMode === 'mobile' ? 'Режим: мобильный — нажмите, чтобы включить полную версию' : 'Режим: полная версия — нажмите, чтобы вернуть авто'}
+                style={{ border: '1px solid #d0d0d5', background: uiMode === 'auto' ? '#fff' : '#e8f0fe', borderRadius: 8, padding: '5px 9px', fontSize: 14, cursor: 'pointer' }}
+              >{uiMode === 'desktop' ? '🖥' : '📱'}</button>
               <span className="user-name">{formatUserName(user)}</span>
               <button className="logout-btn" onClick={logout}>Выйти</button>
             </div>
           </div>
-          <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}'}</style>
+          <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">
             {user?.role !== 'viewer' && tabAllowed('upload') && (
               <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>Загрузка</button>
@@ -7810,6 +7881,52 @@ ${bodyHtml}
           </nav>
         </div>
       </header>
+
+      {/* v106: нижняя мобильная навигация — основные разделы под большим пальцем, остальные в «Ещё» */}
+      {isMobileView && (
+        <nav className="mobile-bottomnav">
+          {tabAllowed('list') && (
+            <button className={activeTab === 'list' ? 'active' : ''} onClick={() => { setActiveTab('list'); loadReceipts(); }}>
+              <span className="mbn-ico">🧾</span>Фактуры
+            </button>
+          )}
+          {user?.role !== 'viewer' && tabAllowed('upload') && (
+            <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>
+              <span className="mbn-ico">📤</span>Загрузка
+            </button>
+          )}
+          {tabAllowed('cash') && (
+            <button className={activeTab === 'cash' ? 'active' : ''} onClick={() => { setActiveTab('cash'); loadReceipts(); loadCashMovements(); }}>
+              <span className="mbn-ico">💵</span>Cash
+            </button>
+          )}
+          {(user?.role === 'admin' || user?.role === 'manager' || user?.role === 'user') && tabAllowed('crm') && (
+            <button className={activeTab === 'crm' ? 'active' : ''} onClick={() => setActiveTab('crm')}>
+              <span className="mbn-ico">🤝</span>CRM
+            </button>
+          )}
+          <button onClick={() => setMoreNavOpen(true)}>
+            <span className="mbn-ico">⋯</span>Ещё
+          </button>
+        </nav>
+      )}
+      {isMobileView && moreNavOpen && (
+        <>
+          <div onClick={() => setMoreNavOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 1150 }} />
+          <div className="mobile-more-sheet">
+            <div style={{ textAlign: 'center', color: '#8e8e93', fontSize: 12, marginBottom: 6 }}>— Ещё —</div>
+            {tabAllowed('analysis') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('analysis'); loadReceipts(); loadBankMovements(); loadPlannedPayments(); }}>📊 Анализ</button>}
+            {tabAllowed('taxes') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('taxes'); loadReceipts(); loadBankMovements(); }}>🧾 Налоги</button>}
+            {tabAllowed('docs') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('docs'); }}>📁 Документы</button>}
+            {tabAllowed('chat') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('chat'); }}>💬 Чат{chatUnreadTotal > 0 ? ` (${chatUnreadTotal})` : ''}</button>}
+            {user?.role === 'admin' && <button onClick={() => { setMoreNavOpen(false); setActiveTab('users'); }}>👥 Доступ</button>}
+            {user?.role === 'admin' && <button onClick={() => { setMoreNavOpen(false); setActiveTab('log'); }}>📋 Журнал</button>}
+            <button onClick={() => { setMoreNavOpen(false); setModelModalOpen(true); loadModels(); }}>🤖 Выбор модели AI</button>
+            <button onClick={() => { setMoreNavOpen(false); cycleUiMode(); }}>{uiMode === 'mobile' ? '🖥 Переключить на полную версию' : '📱/🖥 Режим интерфейса (сейчас: авто)'}</button>
+            <button onClick={() => setMoreNavOpen(false)} style={{ textAlign: 'center', color: '#8e8e93', borderBottom: 'none' }}>Закрыть</button>
+          </div>
+        </>
+      )}
 
       {backendInfo && !String(backendInfo.version || '').includes('2026-08-04.22') && (
         <div style={{ background: 'linear-gradient(180deg,#ffffff,#ececf0)', border: '1px solid #c7c7cc', color: '#1d1d1f', padding: '10px 16px', borderRadius: 12, margin: '10px 15px', fontSize: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -8672,7 +8789,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-29 · v105 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-29 · v106 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9304,7 +9421,7 @@ ${bodyHtml}
                           {receipt.consumption != null && <span style={{ marginLeft: 6, color: '#95a5a6' }}>{receipt.consumption} {receipt.consumption_unit || ''}</span>}
                         </p>
                       )}
-                      {receipt.supply_address && (
+                      {receipt.supply_address && !isMobileView && (
                         <p style={{ fontSize: 11, color: '#95a5a6', margin: '2px 0' }}>
                           <HighlightText text={receipt.supply_address} query={searchQuery} />
                         </p>
