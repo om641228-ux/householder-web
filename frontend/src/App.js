@@ -2126,7 +2126,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v104 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v104.1 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -7445,6 +7445,12 @@ ${bodyHtml}
       String(r.party_a || ''), String(r.party_b || ''), String(r.summary || ''),
       String(r.payment_status || ''), String((PAYMENT_STATUS_META[r.payment_status]||{}).label || ''),
       String(r.created_at || ''), String(r.store_address || ''), String(r.doc_kind || ''),
+      // v104.1: строки, которые пользователь ВИДИТ на карточке — чтобы «полное совпадение»
+      // находило «0 товаров», «117.75 EUR», «30.04.2026» и т.п. дословно
+      `${(r.items || []).length} товаров`,
+      formatAmount(r.total_amount, r.currency),
+      formatDate(r.receipt_date),
+      `${formatDate(r.receipt_date)} ${r.receipt_time || ''}`.trim(),
     ];
     const itemsText = (r.items || []).map(i =>
       `${i.name || ''} ${i.name_ru || ''} ${i.price || ''} ${i.quantity || ''} ${i.total || ''} ${i.category || ''} ${i.sku || ''}`
@@ -8614,7 +8620,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-29 · v104 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-29 · v104.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
