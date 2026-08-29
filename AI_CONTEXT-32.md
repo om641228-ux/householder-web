@@ -2157,3 +2157,11 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Причина: «0 товаров», «117.75 EUR», «30.04.2026» — UI-строки карточки, их не было в searchFields; словесный поиск находил по частям, фразовый — нет.
 - В searchFields добавлены видимые строки: `${items.length} товаров`, formatAmount(total,currency), formatDate(receipt_date), дата+время.
 - App.js md5 2b7ce1a9d3f0142829f06387eb62237a.
+
+## v105 (2026-08-29) — мониторинг бесплатных AI-моделей (варианты 1+2+3)
+- modelStatusCache + runFullModelCheck() — фоновая проверка раз в 3 ч (первая через 2 мин после старта), лог в консоль.
+- GET /api/check-models: без ?refresh=1 → мгновенный кэш (cached:true); ?refresh=1 → полный опрос.
+- GET /api/check-model?name= — пинг одной модели (openrouter/github/mistral/kimi через pingOpenAICompatModel — вынесен из checkOpenAICompatProvider; groq/gemini — текстовый пинг; ocr* — пакетно через checkOCRSpaceModels). upsertModelStatus обновляет кэш.
+- Failover в /api/upload-document-pages: baseVisionFn обёрнут; при 404/429/no endpoints/unavailable/suspended/decommission → упавшая модель помечается active:false в кэше, берётся первая активная openrouter/github/mistral/kimi из кэша, logActivity 'model-failover', job.result.failover={from,to}, recognitionMethod содержит «→ failover X».
+- Frontend: loadModels(force), строка «фоновая проверка: <дата>» в модалке, кнопка 🔍 в каждой строке, тост об автопереключении (одиночная загрузка — alert; папка — строка status:'info' в результатах).
+- health build v105-2026-08-29. App.js md5 42ca294f2f8bd688cade9dd39cccf8dd, index.js md5 52816eea8614e104c6d5b752cb539059.

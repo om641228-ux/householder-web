@@ -2126,7 +2126,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v104.1 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v105 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -4821,6 +4821,14 @@ function App() {
         if (receiptData.image_url) receiptData.image_url = fixImageUrl(receiptData.image_url);
         setLastSavedReceipt(receiptData);
       }
+      // v105: сервер сам переключил упавшую модель на активную — показываем уведомление
+      if (receiptData && receiptData.failover && receiptData.failover.from) {
+        setTimeout(() => alert(`⚡ Автопереключение модели:
+${receiptData.failover.from} — недоступна
+→ распознано через ${receiptData.failover.to}
+
+Откройте «Выбор модели» и выберите рабочую модель.`), 300);
+      }
       loadReceipts();
     } catch (e) {
       console.error('Ошибка:', e);
@@ -5163,6 +5171,10 @@ function App() {
             } else {
               if (rd.image_url) rd.image_url = fixImageUrl(rd.image_url);
               results.push({ file: file.name, status: 'success', receipt: rd });
+              // v105: уведомить об автопереключении модели (один раз за файл)
+              if (rd.failover && rd.failover.from) {
+                results.push({ file: `⚡ failover: ${rd.failover.from} → ${rd.failover.to}`, status: 'info' });
+              }
             }
             setFolderProgress(prev => ({ ...prev, success: prev.success + 1, fileRatio: 1 }));
             done = true;
@@ -7331,16 +7343,22 @@ ${bodyHtml}
 
   const deselectAll = () => setSelectedReceiptIds(new Set());
 
-  const loadModels = async () => {
+  const [modelsCheckedAt, setModelsCheckedAt] = useState(null); // v105: время фоновой проверки
+  const [checkingModel, setCheckingModel] = useState(null);      // v105: какая модель сейчас пингуется по кнопке
+
+  // v105: без force читаем мгновенный кэш фоновой проверки (квоты бесплатных моделей не тратятся);
+  // force=true (кнопка «Обновить») — полный опрос всех моделей
+  const loadModels = async (force) => {
     setModelsLoading(true);
     setModels([]);
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 90000);
-      const res = await fetch(`${API_URL}/api/check-models`, { signal: controller.signal });
+      const timeout = setTimeout(() => controller.abort(), force ? 90000 : 15000);
+      const res = await fetch(`${API_URL}/api/check-models${force ? '?refresh=1' : ''}`, { signal: controller.signal });
       clearTimeout(timeout);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      if (data.checked_at) setModelsCheckedAt(data.checked_at);
       if (data.models && data.models.length > 0) {
         setModels(data.models);
       } else {
@@ -7351,6 +7369,29 @@ ${bodyHtml}
       setModels(FALLBACK_MODELS.map(m => ({ ...m, active: null, ms: null, error: 'Не проверена' })));
     }
     setModelsLoading(false);
+  };
+
+  // v105: проверить ОДНУ модель (кнопка 🔍 в строке) — квота остальных не тратится
+  const checkOneModel = async (name) => {
+    setCheckingModel(name);
+    try {
+      const res = await fetch(`${API_URL}/api/check-model?name=${encodeURIComponent(name)}`);
+      const data = await res.json();
+      if (res.ok && data.model) {
+        setModels(prev => {
+          const i = prev.findIndex(m => m.name === name);
+          if (i < 0) return [...prev, data.model];
+          const next = [...prev];
+          next[i] = data.model;
+          return next;
+        });
+      } else {
+        alert(data.error || 'Не удалось проверить модель');
+      }
+    } catch (e) {
+      alert('Ошибка проверки: ' + e.message);
+    }
+    setCheckingModel(null);
   };
 
   const formatDate = (dateStr) => {
@@ -7789,7 +7830,7 @@ ${bodyHtml}
               <h2>Выбор модели AI</h2>
               <button
                 className="model-refresh-btn"
-                onClick={loadModels}
+                onClick={() => loadModels(true)}
                 disabled={modelsLoading}
                 title="Опросить модели заново"
                 style={{ marginRight: 8, padding: '6px 12px', borderRadius: 6, border: '1px solid #ddd', background: modelsLoading ? '#f0f0f0' : '#fff', cursor: modelsLoading ? 'not-allowed' : 'pointer', fontSize: 13 }}
@@ -7806,6 +7847,11 @@ ${bodyHtml}
                 onChange={e => setModelSearch(e.target.value)}
               />
             </div>
+            {modelsCheckedAt && (
+              <div style={{ margin: '0 16px 6px', fontSize: 11, color: '#888' }}>
+                🤖 Статусы из фоновой проверки сервера (каждые 3 ч): {new Date(modelsCheckedAt).toLocaleString('ru-RU')} · кнопка 🔍 в строке проверяет одну модель, «🔄 Обновить» — все
+              </div>
+            )}
             {freeModelTipOpen && (
               <div style={{ margin: '0 16px 8px', padding: '10px 12px', background: '#fff8e1', border: '1px solid #ffe082', borderRadius: 8, fontSize: 12, lineHeight: 1.5 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
@@ -7891,8 +7937,14 @@ ${bodyHtml}
                               )}
                               {isUnknown && <span style={{ color: '#888', whiteSpace: 'nowrap' }}>➖ Не проверена</span>}
                             </td>
-                            <td style={{ padding: '7px 6px', borderBottom: '1px solid #eee', textAlign: 'right', color: '#666', fontSize: 12 }}>
+                            <td style={{ padding: '7px 6px', borderBottom: '1px solid #eee', textAlign: 'right', color: '#666', fontSize: 12, whiteSpace: 'nowrap' }}>
                               {isActive && model.ms != null ? `${(model.ms / 1000).toFixed(1)} с` : '—'}
+                              <button
+                                onClick={(e) => { e.stopPropagation(); checkOneModel(model.name); }}
+                                disabled={checkingModel === model.name}
+                                title={`Проверить только «${model.displayName}» сейчас (квота других моделей не тратится)`}
+                                style={{ marginLeft: 6, border: '1px solid #ddd', background: '#fff', borderRadius: 5, padding: '1px 6px', fontSize: 11, cursor: 'pointer' }}
+                              >{checkingModel === model.name ? '⏳' : '🔍'}</button>
                             </td>
                           </tr>
                         );
@@ -8620,7 +8672,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-29 · v104.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-29 · v105 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

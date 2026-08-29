@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v101-2026-08-28', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v105-2026-08-29', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor'] }));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -3790,18 +3790,44 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
 
     try {
       // Распознаём страницы и сохраняем КАЖДУЮ в Storage (page_urls)
-      const visionFn = pageProvider
+      const baseVisionFn = pageProvider
         ? (buf, mime, n, total) => (mime === 'application/pdf'
             ? extractPageTextWithGemini(buf, mime, n, total) // OpenAI-совместимые vision не читают PDF — эти страницы через Gemini
             : extractPageTextWithOpenAICompat(buf, n, total, pageModel.slice(pageProvider.length + 1), pageProvider))
         : null;
+      // v105: failover — выбранная модель упала (404/429/удалена/нет эндпоинтов) →
+      // берём следующую АКТИВНУЮ из кэша статусов и дораспознаём ею; упавшую помечаем неактивной
+      let failoverInfo = null;
+      const visionFn = baseVisionFn ? async (buf, mime, n, total) => {
+        try {
+          return await baseVisionFn(buf, mime, n, total);
+        } catch (e) {
+          if (mime === 'application/pdf') throw e; // PDF-страницы идут через Gemini — там своя цепочка
+          const msg = String(e.message || '');
+          if (!/404|not.?found|no endpoints|429|rate.?limit|quota|unavailable|suspended|decommission|deprecat/i.test(msg)) throw e;
+          // помечаем упавшую модель в кэше — список «сам» обновляется
+          const down = modelStatusCache.models.find(m => m.name === pageModel);
+          if (down) { down.active = false; down.ms = null; down.error = msg.slice(0, 140); }
+          const alt = modelStatusCache.models.find(m =>
+            m.active === true && m.name !== pageModel && /^(openrouter|github|mistral|kimi)-/.test(m.name));
+          if (!alt) throw e;
+          const altKey = ['openrouter', 'github', 'mistral', 'kimi'].find(k => alt.name.startsWith(k + '-'));
+          if (!altKey) throw e;
+          if (!failoverInfo) {
+            failoverInfo = { from: pageModel, to: alt.name };
+            console.warn(`[models] failover: ${pageModel} → ${alt.name} (${msg.slice(0, 100)})`);
+            logActivity(user, 'list', 'model-failover', `модель ${pageModel} недоступна → автопереключение на ${alt.name} (${msg.slice(0, 80)})`, req);
+          }
+          return extractPageTextWithOpenAICompat(buf, n, total, alt.name.slice(altKey.length + 1), altKey);
+        }
+      } : null;
       const receiptData = await assembleDocumentFromPages(pageBuffers, mimeTypes, currency, docType, user.id, (stage) => {
         if (stage === 'vision') job.visionDone++;
         else if (stage === 'translate') { job.stage = 'translate'; job.translateDone++; }
       }, visionFn);
       job.stage = 'finalize';
       const recognitionMethod = pageProvider
-        ? `page-by-page ${files.length}f (${pageModel}${pageBuffers.some((_, i) => mimeTypes[i] === 'application/pdf') ? ', PDF-стр. через gemini' : ''}, async)`
+        ? `page-by-page ${files.length}f (${pageModel}${failoverInfo ? ` → failover ${failoverInfo.to}` : ''}${pageBuffers.some((_, i) => mimeTypes[i] === 'application/pdf') ? ', PDF-стр. через gemini' : ''}, async)`
         : `page-by-page ${files.length}f (gemini vision, async)`;
       receiptData.docType = docType === 'auto' ? (receiptData.document_type || 'other') : docType;
       receiptData.object = (object && object !== 'other') ? object : (receiptData.object || 'other');
@@ -3815,7 +3841,7 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
       if (req.body.allow_duplicate === '1') receiptData.allowDuplicate = true;
       const saved = await saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod);
       job.status = 'done';
-      job.result = { success: true, id: saved.id, ...saved, image_url: imageUrl };
+      job.result = { success: true, id: saved.id, ...saved, image_url: imageUrl, ...(failoverInfo ? { failover: failoverInfo } : {}) };
       console.log(`Задача ${jobId}: документ ${files.length} стр. готов за ${Math.round((Date.now() - t0) / 1000)}с`);
     } catch (e) {
       console.error(`Задача ${jobId} упала:`, e);
@@ -6468,44 +6494,58 @@ async function checkOpenAICompatProvider(key) {
     }));
   }
 
+  return mapWithConcurrency(ids.slice(0, 10), 3, (id) => pingOpenAICompatModel(key, id));
+}
+
+// v105: пинг ОДНОЙ OpenAI-совместимой модели (общий код для полной и одиночной проверки)
+async function pingOpenAICompatModel(key, id) {
+  const cfg = OPENAI_COMPAT_PROVIDERS[key];
+  const provider = cfg.displayName;
+  const displayName = prettifyModelName(id.replace(':free', ' (Free)'));
+  if (!cfg.apiKey) {
+    return { name: `${key}-${id}`, displayName, provider, active: false, ms: null, error: `${provider} API key не задан` };
+  }
   let tinyB64 = null;
   try {
     tinyB64 = (await sharp({ create: { width: 80, height: 30, channels: 3, background: '#ffffff' } }).jpeg({ quality: 70 }).toBuffer()).toString('base64');
   } catch (e) {}
-
-  return mapWithConcurrency(ids.slice(0, 10), 3, async (id) => {
-    const t0 = Date.now();
-    const displayName = prettifyModelName(id.replace(':free', ' (Free)'));
-    try {
-      const content = [
-        { type: 'text', text: 'Describe this image in one word.' }
-      ];
-      if (tinyB64) content.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${tinyB64}` } });
-      await withTimeout(axios.post(`${cfg.baseURL}/chat/completions`, {
-        model: id,
-        messages: [{ role: 'user', content }],
-        max_tokens: 8
-      }, {
-        headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', ...cfg.extraHeaders },
-        timeout: 25000
-      }), 30000);
-      return { name: `${key}-${id}`, displayName, provider, active: true, ms: Date.now() - t0, error: null };
-    } catch (e) {
-      let msg = String(e.response?.data?.error?.message || e.message || 'error');
-      // Человекочитаемые подсказки для типовых ошибок
-      if (/suspended due to insufficient balance/i.test(msg)) {
-        msg = `Недостаточно средств: пополните баланс на platform.moonshot.ai (Billing → Recharge)`;
-      } else if (/requires terms acceptance/i.test(msg)) {
-        msg = `Требуется принять условия модели в консоли провайдера`;
-      } else if (/invalid api key|incorrect api key|unauthorized/i.test(msg)) {
-        msg = `Неверный API ключ ${provider} — проверьте переменную в Railway`;
-      }
-      return { name: `${key}-${id}`, displayName, provider, active: false, ms: null, error: msg.slice(0, 140) };
+  const t0 = Date.now();
+  try {
+    const content = [
+      { type: 'text', text: 'Describe this image in one word.' }
+    ];
+    if (tinyB64) content.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${tinyB64}` } });
+    await withTimeout(axios.post(`${cfg.baseURL}/chat/completions`, {
+      model: id,
+      messages: [{ role: 'user', content }],
+      max_tokens: 8
+    }, {
+      headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', ...cfg.extraHeaders },
+      timeout: 25000
+    }), 30000);
+    return { name: `${key}-${id}`, displayName, provider, active: true, ms: Date.now() - t0, error: null };
+  } catch (e) {
+    let msg = String(e.response?.data?.error?.message || e.message || 'error');
+    // Человекочитаемые подсказки для типовых ошибок
+    if (/suspended due to insufficient balance/i.test(msg)) {
+      msg = `Недостаточно средств: пополните баланс на platform.moonshot.ai (Billing → Recharge)`;
+    } else if (/requires terms acceptance/i.test(msg)) {
+      msg = `Требуется принять условия модели в консоли провайдера`;
+    } else if (/invalid api key|incorrect api key|unauthorized/i.test(msg)) {
+      msg = `Неверный API ключ ${provider} — проверьте переменную в Railway`;
     }
-  });
+    return { name: `${key}-${id}`, displayName, provider, active: false, ms: null, error: msg.slice(0, 140) };
+  }
 }
 
-app.get('/api/check-models', async (req, res) => {
+// v105: кэш статусов моделей — фоновая проверка раз в 3 часа; модалка читает кэш мгновенно
+// и НЕ тратит дневные квоты бесплатных моделей на каждое открытие.
+let modelStatusCache = { checked_at: null, models: [] };
+let modelCheckRunning = false;
+
+async function runFullModelCheck() {
+  if (modelCheckRunning) return modelStatusCache;
+  modelCheckRunning = true;
   try {
     const [geminiModels, groqModels, ocrModels, openrouterModels, githubModels, mistralModels, kimiModels] = await Promise.all([
       checkGeminiModels().catch(() => []),
@@ -6520,7 +6560,7 @@ app.get('/api/check-models', async (req, res) => {
     const sortModels = arr => [...arr].sort((a, b) =>
       ((b.active === true) - (a.active === true)) || a.name.localeCompare(b.name)
     );
-    res.json({
+    modelStatusCache = {
       checked_at: new Date().toISOString(),
       models: [
         ...sortModels(ocrModels),
@@ -6531,7 +6571,81 @@ app.get('/api/check-models', async (req, res) => {
         ...sortModels(mistralModels),
         ...sortModels(kimiModels)
       ]
-    });
+    };
+    const act = modelStatusCache.models.filter(m => m.active).length;
+    console.log(`[models] фоновая проверка: активны ${act}/${modelStatusCache.models.length}`);
+  } finally {
+    modelCheckRunning = false;
+  }
+  return modelStatusCache;
+}
+
+// Обновить/добавить одну запись в кэше статусов
+function upsertModelStatus(entry) {
+  const i = modelStatusCache.models.findIndex(m => m.name === entry.name);
+  if (i >= 0) modelStatusCache.models[i] = entry;
+  else modelStatusCache.models.push(entry);
+}
+
+app.get('/api/check-models', async (req, res) => {
+  try {
+    const force = String(req.query.refresh || '') === '1';
+    if (!force && modelStatusCache.models.length) {
+      return res.json({ ...modelStatusCache, cached: true });
+    }
+    const data = await runFullModelCheck();
+    res.json({ ...data, cached: false });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// v105: одиночная проверка модели по кнопке 🔍 — не жжёт квоту остальных
+app.get('/api/check-model', async (req, res) => {
+  const name = String(req.query.name || '');
+  if (!name) return res.status(400).json({ error: 'Параметр name обязателен' });
+  try {
+    const t0 = Date.now();
+    let entry = null;
+    const key = ['openrouter', 'github', 'mistral', 'kimi'].find(k => name.startsWith(k + '-'));
+    if (key) {
+      entry = await pingOpenAICompatModel(key, name.slice(key.length + 1));
+    } else if (name.startsWith('groq-')) {
+      const id = name.slice(5);
+      const dn = prettifyModelName(id);
+      if (!groq) {
+        entry = { name, displayName: dn, provider: 'Groq', active: false, ms: null, error: 'GROQ_API_KEY не задан' };
+      } else {
+        try {
+          await withTimeout(groq.chat.completions.create({ model: id, messages: [{ role: 'user', content: 'Reply with OK' }], max_tokens: 8 }), 20000);
+          entry = { name, displayName: dn, provider: 'Groq', active: true, ms: Date.now() - t0, error: null };
+        } catch (e) {
+          entry = { name, displayName: dn, provider: 'Groq', active: false, ms: null, error: String(e.message || 'error').slice(0, 140) };
+        }
+      }
+    } else if (/^ocr/i.test(name)) {
+      // OCR.space: движки проверяются пакетно (лимит у них большой), обновляем все записи провайдера
+      const arr = await checkOCRSpaceModels();
+      arr.forEach(upsertModelStatus);
+      entry = arr.find(m => m.name === name) || null;
+    } else {
+      // Gemini (имя вида gemini-*)
+      const dn = prettifyModelName(name);
+      if (!genAI) {
+        entry = { name, displayName: dn, provider: 'Gemini', active: false, ms: null, error: 'GEMINI_API_KEY не задан' };
+      } else {
+        try {
+          const model = genAI.getGenerativeModel({ model: name, generationConfig: { maxOutputTokens: 8 } });
+          await withTimeout(model.generateContent('Reply with OK'), 12000);
+          entry = { name, displayName: dn, provider: 'Gemini', active: true, ms: Date.now() - t0, error: null };
+        } catch (e) {
+          entry = { name, displayName: dn, provider: 'Gemini', active: false, ms: null, error: String(e.message || 'error').slice(0, 140) };
+        }
+      }
+    }
+    if (!entry) return res.status(404).json({ error: 'Модель не найдена' });
+    upsertModelStatus(entry);
+    res.json({ checked_at: new Date().toISOString(), model: entry });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -6555,6 +6669,11 @@ if (r2Configured()) {
   setTimeout(dailyBackup, 10 * 60 * 1000);
   setInterval(dailyBackup, 24 * 60 * 60 * 1000);
   console.log('Auto-backup to R2: every 24h (first run in 10 min), keep last 14');
+
+// v105: фоновая проверка AI-моделей — раз в 3 часа (первый запуск через 2 мин после старта)
+setTimeout(() => { runFullModelCheck().catch(e => console.error('[models] фоновая проверка:', e.message)); }, 2 * 60 * 1000);
+setInterval(() => { runFullModelCheck().catch(e => console.error('[models] фоновая проверка:', e.message)); }, 3 * 60 * 60 * 1000);
+console.log('Model status monitor: every 3h (first run in 2 min)');
 
 // v94: ротация журнала действий — удалять записи старше 90 дней
 const cleanActivityLog = async () => {
