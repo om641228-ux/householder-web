@@ -1,6 +1,3 @@
-/////
-/////
-/////
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import './App.css';
 import './apple-theme.css'; // Apple-стиль (apple.com): пилюльные кнопки, мягкие карточки, #0071e3 — v31
@@ -722,16 +719,19 @@ function formatRawText(text) {
 
 function HighlightText({ text, query, style = {} }) {
   if (!query || !text) return <span style={style}>{text || ''}</span>;
-  const q = query.toLowerCase().trim();
-  if (!q) return <span style={style}>{text}</span>;
+  // v103: подсвечиваем КАЖДОЕ слово запроса (поиск v102 — мультисловный AND),
+  // а не только всю фразу целиком
+  const words = String(query).toLowerCase().trim().split(/\s+/).filter(w => w.length > 0);
+  if (!words.length) return <span style={style}>{text}</span>;
   const str = String(text);
-  const regex = new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+  const esc = w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`(${words.map(esc).join('|')})`, 'gi');
   const parts = str.split(regex);
   return (
     <span style={style}>
       {parts.map((part, i) =>
-        part.toLowerCase() === q ? (
-          <mark key={i} style={{ backgroundColor: '#ffeb3b', color: '#000', padding: '0 2px', borderRadius: 2, fontWeight: 600 }}>{part}</mark>
+        i % 2 === 1 ? (
+          <mark key={i} className="hl-mark" style={{ backgroundColor: '#ffeb3b', color: '#000', padding: '0 2px', borderRadius: 2, fontWeight: 600 }}>{part}</mark>
         ) : (
           <span key={i}>{part}</span>
         )
@@ -2122,7 +2122,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v102 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v103.1 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -7694,7 +7694,7 @@ ${bodyHtml}
               <button className="logout-btn" onClick={logout}>Выйти</button>
             </div>
           </div>
-          <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}'}</style>
+          <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}'}</style>
           <nav className="tabs-inline">
             {user?.role !== 'viewer' && tabAllowed('upload') && (
               <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>Загрузка</button>
@@ -8607,7 +8607,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-28 · v102 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-28 · v103.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9212,9 +9212,9 @@ ${bodyHtml}
                           >{PAYMENT_STATUS_META[receipt.payment_status].short}</span>
                         )}
                       </div>
-                      <p className="date">{formatDate(receipt.receipt_date)} {receipt.receipt_time}</p>
+                      <p className="date"><HighlightText text={`${formatDate(receipt.receipt_date)} ${receipt.receipt_time || ''}`} query={searchQuery} /></p>
                       <p className="amount" style={{ color: hasDiff ? '#e67e22' : '#27ae60' }}>
-                        {formatAmount(receipt.total_amount, receipt.currency)}
+                        <HighlightText text={formatAmount(receipt.total_amount, receipt.currency)} query={searchQuery} />
                         {hasDiff && <span style={{ fontSize: 12, color: '#e74c3c', marginLeft: 6 }}>(Δ {diff})</span>}
                       </p>
                       {/* v67.9: метка привязки к банку — клик открывает «Налоги» на строке платежа */}
@@ -9227,11 +9227,11 @@ ${bodyHtml}
                           </span>
                         </p>
                       )}
-                      <p className="items-count"> {receipt.items?.length || 0} товаров</p>
+                      <p className="items-count"> <HighlightText text={`${receipt.items?.length || 0} товаров`} query={searchQuery} /></p>
                       {receipt.object && (
                         <p style={{ fontSize: 12, color: '#7f8c8d', margin: '4px 0' }}>
                           <HighlightText text={receipt.object} query={searchQuery} />
-                          {receipt.subtype && <span style={{ marginLeft: 6, color: '#95a5a6' }}>{SUBTYPE_LABELS[receipt.subtype] || receipt.subtype}</span>}
+                          {receipt.subtype && <span style={{ marginLeft: 6, color: '#95a5a6' }}><HighlightText text={SUBTYPE_LABELS[receipt.subtype] || receipt.subtype} query={searchQuery} /></span>}
                           {receipt.consumption != null && <span style={{ marginLeft: 6, color: '#95a5a6' }}>{receipt.consumption} {receipt.consumption_unit || ''}</span>}
                         </p>
                       )}
