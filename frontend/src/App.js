@@ -721,7 +721,8 @@ function HighlightText({ text, query, style = {} }) {
   if (!query || !text) return <span style={style}>{text || ''}</span>;
   // v103: подсвечиваем КАЖДОЕ слово запроса (поиск v102 — мультисловный AND),
   // а не только всю фразу целиком
-  const words = String(query).toLowerCase().trim().split(/\s+/).filter(w => w.length > 0);
+  const fullQ = String(query).toLowerCase().trim();
+  const words = HL_EXACT ? (fullQ ? [fullQ] : []) : fullQ.split(/\s+/).filter(w => w.length > 0);
   if (!words.length) return <span style={style}>{text}</span>;
   const str = String(text);
   const esc = w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -739,6 +740,9 @@ function HighlightText({ text, query, style = {} }) {
     </span>
   );
 }
+
+// v104: флажок «полное совпадение» — App выставляет этот флаг, HighlightText его читает
+let HL_EXACT = false;
 
 const ReceiptScanner = registerPlugin('ReceiptScannerPlugin');
 
@@ -2122,7 +2126,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v103.1 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v104 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -4248,6 +4252,7 @@ function App() {
   }, [bankMovements]);
   const [filterDiffs, setFilterDiffs] = useState([]); // фильтр по разнице Δ (итог чека vs сумма товаров)
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchExact, setSearchExact] = useState(false); // v104: полное совпадение фразы
   const [itemsPerPage, setItemsPerPage] = useState(20);
   const [currentPage, setCurrentPage] = useState(1);
   // Сортировка списка: 'receipt' — по дате чека, 'recognized' — по дате распознавания
@@ -7405,6 +7410,7 @@ ${bodyHtml}
     return 'huge';
   };
 
+  HL_EXACT = searchExact; // v104: HighlightText ниже читает этот флаг
   const filteredReceipts = receipts.filter(r => {
     if (filterTypes.length && !filterTypes.includes(r.document_type || 'receipt')) return false;
     if (filterSubtypes.length && !filterSubtypes.includes(r.subtype || 'none')) return false;
@@ -7444,7 +7450,8 @@ ${bodyHtml}
       `${i.name || ''} ${i.name_ru || ''} ${i.price || ''} ${i.quantity || ''} ${i.total || ''} ${i.category || ''} ${i.sku || ''}`
     ).join(' ');
     const allText = (searchFields.join(' ') + ' ' + itemsText).toLowerCase();
-    // v102: запрос из нескольких слов — ищем ВСЕ слова (в любом порядке, по всем полям)
+    // v104: «полное совпадение» — вся фраза целиком; иначе (v102) — ВСЕ слова в любом порядке
+    if (searchExact) return allText.includes(q);
     return q.split(/\s+/).every(w => allText.includes(w));
   });
 
@@ -8607,7 +8614,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-28 · v103.1 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-29 · v104 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8901,6 +8908,10 @@ ${bodyHtml}
             ]} selected={filterDiffs} onChange={v => { setFilterDiffs(v); setCurrentPage(1); }} />
             <input type="text" placeholder="🔍 Поиск по всему: название, товары, текст, контрагент, сумма, адрес…" value={searchQuery} onChange={e => {setSearchQuery(e.target.value); setCurrentPage(1);}}
               style={{ flex: '1 1 260px', maxWidth: 460, padding: '6px 10px', fontSize: 13, borderRadius: 6, border: '1px solid #ccc' }} />
+            <label title="Вкл: ищет всю фразу целиком. Выкл: ищет все слова по отдельности" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+              <input type="checkbox" checked={searchExact} onChange={e => { setSearchExact(e.target.checked); setCurrentPage(1); }} style={{ width: 15, height: 15, cursor: 'pointer' }} />
+              полное совпадение
+            </label>
             </div>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
             <select value={itemsPerPage} onChange={e => {setItemsPerPage(e.target.value === 'all' ? 'all' : parseInt(e.target.value)); setCurrentPage(1);}}
