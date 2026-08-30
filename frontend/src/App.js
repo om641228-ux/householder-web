@@ -754,8 +754,9 @@ body.mobile-view .recognize-bar { display: none !important; } /* кнопки р
 body.mobile-view .hide-mobile { display: none !important; } /* бэкап/облако/восстановить/выписки + селекторы на вкладке Загрузка */
 .mobile-only { display: none !important; } /* видно только в мобильной версии */
 body.mobile-view .mobile-only { display: inline-block !important; }
-body.mobile-view .bulk-actions-panel { display: flex !important; flex-wrap: nowrap !important; overflow-x: auto !important; -webkit-overflow-scrolling: touch; scrollbar-width: none; align-items: center !important; gap: 8px !important; }
-body.mobile-view .bulk-actions-row { display: contents !important; } /* «Выбрано / Удалить / Сбросить» — в одну строку */
+body.mobile-view .bulk-actions-panel { display: flex !important; flex-direction: row !important; justify-content: flex-start !important; flex-wrap: nowrap !important; overflow-x: auto !important; -webkit-overflow-scrolling: touch; scrollbar-width: none; align-items: center !important; gap: 8px !important; }
+body.mobile-view .bulk-actions-row { margin: 0 !important; padding: 0 !important; }
+body.mobile-view .bulk-actions-row { display: contents !important; } /* «Выбрано / Удалить / Сбросить / Копии» — в одну строку */
 body.mobile-view .bulk-actions-row > * { flex-shrink: 0 !important; }
 body.mobile-view .selectall-sort-row { flex-wrap: nowrap !important; overflow-x: auto !important; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
 body.mobile-view .selectall-sort-row > * { flex-shrink: 0 !important; }
@@ -2163,7 +2164,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.6 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.7 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -8889,7 +8890,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-30 · v106.6 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-30 · v106.7 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"

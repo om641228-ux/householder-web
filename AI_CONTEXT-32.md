@@ -2208,3 +2208,7 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - «Выбрано: N / 🗑 Удалить / ✖ Сбросить» — в одну строку (bulk-actions-row → display:contents, панель flex nowrap + overflow-x:auto).
 - «Все» (itemsPerPage) + «По дате чека» + «По дате распознавания» — в одну прокручиваемую строку: исходный select скрыт (hide-mobile), мобильная копия в sort-row через новый класс .mobile-only; контейнеру добавлен класс selectall-sort-row (nowrap + overflow-x).
 - md5 App.js 03c0dadeb976fc9d4268928f9aaea064. Только frontend.
+
+## v106.7 (2026-08-30) — фикс: bulk-панель в одну строку
+- Добавлено flex-direction:row !important + justify-content:flex-start + обнуление margin/padding у bulk-actions-row (исходный CSS держал column, кнопки стояли столбиком).
+- md5 df8616575d13cd69f46c95a5665c71a8.
