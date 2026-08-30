@@ -719,20 +719,16 @@ function formatRawText(text) {
 
 function HighlightText({ text, query, style = {} }) {
   if (!query || !text) return <span style={style}>{text || ''}</span>;
-  // v103: подсвечиваем КАЖДОЕ слово запроса (поиск v102 — мультисловный AND),
-  // а не только всю фразу целиком
-  const fullQ = String(query).toLowerCase().trim();
-  const words = HL_EXACT ? (fullQ ? [fullQ] : []) : fullQ.split(/\s+/).filter(w => w.length > 0);
-  if (!words.length) return <span style={style}>{text}</span>;
+  const q = query.toLowerCase().trim();
+  if (!q) return <span style={style}>{text}</span>;
   const str = String(text);
-  const esc = w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const regex = new RegExp(`(${words.map(esc).join('|')})`, 'gi');
+  const regex = new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
   const parts = str.split(regex);
   return (
     <span style={style}>
       {parts.map((part, i) =>
-        i % 2 === 1 ? (
-          <mark key={i} className="hl-mark" style={{ backgroundColor: '#ffeb3b', color: '#000', padding: '0 2px', borderRadius: 2, fontWeight: 600 }}>{part}</mark>
+        part.toLowerCase() === q ? (
+          <mark key={i} style={{ backgroundColor: '#ffeb3b', color: '#000', padding: '0 2px', borderRadius: 2, fontWeight: 600 }}>{part}</mark>
         ) : (
           <span key={i}>{part}</span>
         )
@@ -740,47 +736,6 @@ function HighlightText({ text, query, style = {} }) {
     </span>
   );
 }
-
-// v104: флажок «полное совпадение» — App выставляет этот флаг, HighlightText его читает
-let HL_EXACT = false;
-
-// v106: мобильный CSS-пакет — срабатывает по ширине ≤768px (адаптив) и/или по классу .mobile-view
-// на <body> (когда пользователь принудительно включил мобильную версию переключателем 📱/🖥)
-const MOBILE_CSS = `
-body.mobile-view { padding-bottom: 76px; }
-body.mobile-view .mini-header { margin: 6px 6px 0 !important; border-radius: 12px !important; }
-body.mobile-view .tabs-inline { display: none !important; } /* верхнее меню заменяет нижняя навигация */
-body.mobile-view .recognize-bar { display: none !important; } /* кнопки распознавания — в шапке */
-body.mobile-view .hide-mobile { display: none !important; } /* бэкап/облако/восстановить/выписки + селекторы на вкладке Загрузка */
-.mobile-only { display: none !important; } /* видно только в мобильной версии */
-body.mobile-view .mobile-only { display: inline-block !important; }
-body.mobile-view .bulk-actions-panel { display: flex !important; flex-direction: row !important; justify-content: flex-start !important; flex-wrap: nowrap !important; overflow-x: auto !important; -webkit-overflow-scrolling: touch; scrollbar-width: none; align-items: center !important; gap: 8px !important; }
-body.mobile-view .bulk-actions-row { margin: 0 !important; padding: 0 !important; }
-body.mobile-view .bulk-actions-row { display: contents !important; } /* «Выбрано / Удалить / Сбросить / Копии» — в одну строку */
-body.mobile-view .bulk-actions-row > * { flex-shrink: 0 !important; }
-body.mobile-view .selectall-sort-row { flex-wrap: nowrap !important; overflow-x: auto !important; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
-body.mobile-view .selectall-sort-row > * { flex-shrink: 0 !important; }
-body.mobile-view .receipts-grid { grid-template-columns: 1fr !important; }
-body.mobile-view .filters { flex-direction: column !important; align-items: stretch !important; }
-body.mobile-view .filters > div { width: 100%; margin-left: 0 !important; justify-content: flex-start !important; flex-wrap: wrap !important; }
-body.mobile-view .filters input[type="text"] { max-width: none !important; flex: 1 1 100% !important; }
-body.mobile-view .filters select, body.mobile-view .filters button { min-height: 38px; }
-body.mobile-view .modal-overlay { padding: 0 !important; }
-body.mobile-view .modal-content { width: 100vw !important; max-width: 100vw !important; height: 100dvh !important; max-height: 100dvh !important; border-radius: 0 !important; margin: 0 !important; }
-body.mobile-view .model-modal-content { width: 100vw !important; max-width: 100vw !important; height: 100dvh !important; max-height: 100dvh !important; border-radius: 0 !important; margin: 0 !important; }
-body.mobile-view .model-modal-body table { font-size: 12px; }
-body.mobile-view input, body.mobile-view select, body.mobile-view textarea { font-size: 16px !important; }
-body.mobile-view button { min-height: 36px; }
-body.mobile-view table { font-size: 12px; }
-body.mobile-view .receipt-thumb { max-height: 220px; }
-.mobile-bottomnav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1100; display: flex; flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scroll-behavior: smooth; scroll-snap-type: x proximity; scrollbar-width: none; background: rgba(255,255,255,0.94); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-top: 1px solid #d8dce1; padding: 4px 6px calc(4px + env(safe-area-inset-bottom)); }
-.mobile-bottomnav::-webkit-scrollbar { display: none; }
-.mobile-bottomnav button { flex: 0 0 auto; min-width: 66px; scroll-snap-align: center; border: none; background: none; font-size: 10px; color: #6e6e73; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 5px 6px; min-height: 48px; cursor: pointer; border-radius: 10px; }
-.mobile-bottomnav button.active { color: #0071e3; font-weight: 700; background: rgba(0,113,227,0.08); }
-.mobile-bottomnav button .mbn-ico { font-size: 20px; line-height: 1.2; }
-.mobile-more-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1200; background: #fff; border-radius: 16px 16px 0 0; box-shadow: 0 -8px 30px rgba(0,0,0,0.25); padding: 10px 14px calc(14px + env(safe-area-inset-bottom)); }
-.mobile-more-sheet button { display: block; width: 100%; text-align: left; border: none; background: none; padding: 13px 8px; font-size: 16px; border-bottom: 1px solid #f0f0f2; cursor: pointer; }
-`;
 
 const ReceiptScanner = registerPlugin('ReceiptScannerPlugin');
 
@@ -2164,7 +2119,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.7 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v102 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -4290,7 +4245,6 @@ function App() {
   }, [bankMovements]);
   const [filterDiffs, setFilterDiffs] = useState([]); // фильтр по разнице Δ (итог чека vs сумма товаров)
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchExact, setSearchExact] = useState(false); // v104: полное совпадение фразы
   const [itemsPerPage, setItemsPerPage] = useState(20);
   const [currentPage, setCurrentPage] = useState(1);
   // Сортировка списка: 'receipt' — по дате чека, 'recognized' — по дате распознавания
@@ -4414,79 +4368,6 @@ function App() {
     const onResize = () => setWinWidth(window.innerWidth);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
-  }, []);
-
-  // v106: мобильный режим интерфейса.
-  // ui_mode: 'auto' (телефон/узкий экран → мобильная версия), 'mobile' (всегда), 'desktop' (всегда)
-  const [uiMode, setUiMode] = useState(() => { try { return localStorage.getItem('ui_mode') || 'auto'; } catch { return 'auto'; } });
-  const isMobileUA = /iPhone|iPad|iPod|Android|Mobile/i.test(navigator.userAgent || '');
-  const isMobileView = uiMode === 'mobile' || (uiMode === 'auto' && (winWidth <= 768 || (isMobileUA && winWidth <= 1024)));
-  const cycleUiMode = () => {
-    const next = uiMode === 'auto' ? 'mobile' : uiMode === 'mobile' ? 'desktop' : 'auto';
-    setUiMode(next);
-    try { localStorage.setItem('ui_mode', next); } catch {}
-  };
-  const [moreNavOpen, setMoreNavOpen] = useState(false); // нижняя навигация — меню «Ещё»
-  useEffect(() => {
-    document.body.classList.toggle('mobile-view', isMobileView);
-    return () => document.body.classList.remove('mobile-view');
-  }, [isMobileView]);
-
-  // v106.2: свайп влево/вправо по экрану — переход между разделами (порядок нижней навигации + «Ещё»)
-  const gotoTab = (t) => {
-    setActiveTab(t);
-    if (t === 'list') loadReceipts();
-    if (t === 'analysis') { loadReceipts(); loadBankMovements(); loadPlannedPayments(); }
-    if (t === 'taxes') { loadReceipts(); loadBankMovements(); }
-    if (t === 'cash') { loadReceipts(); loadCashMovements(); }
-  };
-  const mobileTabsOrder = [
-    tabAllowed('list') && 'list',
-    user?.role !== 'viewer' && tabAllowed('upload') && 'upload',
-    tabAllowed('cash') && 'cash',
-    (user?.role === 'admin' || user?.role === 'manager' || user?.role === 'user') && tabAllowed('crm') && 'crm',
-    tabAllowed('analysis') && 'analysis',
-    tabAllowed('taxes') && 'taxes',
-    tabAllowed('docs') && 'docs',
-    tabAllowed('chat') && 'chat',
-    user?.role === 'admin' && 'users',
-    user?.role === 'admin' && 'log'
-  ].filter(Boolean);
-  const swipeRef = useRef(null);
-  const onAppTouchStart = (e) => {
-    if (!isMobileView) return;
-    if (e.target.closest('.modal-overlay, .modal-content, .model-modal-overlay, .mobile-more-sheet, input, textarea, select')) return;
-    swipeRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-  };
-  const onAppTouchEnd = (e) => {
-    if (!isMobileView || !swipeRef.current) return;
-    const dx = e.changedTouches[0].clientX - swipeRef.current.x;
-    const dy = e.changedTouches[0].clientY - swipeRef.current.y;
-    swipeRef.current = null;
-    if (Math.abs(dx) < 70 || Math.abs(dy) > 60) return; // только чёткий горизонтальный свайп
-    const i = mobileTabsOrder.indexOf(activeTab);
-    if (i < 0) return;
-    const next = dx < 0 ? mobileTabsOrder[i + 1] : mobileTabsOrder[i - 1];
-    if (next) gotoTab(next);
-  };
-
-  // v106: PWA — манифест отдаёт бэкенд (/manifest.json + иконки), подключаем динамически.
-  // Service worker НЕ регистрируем сознательно: SW-кэш уже дважды показывал старую сборку.
-  useEffect(() => {
-    const add = (tag, attrs) => {
-      if (document.head.querySelector(`${tag}[data-v106="1"]`)) return;
-      const el = document.createElement(tag);
-      Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
-      el.setAttribute('data-v106', '1');
-      document.head.appendChild(el);
-    };
-    add('link', { rel: 'manifest', href: `${API_URL}/manifest.json` });
-    add('link', { rel: 'apple-touch-icon', href: `${API_URL}/pwa-icon-192.png` });
-    add('meta', { name: 'theme-color', content: '#0071e3' });
-    add('meta', { name: 'mobile-web-app-capable', content: 'yes' });
-    add('meta', { name: 'apple-mobile-web-app-capable', content: 'yes' });
-    add('meta', { name: 'apple-mobile-web-app-status-bar-style', content: 'default' });
-    add('meta', { name: 'apple-mobile-web-app-title', content: 'Фактуры' });
   }, []);
 
   // Закрытие полноэкранного просмотра по Escape
@@ -4932,14 +4813,6 @@ function App() {
         if (receiptData.image_url) receiptData.image_url = fixImageUrl(receiptData.image_url);
         setLastSavedReceipt(receiptData);
       }
-      // v105: сервер сам переключил упавшую модель на активную — показываем уведомление
-      if (receiptData && receiptData.failover && receiptData.failover.from) {
-        setTimeout(() => alert(`⚡ Автопереключение модели:
-${receiptData.failover.from} — недоступна
-→ распознано через ${receiptData.failover.to}
-
-Откройте «Выбор модели» и выберите рабочую модель.`), 300);
-      }
       loadReceipts();
     } catch (e) {
       console.error('Ошибка:', e);
@@ -5282,10 +5155,6 @@ ${receiptData.failover.from} — недоступна
             } else {
               if (rd.image_url) rd.image_url = fixImageUrl(rd.image_url);
               results.push({ file: file.name, status: 'success', receipt: rd });
-              // v105: уведомить об автопереключении модели (один раз за файл)
-              if (rd.failover && rd.failover.from) {
-                results.push({ file: `⚡ failover: ${rd.failover.from} → ${rd.failover.to}`, status: 'info' });
-              }
             }
             setFolderProgress(prev => ({ ...prev, success: prev.success + 1, fileRatio: 1 }));
             done = true;
@@ -7454,22 +7323,16 @@ ${bodyHtml}
 
   const deselectAll = () => setSelectedReceiptIds(new Set());
 
-  const [modelsCheckedAt, setModelsCheckedAt] = useState(null); // v105: время фоновой проверки
-  const [checkingModel, setCheckingModel] = useState(null);      // v105: какая модель сейчас пингуется по кнопке
-
-  // v105: без force читаем мгновенный кэш фоновой проверки (квоты бесплатных моделей не тратятся);
-  // force=true (кнопка «Обновить») — полный опрос всех моделей
-  const loadModels = async (force) => {
+  const loadModels = async () => {
     setModelsLoading(true);
     setModels([]);
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), force ? 90000 : 15000);
-      const res = await fetch(`${API_URL}/api/check-models${force ? '?refresh=1' : ''}`, { signal: controller.signal });
+      const timeout = setTimeout(() => controller.abort(), 90000);
+      const res = await fetch(`${API_URL}/api/check-models`, { signal: controller.signal });
       clearTimeout(timeout);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      if (data.checked_at) setModelsCheckedAt(data.checked_at);
       if (data.models && data.models.length > 0) {
         setModels(data.models);
       } else {
@@ -7480,29 +7343,6 @@ ${bodyHtml}
       setModels(FALLBACK_MODELS.map(m => ({ ...m, active: null, ms: null, error: 'Не проверена' })));
     }
     setModelsLoading(false);
-  };
-
-  // v105: проверить ОДНУ модель (кнопка 🔍 в строке) — квота остальных не тратится
-  const checkOneModel = async (name) => {
-    setCheckingModel(name);
-    try {
-      const res = await fetch(`${API_URL}/api/check-model?name=${encodeURIComponent(name)}`);
-      const data = await res.json();
-      if (res.ok && data.model) {
-        setModels(prev => {
-          const i = prev.findIndex(m => m.name === name);
-          if (i < 0) return [...prev, data.model];
-          const next = [...prev];
-          next[i] = data.model;
-          return next;
-        });
-      } else {
-        alert(data.error || 'Не удалось проверить модель');
-      }
-    } catch (e) {
-      alert('Ошибка проверки: ' + e.message);
-    }
-    setCheckingModel(null);
   };
 
   const formatDate = (dateStr) => {
@@ -7562,7 +7402,6 @@ ${bodyHtml}
     return 'huge';
   };
 
-  HL_EXACT = searchExact; // v104: HighlightText ниже читает этот флаг
   const filteredReceipts = receipts.filter(r => {
     if (filterTypes.length && !filterTypes.includes(r.document_type || 'receipt')) return false;
     if (filterSubtypes.length && !filterSubtypes.includes(r.subtype || 'none')) return false;
@@ -7597,19 +7436,12 @@ ${bodyHtml}
       String(r.party_a || ''), String(r.party_b || ''), String(r.summary || ''),
       String(r.payment_status || ''), String((PAYMENT_STATUS_META[r.payment_status]||{}).label || ''),
       String(r.created_at || ''), String(r.store_address || ''), String(r.doc_kind || ''),
-      // v104.1: строки, которые пользователь ВИДИТ на карточке — чтобы «полное совпадение»
-      // находило «0 товаров», «117.75 EUR», «30.04.2026» и т.п. дословно
-      `${(r.items || []).length} товаров`,
-      formatAmount(r.total_amount, r.currency),
-      formatDate(r.receipt_date),
-      `${formatDate(r.receipt_date)} ${r.receipt_time || ''}`.trim(),
     ];
     const itemsText = (r.items || []).map(i =>
       `${i.name || ''} ${i.name_ru || ''} ${i.price || ''} ${i.quantity || ''} ${i.total || ''} ${i.category || ''} ${i.sku || ''}`
     ).join(' ');
     const allText = (searchFields.join(' ') + ' ' + itemsText).toLowerCase();
-    // v104: «полное совпадение» — вся фраза целиком; иначе (v102) — ВСЕ слова в любом порядке
-    if (searchExact) return allText.includes(q);
+    // v102: запрос из нескольких слов — ищем ВСЕ слова (в любом порядке, по всем полям)
     return q.split(/\s+/).every(w => allText.includes(w));
   });
 
@@ -7845,52 +7677,21 @@ ${bodyHtml}
   }
 
   return (
-    <div className="App" onTouchStart={onAppTouchStart} onTouchEnd={onAppTouchEnd}>
+    <div className="App">
       <header className="mini-header" style={{ borderRadius: 16, margin: '10px 12px 0', overflow: 'hidden' }}>
         <div className="header-left">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, width: '100%' }}>
-            <div className="model-selector-wrap" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <button className="model-toggle-btn" onClick={() => { setModelModalOpen(true); loadModels(); }}
-                title="Выбор модели AI"
-                style={{ padding: '4px 12px', borderRadius: 8, fontSize: 13, fontWeight: 700, letterSpacing: 0.3 }}>
-                AI
+            <div className="model-selector-wrap">
+              <button className="model-toggle-btn" onClick={() => { setModelModalOpen(true); loadModels(); }}>
+                Выбор модели
               </button>
-              <div title={uiMode === 'auto' ? `Режим: авто (сейчас ${isMobileView ? 'мобильный' : 'полный'}) — выберите версию или нажмите активную для возврата в авто` : uiMode === 'mobile' ? 'Режим: мобильный (нажмите 📱 ещё раз — авто)' : 'Режим: полная версия (нажмите 🖥 ещё раз — авто)'}
-                style={{ display: 'flex', border: '1px solid #d0d0d5', borderRadius: 9, overflow: 'hidden', background: '#fff' }}>
-                {[['mobile', '📱'], ['desktop', '🖥']].map(([mode, ico]) => {
-                  const isActive = uiMode === mode || (uiMode === 'auto' && ((mode === 'mobile') === isMobileView));
-                  return (
-                    <button key={mode}
-                      onClick={() => setUiMode(prev => { const next = prev === mode ? 'auto' : mode; try { localStorage.setItem('ui_mode', next); } catch {} return next; })}
-                      style={{ border: 'none', background: isActive ? (uiMode === 'auto' ? '#d6e6fb' : '#0071e3') : 'transparent', filter: isActive ? 'none' : 'grayscale(1) opacity(0.45)', borderRadius: 0, padding: '5px 9px', fontSize: 14, cursor: 'pointer', minHeight: 0 }}
-                    >{ico}</button>
-                  );
-                })}
-              </div>
             </div>
-            {/* v106.2: на мобильном кнопки распознавания — в шапке, между «Выбор модели» и «Выйти» */}
-            {isMobileView && activeTab === 'upload' && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <button
-                  onClick={() => recognizeAndSave()}
-                  disabled={!selectedFiles.length || recognizing}
-                  title="Распознать и сохранить (AI)"
-                  style={{ border: 'none', background: (!selectedFiles.length || recognizing) ? '#c7d7ea' : '#0071e3', color: '#fff', borderRadius: 9, padding: '7px 12px', fontSize: 14, fontWeight: 700, cursor: (!selectedFiles.length || recognizing) ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}
-                >{recognizing && progressStage ? `⚡ ${uploadProgress}%` : '⚡ Распознать'}</button>
-                <button
-                  onClick={recognizeViaMacOcr}
-                  disabled={!selectedFiles.length || recognizing}
-                  title="Локально (Mac OCR, бесплатно)"
-                  style={{ border: '1.5px solid #27ae60', background: '#f0faf4', color: '#1e8449', borderRadius: 9, padding: '6px 10px', fontSize: 13, fontWeight: 700, cursor: (!selectedFiles.length || recognizing) ? 'not-allowed' : 'pointer', opacity: (!selectedFiles.length || recognizing) ? 0.55 : 1, whiteSpace: 'nowrap' }}
-                >⌘ OCR</button>
-              </div>
-            )}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <span className="user-name">{formatUserName(user)}</span>
               <button className="logout-btn" onClick={logout}>Выйти</button>
             </div>
           </div>
-          <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}' + MOBILE_CSS}</style>
+          <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}'}</style>
           <nav className="tabs-inline">
             {user?.role !== 'viewer' && tabAllowed('upload') && (
               <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>Загрузка</button>
@@ -7953,82 +7754,6 @@ ${bodyHtml}
         </div>
       </header>
 
-      {/* v106: нижняя мобильная навигация — основные разделы под большим пальцем, остальные в «Ещё» */}
-      {isMobileView && (
-        <nav className="mobile-bottomnav">
-          {tabAllowed('list') && (
-            <button className={activeTab === 'list' ? 'active' : ''} onClick={() => { setActiveTab('list'); loadReceipts(); }}>
-              <span className="mbn-ico">🧾</span>Фактуры
-            </button>
-          )}
-          {user?.role !== 'viewer' && tabAllowed('upload') && (
-            <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>
-              <span className="mbn-ico">📤</span>Загрузка
-            </button>
-          )}
-          {tabAllowed('cash') && (
-            <button className={activeTab === 'cash' ? 'active' : ''} onClick={() => { setActiveTab('cash'); loadReceipts(); loadCashMovements(); }}>
-              <span className="mbn-ico">💵</span>Cash
-            </button>
-          )}
-          {(user?.role === 'admin' || user?.role === 'manager' || user?.role === 'user') && tabAllowed('crm') && (
-            <button className={activeTab === 'crm' ? 'active' : ''} onClick={() => setActiveTab('crm')}>
-              <span className="mbn-ico">🤝</span>CRM
-            </button>
-          )}
-          {tabAllowed('analysis') && (
-            <button className={activeTab === 'analysis' ? 'active' : ''} onClick={() => gotoTab('analysis')}>
-              <span className="mbn-ico">📊</span>Анализ
-            </button>
-          )}
-          {tabAllowed('taxes') && (
-            <button className={activeTab === 'taxes' ? 'active' : ''} onClick={() => gotoTab('taxes')}>
-              <span className="mbn-ico">🧾</span>Налоги
-            </button>
-          )}
-          {tabAllowed('docs') && (
-            <button className={activeTab === 'docs' ? 'active' : ''} onClick={() => gotoTab('docs')}>
-              <span className="mbn-ico">📁</span>Доки
-            </button>
-          )}
-          {tabAllowed('chat') && (
-            <button className={activeTab === 'chat' ? 'active' : ''} onClick={() => gotoTab('chat')} style={{ position: 'relative' }}>
-              <span className="mbn-ico">💬</span>Чат{chatUnreadTotal > 0 ? ` (${chatUnreadTotal})` : ''}
-            </button>
-          )}
-          {user?.role === 'admin' && (
-            <button className={activeTab === 'users' ? 'active' : ''} onClick={() => gotoTab('users')}>
-              <span className="mbn-ico">👥</span>Доступ
-            </button>
-          )}
-          {user?.role === 'admin' && (
-            <button className={activeTab === 'log' ? 'active' : ''} onClick={() => gotoTab('log')}>
-              <span className="mbn-ico">📋</span>Журнал
-            </button>
-          )}
-          <button onClick={() => setMoreNavOpen(true)}>
-            <span className="mbn-ico">⋯</span>Ещё
-          </button>
-        </nav>
-      )}
-      {isMobileView && moreNavOpen && (
-        <>
-          <div onClick={() => setMoreNavOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 1150 }} />
-          <div className="mobile-more-sheet">
-            <div style={{ textAlign: 'center', color: '#8e8e93', fontSize: 12, marginBottom: 6 }}>— Ещё —</div>
-            {tabAllowed('analysis') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('analysis'); loadReceipts(); loadBankMovements(); loadPlannedPayments(); }}>📊 Анализ</button>}
-            {tabAllowed('taxes') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('taxes'); loadReceipts(); loadBankMovements(); }}>🧾 Налоги</button>}
-            {tabAllowed('docs') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('docs'); }}>📁 Документы</button>}
-            {tabAllowed('chat') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('chat'); }}>💬 Чат{chatUnreadTotal > 0 ? ` (${chatUnreadTotal})` : ''}</button>}
-            {user?.role === 'admin' && <button onClick={() => { setMoreNavOpen(false); setActiveTab('users'); }}>👥 Доступ</button>}
-            {user?.role === 'admin' && <button onClick={() => { setMoreNavOpen(false); setActiveTab('log'); }}>📋 Журнал</button>}
-            <button onClick={() => { setMoreNavOpen(false); setModelModalOpen(true); loadModels(); }}>🤖 Выбор модели AI</button>
-            <button onClick={() => { setMoreNavOpen(false); cycleUiMode(); }}>{uiMode === 'mobile' ? '🖥 Переключить на полную версию' : '📱/🖥 Режим интерфейса (сейчас: авто)'}</button>
-            <button onClick={() => setMoreNavOpen(false)} style={{ textAlign: 'center', color: '#8e8e93', borderBottom: 'none' }}>Закрыть</button>
-          </div>
-        </>
-      )}
-
       {backendInfo && !String(backendInfo.version || '').includes('2026-08-04.22') && (
         <div style={{ background: 'linear-gradient(180deg,#ffffff,#ececf0)', border: '1px solid #c7c7cc', color: '#1d1d1f', padding: '10px 16px', borderRadius: 12, margin: '10px 15px', fontSize: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <strong> Бэкенд устарел!</strong>
@@ -8048,7 +7773,7 @@ ${bodyHtml}
               <h2>Выбор модели AI</h2>
               <button
                 className="model-refresh-btn"
-                onClick={() => loadModels(true)}
+                onClick={loadModels}
                 disabled={modelsLoading}
                 title="Опросить модели заново"
                 style={{ marginRight: 8, padding: '6px 12px', borderRadius: 6, border: '1px solid #ddd', background: modelsLoading ? '#f0f0f0' : '#fff', cursor: modelsLoading ? 'not-allowed' : 'pointer', fontSize: 13 }}
@@ -8065,11 +7790,6 @@ ${bodyHtml}
                 onChange={e => setModelSearch(e.target.value)}
               />
             </div>
-            {modelsCheckedAt && (
-              <div style={{ margin: '0 16px 6px', fontSize: 11, color: '#888' }}>
-                🤖 Статусы из фоновой проверки сервера (каждые 3 ч): {new Date(modelsCheckedAt).toLocaleString('ru-RU')} · кнопка 🔍 в строке проверяет одну модель, «🔄 Обновить» — все
-              </div>
-            )}
             {freeModelTipOpen && (
               <div style={{ margin: '0 16px 8px', padding: '10px 12px', background: '#fff8e1', border: '1px solid #ffe082', borderRadius: 8, fontSize: 12, lineHeight: 1.5 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
@@ -8155,14 +7875,8 @@ ${bodyHtml}
                               )}
                               {isUnknown && <span style={{ color: '#888', whiteSpace: 'nowrap' }}>➖ Не проверена</span>}
                             </td>
-                            <td style={{ padding: '7px 6px', borderBottom: '1px solid #eee', textAlign: 'right', color: '#666', fontSize: 12, whiteSpace: 'nowrap' }}>
+                            <td style={{ padding: '7px 6px', borderBottom: '1px solid #eee', textAlign: 'right', color: '#666', fontSize: 12 }}>
                               {isActive && model.ms != null ? `${(model.ms / 1000).toFixed(1)} с` : '—'}
-                              <button
-                                onClick={(e) => { e.stopPropagation(); checkOneModel(model.name); }}
-                                disabled={checkingModel === model.name}
-                                title={`Проверить только «${model.displayName}» сейчас (квота других моделей не тратится)`}
-                                style={{ marginLeft: 6, border: '1px solid #ddd', background: '#fff', borderRadius: 5, padding: '1px 6px', fontSize: 11, cursor: 'pointer' }}
-                              >{checkingModel === model.name ? '⏳' : '🔍'}</button>
                             </td>
                           </tr>
                         );
@@ -8728,27 +8442,27 @@ ${bodyHtml}
             <label htmlFor="folder-input" className="btn-folder" onClick={pickFolderNative}>
               📁 Распознать папку
             </label>
-            <label htmlFor="statement-input" className="btn-folder hide-mobile" style={{ background: '#16a085' }} title="Excel-выписки банка (.xlsx), можно несколько сразу: дубликаты пропускаются, фактуры автоматически привяжутся к платежам">
+            <label htmlFor="statement-input" className="btn-folder" style={{ background: '#16a085' }} title="Excel-выписки банка (.xlsx), можно несколько сразу: дубликаты пропускаются, фактуры автоматически привяжутся к платежам">
               🏦 Выписки банка
             </label>
             {user?.role === 'admin' && (
               <React.Fragment>
-                <button type="button" className="btn-folder hide-mobile" style={{ background: '#5e5ce6' }} onClick={downloadBackup} disabled={backupBusy || restoreBusy}
+                <button type="button" className="btn-folder" style={{ background: '#5e5ce6' }} onClick={downloadBackup} disabled={backupBusy || restoreBusy}
                   title="Скачать полный бэкап: все таблицы (JSON) + манифест файлов (URL) одним ZIP">
                   {backupBusy ? '⏳ Бэкап…' : '📦 Бэкап'}
                 </button>
-                <button type="button" className="btn-folder hide-mobile" style={{ background: '#0a84ff' }} onClick={backupToCloud} disabled={backupBusy || restoreBusy}
+                <button type="button" className="btn-folder" style={{ background: '#0a84ff' }} onClick={backupToCloud} disabled={backupBusy || restoreBusy}
                   title="Сохранить бэкап в облако (Cloudflare R2, папка backups/). Автоматически делается раз в сутки, хранятся последние 14 копий">
                   ☁️ В облако
                 </button>
-                <label className="btn-folder hide-mobile" style={{ background: '#bf5af2', opacity: restoreBusy ? 0.6 : 1 }}
+                <label className="btn-folder" style={{ background: '#bf5af2', opacity: restoreBusy ? 0.6 : 1 }}
                   title="Восстановить таблицы из файла бэкапа (.zip): существующие записи обновятся, недостающие добавятся">
                   {restoreBusy ? '⏳ Восстановление…' : '♻ Восстановить'}
                   <input type="file" accept=".zip" style={{ display: 'none' }} disabled={restoreBusy || backupBusy} onChange={handleRestoreFile} />
                 </label>
               </React.Fragment>
             )}
-            <div className="toolbar-controls hide-mobile">
+            <div className="toolbar-controls">
               <div className="control-group compact">
                 <label>Валюта:</label>
                 <select value={currency} onChange={e => setCurrency(e.target.value)}>
@@ -8890,7 +8604,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-30 · v106.7 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-28 · v102 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9169,7 +8883,6 @@ ${bodyHtml}
           )}
           <div className="filters" style={{ flexWrap: 'wrap', gap: '8px', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', flex: '1 1 auto' }}>
-            <div className="hide-mobile" style={{ display: 'contents' }}>
             <ExcelFilter label="Год" options={availableYears.map(y => ({ value: y, label: String(y) }))} selected={filterYears} onChange={v => { setFilterYears(v); setCurrentPage(1); }} />
             <ExcelFilter label="Месяц" options={MONTH_NAMES.map((n, i) => ({ value: i + 1, label: n }))} selected={filterMonths} onChange={v => { setFilterMonths(v); setCurrentPage(1); }} />
             <ExcelFilter label="Тип" options={Object.entries(DOC_TYPE_LABELS).map(([v, l]) => ({ value: v, label: l }))} selected={filterTypes} onChange={v => { setFilterTypes(v); setCurrentPage(1); }} />
@@ -9183,26 +8896,17 @@ ${bodyHtml}
               { value: 'huge', label: 'Δ более 20' },
               { value: 'empty', label: '— Нет сумм' }
             ]} selected={filterDiffs} onChange={v => { setFilterDiffs(v); setCurrentPage(1); }} />
-            </div>
-            {/* v106.4: поиск + «полное совпадение» всегда в ОДНУ строку */}
-            <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', flex: '1 1 100%', minWidth: 0 }}>
-              <input type="text" placeholder="🔍 Поиск по всему: название, товары, текст, контрагент, сумма, адрес…" value={searchQuery} onChange={e => {setSearchQuery(e.target.value); setCurrentPage(1);}}
-                style={{ flex: '1 1 auto', minWidth: 0, maxWidth: 460, padding: '6px 10px', fontSize: 13, borderRadius: 6, border: '1px solid #ccc' }} />
-              <label title="Вкл: ищет всю фразу целиком. Выкл: ищет все слова по отдельности" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', flexShrink: 0 }}>
-                <input type="checkbox" checked={searchExact} onChange={e => { setSearchExact(e.target.checked); setCurrentPage(1); }} style={{ width: 15, height: 15, cursor: 'pointer', margin: 0 }} />
-                точно
-              </label>
-            </div>
+            <input type="text" placeholder="🔍 Поиск по всему: название, товары, текст, контрагент, сумма, адрес…" value={searchQuery} onChange={e => {setSearchQuery(e.target.value); setCurrentPage(1);}}
+              style={{ flex: '1 1 260px', maxWidth: 460, padding: '6px 10px', fontSize: 13, borderRadius: 6, border: '1px solid #ccc' }} />
             </div>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
-            <select className="hide-mobile" value={itemsPerPage} onChange={e => {setItemsPerPage(e.target.value === 'all' ? 'all' : parseInt(e.target.value)); setCurrentPage(1);}}
+            <select value={itemsPerPage} onChange={e => {setItemsPerPage(e.target.value === 'all' ? 'all' : parseInt(e.target.value)); setCurrentPage(1);}}
               style={{ padding: '6px 8px', fontSize: 13, borderRadius: 6, border: '1px solid #ccc', width: 'auto' }}>
               {ITEMS_PER_PAGE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt === 'all' ? 'Все' : opt}</option>)}
             </select>
-            <button className="hide-mobile" onClick={() => exportExcel()} style={{ padding: '6px 12px', fontSize: 13 }}>📊 Excel (все)</button>
-            <button className="hide-mobile" onClick={() => loadReceipts()} style={{ padding: '6px 12px', fontSize: 13 }}>🔄 Обновить</button>
+            <button onClick={() => exportExcel()} style={{ padding: '6px 12px', fontSize: 13 }}>📊 Excel (все)</button>
+            <button onClick={() => loadReceipts()} style={{ padding: '6px 12px', fontSize: 13 }}>🔄 Обновить</button>
             <button
-              className="hide-mobile"
               onClick={() => { setShowDuplicates(v => !v); setDupFocusId(null); setCurrentPage(1); setSelectedReceiptIds(new Set()); }}
               style={{
                 padding: '6px 12px', fontSize: 13, cursor: 'pointer',
@@ -9225,7 +8929,7 @@ ${bodyHtml}
                 {(user?.role === 'admin' || user?.role === 'manager' || user?.role === 'user') && (
                   <button className="bulk-btn bulk-btn-danger" onClick={bulkDelete}>🗑 Удалить</button>
                 )}
-                <div className="hide-mobile" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                   <select className="bulk-select" value={exportMode} onChange={(e) => setExportMode(e.target.value)}>
                     <option value="all">Все (Excel + Фото + Текст)</option>
                     <option value="excel">📊 Только Excel</option>
@@ -9263,34 +8967,34 @@ ${bodyHtml}
                 </div>
                 {user?.role !== 'viewer' && (
                   <React.Fragment>
-                    <button className="bulk-btn bulk-btn-purple hide-mobile" onClick={() => bulkReprocess()}>🔄 Перераспознать</button>
-                    <button className="bulk-btn bulk-btn-teal hide-mobile" onClick={() => bulkTranslate()}>🌐 Перевести</button>
+                    <button className="bulk-btn bulk-btn-purple" onClick={() => bulkReprocess()}>🔄 Перераспознать</button>
+                    <button className="bulk-btn bulk-btn-teal" onClick={() => bulkTranslate()}>🌐 Перевести</button>
                   </React.Fragment>
                 )}
               </div>
 
               {/* Нижняя строка — Сменить... во всю ширину */}
               <div className="bulk-actions-row bulk-actions-row-full" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                <select className="bulk-select hide-mobile" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeObject(v); e.target.value = ''; }}>
+                <select className="bulk-select" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeObject(v); e.target.value = ''; }}>
                   <option value="">Сменить объект...</option>
                   {objectsList.map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
-                <select className="bulk-select hide-mobile" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeType(v); e.target.value = ''; }}>
+                <select className="bulk-select" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeType(v); e.target.value = ''; }}>
                   <option value="">Сменить тип...</option>
                   {Object.entries(DOC_TYPE_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
                 </select>
-                <select className="bulk-select hide-mobile" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeSubtype(v); e.target.value = ''; }}>
+                <select className="bulk-select" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeSubtype(v); e.target.value = ''; }}>
                   <option value="">Сменить подтип...</option>
                   {Object.entries(SUBTYPE_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
                 </select>
-                <select className="bulk-select hide-mobile" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangePaymentStatus(v); e.target.value = ''; }}>
+                <select className="bulk-select" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangePaymentStatus(v); e.target.value = ''; }}>
                   <option value="">Сменить оплату...</option>
                   <option value="to_pay">🟠 К оплате</option>
                   <option value="paid">🟢 Оплачено</option>
                   <option value="underpaid">🔴 Недоплачено</option>
                   <option value="__clear">✖ Очистить статус</option>
                 </select>
-                <select className="bulk-select hide-mobile" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeCurrency(v); e.target.value = ''; }}>
+                <select className="bulk-select" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeCurrency(v); e.target.value = ''; }}>
                   <option value="">Сменить валюту...</option>
                   <option value="AED">AED</option>
                   <option value="EUR">EUR</option>
@@ -9326,7 +9030,7 @@ ${bodyHtml}
             </div>
           )}
 
-          <div className="selectall-sort-row" style={{ marginBottom: 10, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
             <label style={{ cursor: 'pointer', fontSize: 14 }}>
               <input
                 type="checkbox"
@@ -9343,19 +9047,15 @@ ${bodyHtml}
               />
               Выбрать все на странице
             </label>
-            <div className="sort-row" style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto', flexWrap: isMobileView ? 'nowrap' : 'wrap', overflowX: isMobileView ? 'auto' : 'visible', WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none', maxWidth: '100%' }}>
-              <select className="mobile-only" value={itemsPerPage} onChange={e => {setItemsPerPage(e.target.value === 'all' ? 'all' : parseInt(e.target.value)); setCurrentPage(1);}}
-                style={{ padding: '6px 8px', fontSize: 13, borderRadius: 6, border: '1px solid #ccc', width: 'auto', flexShrink: 0 }}>
-                {ITEMS_PER_PAGE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt === 'all' ? 'Все' : opt}</option>)}
-              </select>
-              <span className="hide-mobile" style={{ fontSize: 13, color: '#7f8c8d', flexShrink: 0 }}>Сортировка:</span>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13, color: '#7f8c8d' }}>Сортировка:</span>
               <button
                 onClick={() => { if (sortMode === 'receipt') setSortDir(d => d === 'desc' ? 'asc' : 'desc'); else { setSortMode('receipt'); setSortDir('desc'); } setCurrentPage(1); }}
                 style={{
                   padding: '4px 10px', fontSize: 13, borderRadius: 6, cursor: 'pointer',
                   border: sortMode === 'receipt' ? '1px solid #3498db' : '1px solid #ccc',
                   background: sortMode === 'receipt' ? '#eaf3fb' : '#fff',
-                  color: sortMode === 'receipt' ? '#2980b9' : '#555', fontWeight: sortMode === 'receipt' ? 600 : 400, flexShrink: 0, whiteSpace: 'nowrap'
+                  color: sortMode === 'receipt' ? '#2980b9' : '#555', fontWeight: sortMode === 'receipt' ? 600 : 400
                 }}
               >
                 По дате чека {sortMode === 'receipt' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
@@ -9366,7 +9066,7 @@ ${bodyHtml}
                   padding: '4px 10px', fontSize: 13, borderRadius: 6, cursor: 'pointer',
                   border: sortMode === 'recognized' ? '1px solid #3498db' : '1px solid #ccc',
                   background: sortMode === 'recognized' ? '#eaf3fb' : '#fff',
-                  color: sortMode === 'recognized' ? '#2980b9' : '#555', fontWeight: sortMode === 'recognized' ? 600 : 400, flexShrink: 0, whiteSpace: 'nowrap'
+                  color: sortMode === 'recognized' ? '#2980b9' : '#555', fontWeight: sortMode === 'recognized' ? 600 : 400
                 }}
               >
                 По дате распознавания {sortMode === 'recognized' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
@@ -9427,15 +9127,13 @@ ${bodyHtml}
           ) : (
             <>
               {dateRailGroups.length >= 2 && (
-                <div style={isMobileView
-                  ? { position: 'fixed', left: 6, right: 6, bottom: 'calc(64px + env(safe-area-inset-bottom))', zIndex: 60, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, background: 'rgba(255,255,255,0.94)', border: '1px solid #e3e6ea', borderRadius: 12, padding: '6px 10px', boxShadow: '0 2px 10px rgba(0,0,0,0.10)', overflowX: 'auto', overflowY: 'hidden', WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none', boxSizing: 'border-box' }
-                  : { position: 'fixed', right: 6, top: '50%', transform: 'translateY(-50%)', zIndex: 60, display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 2, background: 'rgba(255,255,255,0.94)', border: '1px solid #e3e6ea', borderRadius: 12, padding: '8px 8px', boxShadow: '0 2px 10px rgba(0,0,0,0.10)', maxHeight: '74vh', overflowY: 'auto', scrollbarWidth: 'none', width: 76, boxSizing: 'border-box' }}>
+                <div style={{ position: 'fixed', right: 6, top: '50%', transform: 'translateY(-50%)', zIndex: 60, display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 2, background: 'rgba(255,255,255,0.94)', border: '1px solid #e3e6ea', borderRadius: 12, padding: '8px 8px', boxShadow: '0 2px 10px rgba(0,0,0,0.10)', maxHeight: '74vh', overflowY: 'auto', scrollbarWidth: 'none', width: 76, boxSizing: 'border-box' }}>
                   {dateRailGroups.map(g => {
                     const active = String(activeRailGk) === String(g.gk);
                     const label = g.year === null ? '—' : g.isYearStart ? String(g.year) : MONTH_NAMES[g.month].slice(0, 3);
                     return (
                       <button key={g.gk} onClick={() => scrollToGroup(g.gk)} title={g.title}
-                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, width: isMobileView ? 'auto' : '100%', flexShrink: 0, boxSizing: 'border-box', WebkitAppearance: 'none', appearance: 'none', border: 'none', borderRadius: 0, background: 'none', boxShadow: 'none', margin: 0, padding: '2px 0', minWidth: 0, minHeight: 0, fontFamily: 'inherit', lineHeight: 1.2, whiteSpace: 'nowrap', cursor: 'pointer', color: active ? '#0a84ff' : (g.isYearStart ? '#1d1d1f' : '#8e8e93'), fontWeight: g.isYearStart ? 800 : 600, fontSize: g.isYearStart ? 12 : 11 }}>
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, width: '100%', boxSizing: 'border-box', WebkitAppearance: 'none', appearance: 'none', border: 'none', borderRadius: 0, background: 'none', boxShadow: 'none', margin: 0, padding: '2px 0', minWidth: 0, minHeight: 0, fontFamily: 'inherit', lineHeight: 1.2, whiteSpace: 'nowrap', cursor: 'pointer', color: active ? '#0a84ff' : (g.isYearStart ? '#1d1d1f' : '#8e8e93'), fontWeight: g.isYearStart ? 800 : 600, fontSize: g.isYearStart ? 12 : 11 }}>
                         <span>{label}</span>
                         <span style={{ display: 'inline-block', width: active ? 18 : 12, height: 2, borderRadius: 1, background: active ? '#0a84ff' : '#c7c7cc', transition: 'all 0.15s' }} />
                       </button>
@@ -9511,9 +9209,9 @@ ${bodyHtml}
                           >{PAYMENT_STATUS_META[receipt.payment_status].short}</span>
                         )}
                       </div>
-                      <p className="date"><HighlightText text={`${formatDate(receipt.receipt_date)} ${receipt.receipt_time || ''}`} query={searchQuery} /></p>
+                      <p className="date">{formatDate(receipt.receipt_date)} {receipt.receipt_time}</p>
                       <p className="amount" style={{ color: hasDiff ? '#e67e22' : '#27ae60' }}>
-                        <HighlightText text={formatAmount(receipt.total_amount, receipt.currency)} query={searchQuery} />
+                        {formatAmount(receipt.total_amount, receipt.currency)}
                         {hasDiff && <span style={{ fontSize: 12, color: '#e74c3c', marginLeft: 6 }}>(Δ {diff})</span>}
                       </p>
                       {/* v67.9: метка привязки к банку — клик открывает «Налоги» на строке платежа */}
@@ -9526,15 +9224,15 @@ ${bodyHtml}
                           </span>
                         </p>
                       )}
-                      <p className="items-count"> <HighlightText text={`${receipt.items?.length || 0} товаров`} query={searchQuery} /></p>
+                      <p className="items-count"> {receipt.items?.length || 0} товаров</p>
                       {receipt.object && (
                         <p style={{ fontSize: 12, color: '#7f8c8d', margin: '4px 0' }}>
                           <HighlightText text={receipt.object} query={searchQuery} />
-                          {receipt.subtype && <span style={{ marginLeft: 6, color: '#95a5a6' }}><HighlightText text={SUBTYPE_LABELS[receipt.subtype] || receipt.subtype} query={searchQuery} /></span>}
+                          {receipt.subtype && <span style={{ marginLeft: 6, color: '#95a5a6' }}>{SUBTYPE_LABELS[receipt.subtype] || receipt.subtype}</span>}
                           {receipt.consumption != null && <span style={{ marginLeft: 6, color: '#95a5a6' }}>{receipt.consumption} {receipt.consumption_unit || ''}</span>}
                         </p>
                       )}
-                      {receipt.supply_address && !isMobileView && (
+                      {receipt.supply_address && (
                         <p style={{ fontSize: 11, color: '#95a5a6', margin: '2px 0' }}>
                           <HighlightText text={receipt.supply_address} query={searchQuery} />
                         </p>
