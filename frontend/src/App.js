@@ -2156,7 +2156,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.3 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.4 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -8882,7 +8882,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-29 · v106.3 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-29 · v106.4 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9161,6 +9161,7 @@ ${bodyHtml}
           )}
           <div className="filters" style={{ flexWrap: 'wrap', gap: '8px', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', flex: '1 1 auto' }}>
+            <div className="hide-mobile" style={{ display: 'contents' }}>
             <ExcelFilter label="Год" options={availableYears.map(y => ({ value: y, label: String(y) }))} selected={filterYears} onChange={v => { setFilterYears(v); setCurrentPage(1); }} />
             <ExcelFilter label="Месяц" options={MONTH_NAMES.map((n, i) => ({ value: i + 1, label: n }))} selected={filterMonths} onChange={v => { setFilterMonths(v); setCurrentPage(1); }} />
             <ExcelFilter label="Тип" options={Object.entries(DOC_TYPE_LABELS).map(([v, l]) => ({ value: v, label: l }))} selected={filterTypes} onChange={v => { setFilterTypes(v); setCurrentPage(1); }} />
@@ -9174,12 +9175,16 @@ ${bodyHtml}
               { value: 'huge', label: 'Δ более 20' },
               { value: 'empty', label: '— Нет сумм' }
             ]} selected={filterDiffs} onChange={v => { setFilterDiffs(v); setCurrentPage(1); }} />
-            <input type="text" placeholder="🔍 Поиск по всему: название, товары, текст, контрагент, сумма, адрес…" value={searchQuery} onChange={e => {setSearchQuery(e.target.value); setCurrentPage(1);}}
-              style={{ flex: '1 1 260px', maxWidth: 460, padding: '6px 10px', fontSize: 13, borderRadius: 6, border: '1px solid #ccc' }} />
-            <label title="Вкл: ищет всю фразу целиком. Выкл: ищет все слова по отдельности" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
-              <input type="checkbox" checked={searchExact} onChange={e => { setSearchExact(e.target.checked); setCurrentPage(1); }} style={{ width: 15, height: 15, cursor: 'pointer' }} />
-              полное совпадение
-            </label>
+            </div>
+            {/* v106.4: поиск + «полное совпадение» всегда в ОДНУ строку */}
+            <div style={{ display: 'flex', flexWrap: 'nowrap', gap: 6, alignItems: 'center', flex: '1 1 100%', minWidth: 0 }}>
+              <input type="text" placeholder="🔍 Поиск по всему: название, товары, текст, контрагент, сумма, адрес…" value={searchQuery} onChange={e => {setSearchQuery(e.target.value); setCurrentPage(1);}}
+                style={{ flex: '1 1 auto', minWidth: 0, maxWidth: 460, padding: '6px 10px', fontSize: 13, borderRadius: 6, border: '1px solid #ccc' }} />
+              <label title="Вкл: ищет всю фразу целиком. Выкл: ищет все слова по отдельности" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#555', cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                <input type="checkbox" checked={searchExact} onChange={e => { setSearchExact(e.target.checked); setCurrentPage(1); }} style={{ width: 15, height: 15, cursor: 'pointer', margin: 0 }} />
+                точно
+              </label>
+            </div>
             </div>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
             <select value={itemsPerPage} onChange={e => {setItemsPerPage(e.target.value === 'all' ? 'all' : parseInt(e.target.value)); setCurrentPage(1);}}
@@ -9187,7 +9192,7 @@ ${bodyHtml}
               {ITEMS_PER_PAGE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt === 'all' ? 'Все' : opt}</option>)}
             </select>
             <button onClick={() => exportExcel()} style={{ padding: '6px 12px', fontSize: 13 }}>📊 Excel (все)</button>
-            <button onClick={() => loadReceipts()} style={{ padding: '6px 12px', fontSize: 13 }}>🔄 Обновить</button>
+            <button className="hide-mobile" onClick={() => loadReceipts()} style={{ padding: '6px 12px', fontSize: 13 }}>🔄 Обновить</button>
             <button
               onClick={() => { setShowDuplicates(v => !v); setDupFocusId(null); setCurrentPage(1); setSelectedReceiptIds(new Set()); }}
               style={{
@@ -9329,15 +9334,15 @@ ${bodyHtml}
               />
               Выбрать все на странице
             </label>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 13, color: '#7f8c8d' }}>Сортировка:</span>
+            <div className="sort-row" style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto', flexWrap: isMobileView ? 'nowrap' : 'wrap', overflowX: isMobileView ? 'auto' : 'visible', WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none', maxWidth: '100%' }}>
+              <span style={{ fontSize: 13, color: '#7f8c8d', flexShrink: 0 }}>Сортировка:</span>
               <button
                 onClick={() => { if (sortMode === 'receipt') setSortDir(d => d === 'desc' ? 'asc' : 'desc'); else { setSortMode('receipt'); setSortDir('desc'); } setCurrentPage(1); }}
                 style={{
                   padding: '4px 10px', fontSize: 13, borderRadius: 6, cursor: 'pointer',
                   border: sortMode === 'receipt' ? '1px solid #3498db' : '1px solid #ccc',
                   background: sortMode === 'receipt' ? '#eaf3fb' : '#fff',
-                  color: sortMode === 'receipt' ? '#2980b9' : '#555', fontWeight: sortMode === 'receipt' ? 600 : 400
+                  color: sortMode === 'receipt' ? '#2980b9' : '#555', fontWeight: sortMode === 'receipt' ? 600 : 400, flexShrink: 0, whiteSpace: 'nowrap'
                 }}
               >
                 По дате чека {sortMode === 'receipt' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
@@ -9348,7 +9353,7 @@ ${bodyHtml}
                   padding: '4px 10px', fontSize: 13, borderRadius: 6, cursor: 'pointer',
                   border: sortMode === 'recognized' ? '1px solid #3498db' : '1px solid #ccc',
                   background: sortMode === 'recognized' ? '#eaf3fb' : '#fff',
-                  color: sortMode === 'recognized' ? '#2980b9' : '#555', fontWeight: sortMode === 'recognized' ? 600 : 400
+                  color: sortMode === 'recognized' ? '#2980b9' : '#555', fontWeight: sortMode === 'recognized' ? 600 : 400, flexShrink: 0, whiteSpace: 'nowrap'
                 }}
               >
                 По дате распознавания {sortMode === 'recognized' ? (sortDir === 'desc' ? '↓' : '↑') : ''}
@@ -9409,13 +9414,15 @@ ${bodyHtml}
           ) : (
             <>
               {dateRailGroups.length >= 2 && (
-                <div style={{ position: 'fixed', right: 6, top: '50%', transform: 'translateY(-50%)', zIndex: 60, display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 2, background: 'rgba(255,255,255,0.94)', border: '1px solid #e3e6ea', borderRadius: 12, padding: '8px 8px', boxShadow: '0 2px 10px rgba(0,0,0,0.10)', maxHeight: '74vh', overflowY: 'auto', scrollbarWidth: 'none', width: 76, boxSizing: 'border-box' }}>
+                <div style={isMobileView
+                  ? { position: 'fixed', left: 6, right: 6, bottom: 'calc(64px + env(safe-area-inset-bottom))', zIndex: 60, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, background: 'rgba(255,255,255,0.94)', border: '1px solid #e3e6ea', borderRadius: 12, padding: '6px 10px', boxShadow: '0 2px 10px rgba(0,0,0,0.10)', overflowX: 'auto', overflowY: 'hidden', WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none', boxSizing: 'border-box' }
+                  : { position: 'fixed', right: 6, top: '50%', transform: 'translateY(-50%)', zIndex: 60, display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 2, background: 'rgba(255,255,255,0.94)', border: '1px solid #e3e6ea', borderRadius: 12, padding: '8px 8px', boxShadow: '0 2px 10px rgba(0,0,0,0.10)', maxHeight: '74vh', overflowY: 'auto', scrollbarWidth: 'none', width: 76, boxSizing: 'border-box' }}>
                   {dateRailGroups.map(g => {
                     const active = String(activeRailGk) === String(g.gk);
                     const label = g.year === null ? '—' : g.isYearStart ? String(g.year) : MONTH_NAMES[g.month].slice(0, 3);
                     return (
                       <button key={g.gk} onClick={() => scrollToGroup(g.gk)} title={g.title}
-                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, width: '100%', boxSizing: 'border-box', WebkitAppearance: 'none', appearance: 'none', border: 'none', borderRadius: 0, background: 'none', boxShadow: 'none', margin: 0, padding: '2px 0', minWidth: 0, minHeight: 0, fontFamily: 'inherit', lineHeight: 1.2, whiteSpace: 'nowrap', cursor: 'pointer', color: active ? '#0a84ff' : (g.isYearStart ? '#1d1d1f' : '#8e8e93'), fontWeight: g.isYearStart ? 800 : 600, fontSize: g.isYearStart ? 12 : 11 }}>
+                        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, width: isMobileView ? 'auto' : '100%', flexShrink: 0, boxSizing: 'border-box', WebkitAppearance: 'none', appearance: 'none', border: 'none', borderRadius: 0, background: 'none', boxShadow: 'none', margin: 0, padding: '2px 0', minWidth: 0, minHeight: 0, fontFamily: 'inherit', lineHeight: 1.2, whiteSpace: 'nowrap', cursor: 'pointer', color: active ? '#0a84ff' : (g.isYearStart ? '#1d1d1f' : '#8e8e93'), fontWeight: g.isYearStart ? 800 : 600, fontSize: g.isYearStart ? 12 : 11 }}>
                         <span>{label}</span>
                         <span style={{ display: 'inline-block', width: active ? 18 : 12, height: 2, borderRadius: 1, background: active ? '#0a84ff' : '#c7c7cc', transition: 'all 0.15s' }} />
                       </button>
