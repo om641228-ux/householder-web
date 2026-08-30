@@ -2156,7 +2156,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.4 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.5 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -8882,7 +8882,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-29 · v106.4 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-29 · v106.5 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9191,9 +9191,10 @@ ${bodyHtml}
               style={{ padding: '6px 8px', fontSize: 13, borderRadius: 6, border: '1px solid #ccc', width: 'auto' }}>
               {ITEMS_PER_PAGE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt === 'all' ? 'Все' : opt}</option>)}
             </select>
-            <button onClick={() => exportExcel()} style={{ padding: '6px 12px', fontSize: 13 }}>📊 Excel (все)</button>
+            <button className="hide-mobile" onClick={() => exportExcel()} style={{ padding: '6px 12px', fontSize: 13 }}>📊 Excel (все)</button>
             <button className="hide-mobile" onClick={() => loadReceipts()} style={{ padding: '6px 12px', fontSize: 13 }}>🔄 Обновить</button>
             <button
+              className="hide-mobile"
               onClick={() => { setShowDuplicates(v => !v); setDupFocusId(null); setCurrentPage(1); setSelectedReceiptIds(new Set()); }}
               style={{
                 padding: '6px 12px', fontSize: 13, cursor: 'pointer',
@@ -9216,7 +9217,7 @@ ${bodyHtml}
                 {(user?.role === 'admin' || user?.role === 'manager' || user?.role === 'user') && (
                   <button className="bulk-btn bulk-btn-danger" onClick={bulkDelete}>🗑 Удалить</button>
                 )}
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div className="hide-mobile" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                   <select className="bulk-select" value={exportMode} onChange={(e) => setExportMode(e.target.value)}>
                     <option value="all">Все (Excel + Фото + Текст)</option>
                     <option value="excel">📊 Только Excel</option>
@@ -9254,34 +9255,34 @@ ${bodyHtml}
                 </div>
                 {user?.role !== 'viewer' && (
                   <React.Fragment>
-                    <button className="bulk-btn bulk-btn-purple" onClick={() => bulkReprocess()}>🔄 Перераспознать</button>
-                    <button className="bulk-btn bulk-btn-teal" onClick={() => bulkTranslate()}>🌐 Перевести</button>
+                    <button className="bulk-btn bulk-btn-purple hide-mobile" onClick={() => bulkReprocess()}>🔄 Перераспознать</button>
+                    <button className="bulk-btn bulk-btn-teal hide-mobile" onClick={() => bulkTranslate()}>🌐 Перевести</button>
                   </React.Fragment>
                 )}
               </div>
 
               {/* Нижняя строка — Сменить... во всю ширину */}
               <div className="bulk-actions-row bulk-actions-row-full" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                <select className="bulk-select" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeObject(v); e.target.value = ''; }}>
+                <select className="bulk-select hide-mobile" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeObject(v); e.target.value = ''; }}>
                   <option value="">Сменить объект...</option>
                   {objectsList.map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
-                <select className="bulk-select" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeType(v); e.target.value = ''; }}>
+                <select className="bulk-select hide-mobile" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeType(v); e.target.value = ''; }}>
                   <option value="">Сменить тип...</option>
                   {Object.entries(DOC_TYPE_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
                 </select>
-                <select className="bulk-select" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeSubtype(v); e.target.value = ''; }}>
+                <select className="bulk-select hide-mobile" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeSubtype(v); e.target.value = ''; }}>
                   <option value="">Сменить подтип...</option>
                   {Object.entries(SUBTYPE_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
                 </select>
-                <select className="bulk-select" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangePaymentStatus(v); e.target.value = ''; }}>
+                <select className="bulk-select hide-mobile" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangePaymentStatus(v); e.target.value = ''; }}>
                   <option value="">Сменить оплату...</option>
                   <option value="to_pay">🟠 К оплате</option>
                   <option value="paid">🟢 Оплачено</option>
                   <option value="underpaid">🔴 Недоплачено</option>
                   <option value="__clear">✖ Очистить статус</option>
                 </select>
-                <select className="bulk-select" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeCurrency(v); e.target.value = ''; }}>
+                <select className="bulk-select hide-mobile" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeCurrency(v); e.target.value = ''; }}>
                   <option value="">Сменить валюту...</option>
                   <option value="AED">AED</option>
                   <option value="EUR">EUR</option>
