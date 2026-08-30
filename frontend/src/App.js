@@ -747,31 +747,28 @@ let HL_EXACT = false;
 // v106: мобильный CSS-пакет — срабатывает по ширине ≤768px (адаптив) и/или по классу .mobile-view
 // на <body> (когда пользователь принудительно включил мобильную версию переключателем 📱/🖥)
 const MOBILE_CSS = `
-@media (max-width: 768px), (max-width: 1024px) and (pointer: coarse) {
-  body.mobile-view .mini-header, .mini-header { margin: 6px 6px 0 !important; border-radius: 12px !important; }
-  .tabs-inline { flex-wrap: nowrap !important; overflow-x: auto !important; -webkit-overflow-scrolling: touch; scrollbar-width: none; padding-bottom: 2px; }
-  .tabs-inline::-webkit-scrollbar { display: none; }
-  .tabs-inline button { flex: 0 0 auto; min-height: 38px; font-size: 13px; padding: 8px 12px; }
-  .receipts-grid { grid-template-columns: 1fr !important; }
-  .filters { flex-direction: column !important; align-items: stretch !important; }
-  .filters > div { width: 100%; margin-left: 0 !important; justify-content: flex-start !important; flex-wrap: wrap !important; }
-  .filters input[type="text"] { max-width: none !important; flex: 1 1 100% !important; }
-  .filters select, .filters button { min-height: 38px; }
-  .modal-overlay { padding: 0 !important; }
-  .modal-content { width: 100vw !important; max-width: 100vw !important; height: 100dvh !important; max-height: 100dvh !important; border-radius: 0 !important; margin: 0 !important; }
-  .model-modal-content { width: 100vw !important; max-width: 100vw !important; height: 100dvh !important; max-height: 100dvh !important; border-radius: 0 !important; margin: 0 !important; }
-  .model-modal-body table { font-size: 12px; }
-  input, select, textarea { font-size: 16px !important; } /* против авто-зума iOS при фокусе */
-  button { min-height: 36px; }
-  table { font-size: 12px; }
-  .receipt-thumb { max-height: 220px; }
-}
-body.mobile-view { padding-bottom: 72px; } /* место под нижнюю навигацию */
-body.mobile-view .tabs-inline { display: none !important; } /* v106.2: верхнее меню скрыто — его заменяет нижняя навигация */
-body.mobile-view .recognize-bar { display: none !important; } /* v106.2: кнопки распознавания переехали в шапку */
-.mobile-bottomnav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1100; display: flex; background: rgba(255,255,255,0.96); backdrop-filter: blur(12px); border-top: 1px solid #d8dce1; padding: 4px 2px calc(4px + env(safe-area-inset-bottom)); }
-.mobile-bottomnav button { flex: 1; border: none; background: none; font-size: 10px; color: #6e6e73; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 5px 0; min-height: 48px; cursor: pointer; }
-.mobile-bottomnav button.active { color: #0071e3; font-weight: 700; }
+body.mobile-view { padding-bottom: 76px; }
+body.mobile-view .mini-header { margin: 6px 6px 0 !important; border-radius: 12px !important; }
+body.mobile-view .tabs-inline { display: none !important; } /* верхнее меню заменяет нижняя навигация */
+body.mobile-view .recognize-bar { display: none !important; } /* кнопки распознавания — в шапке */
+body.mobile-view .hide-mobile { display: none !important; } /* бэкап/облако/восстановить/выписки + селекторы на вкладке Загрузка */
+body.mobile-view .receipts-grid { grid-template-columns: 1fr !important; }
+body.mobile-view .filters { flex-direction: column !important; align-items: stretch !important; }
+body.mobile-view .filters > div { width: 100%; margin-left: 0 !important; justify-content: flex-start !important; flex-wrap: wrap !important; }
+body.mobile-view .filters input[type="text"] { max-width: none !important; flex: 1 1 100% !important; }
+body.mobile-view .filters select, body.mobile-view .filters button { min-height: 38px; }
+body.mobile-view .modal-overlay { padding: 0 !important; }
+body.mobile-view .modal-content { width: 100vw !important; max-width: 100vw !important; height: 100dvh !important; max-height: 100dvh !important; border-radius: 0 !important; margin: 0 !important; }
+body.mobile-view .model-modal-content { width: 100vw !important; max-width: 100vw !important; height: 100dvh !important; max-height: 100dvh !important; border-radius: 0 !important; margin: 0 !important; }
+body.mobile-view .model-modal-body table { font-size: 12px; }
+body.mobile-view input, body.mobile-view select, body.mobile-view textarea { font-size: 16px !important; }
+body.mobile-view button { min-height: 36px; }
+body.mobile-view table { font-size: 12px; }
+body.mobile-view .receipt-thumb { max-height: 220px; }
+.mobile-bottomnav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1100; display: flex; flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scroll-behavior: smooth; scroll-snap-type: x proximity; scrollbar-width: none; background: rgba(255,255,255,0.94); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border-top: 1px solid #d8dce1; padding: 4px 6px calc(4px + env(safe-area-inset-bottom)); }
+.mobile-bottomnav::-webkit-scrollbar { display: none; }
+.mobile-bottomnav button { flex: 0 0 auto; min-width: 66px; scroll-snap-align: center; border: none; background: none; font-size: 10px; color: #6e6e73; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 5px 6px; min-height: 48px; cursor: pointer; border-radius: 10px; }
+.mobile-bottomnav button.active { color: #0071e3; font-weight: 700; background: rgba(0,113,227,0.08); }
 .mobile-bottomnav button .mbn-ico { font-size: 20px; line-height: 1.2; }
 .mobile-more-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1200; background: #fff; border-radius: 16px 16px 0 0; box-shadow: 0 -8px 30px rgba(0,0,0,0.25); padding: 10px 14px calc(14px + env(safe-area-inset-bottom)); }
 .mobile-more-sheet button { display: block; width: 100%; text-align: left; border: none; background: none; padding: 13px 8px; font-size: 16px; border-bottom: 1px solid #f0f0f2; cursor: pointer; }
@@ -2159,7 +2156,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.2 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.3 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -7845,14 +7842,23 @@ ${bodyHtml}
         <div className="header-left">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, width: '100%' }}>
             <div className="model-selector-wrap" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <button className="model-toggle-btn" onClick={() => { setModelModalOpen(true); loadModels(); }}>
-                Выбор модели
+              <button className="model-toggle-btn" onClick={() => { setModelModalOpen(true); loadModels(); }}
+                title="Выбор модели AI"
+                style={{ padding: '4px 12px', borderRadius: 8, fontSize: 13, fontWeight: 700, letterSpacing: 0.3 }}>
+                AI
               </button>
-              <button
-                onClick={cycleUiMode}
-                title={uiMode === 'auto' ? 'Режим: авто (по устройству) — нажмите, чтобы включить мобильную версию' : uiMode === 'mobile' ? 'Режим: мобильный — нажмите, чтобы включить полную версию' : 'Режим: полная версия — нажмите, чтобы вернуть авто'}
-                style={{ border: '1px solid #d0d0d5', background: uiMode === 'auto' ? '#fff' : '#e8f0fe', borderRadius: 8, padding: '5px 9px', fontSize: 14, cursor: 'pointer' }}
-              >{uiMode === 'desktop' ? '🖥' : '📱'}</button>
+              <div title={uiMode === 'auto' ? `Режим: авто (сейчас ${isMobileView ? 'мобильный' : 'полный'}) — выберите версию или нажмите активную для возврата в авто` : uiMode === 'mobile' ? 'Режим: мобильный (нажмите 📱 ещё раз — авто)' : 'Режим: полная версия (нажмите 🖥 ещё раз — авто)'}
+                style={{ display: 'flex', border: '1px solid #d0d0d5', borderRadius: 9, overflow: 'hidden', background: '#fff' }}>
+                {[['mobile', '📱'], ['desktop', '🖥']].map(([mode, ico]) => {
+                  const isActive = uiMode === mode || (uiMode === 'auto' && ((mode === 'mobile') === isMobileView));
+                  return (
+                    <button key={mode}
+                      onClick={() => setUiMode(prev => { const next = prev === mode ? 'auto' : mode; try { localStorage.setItem('ui_mode', next); } catch {} return next; })}
+                      style={{ border: 'none', background: isActive ? (uiMode === 'auto' ? '#d6e6fb' : '#0071e3') : 'transparent', filter: isActive ? 'none' : 'grayscale(1) opacity(0.45)', borderRadius: 0, padding: '5px 9px', fontSize: 14, cursor: 'pointer', minHeight: 0 }}
+                    >{ico}</button>
+                  );
+                })}
+              </div>
             </div>
             {/* v106.2: на мобильном кнопки распознавания — в шапке, между «Выбор модели» и «Выйти» */}
             {isMobileView && activeTab === 'upload' && (
@@ -7867,8 +7873,8 @@ ${bodyHtml}
                   onClick={recognizeViaMacOcr}
                   disabled={!selectedFiles.length || recognizing}
                   title="Локально (Mac OCR, бесплатно)"
-                  style={{ border: '1.5px solid #27ae60', background: '#f0faf4', color: '#1e8449', borderRadius: 9, padding: '6px 10px', fontSize: 14, fontWeight: 700, cursor: (!selectedFiles.length || recognizing) ? 'not-allowed' : 'pointer', opacity: (!selectedFiles.length || recognizing) ? 0.55 : 1, whiteSpace: 'nowrap' }}
-                >🖥</button>
+                  style={{ border: '1.5px solid #27ae60', background: '#f0faf4', color: '#1e8449', borderRadius: 9, padding: '6px 10px', fontSize: 13, fontWeight: 700, cursor: (!selectedFiles.length || recognizing) ? 'not-allowed' : 'pointer', opacity: (!selectedFiles.length || recognizing) ? 0.55 : 1, whiteSpace: 'nowrap' }}
+                >⌘ OCR</button>
               </div>
             )}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -7960,6 +7966,36 @@ ${bodyHtml}
           {(user?.role === 'admin' || user?.role === 'manager' || user?.role === 'user') && tabAllowed('crm') && (
             <button className={activeTab === 'crm' ? 'active' : ''} onClick={() => setActiveTab('crm')}>
               <span className="mbn-ico">🤝</span>CRM
+            </button>
+          )}
+          {tabAllowed('analysis') && (
+            <button className={activeTab === 'analysis' ? 'active' : ''} onClick={() => gotoTab('analysis')}>
+              <span className="mbn-ico">📊</span>Анализ
+            </button>
+          )}
+          {tabAllowed('taxes') && (
+            <button className={activeTab === 'taxes' ? 'active' : ''} onClick={() => gotoTab('taxes')}>
+              <span className="mbn-ico">🧾</span>Налоги
+            </button>
+          )}
+          {tabAllowed('docs') && (
+            <button className={activeTab === 'docs' ? 'active' : ''} onClick={() => gotoTab('docs')}>
+              <span className="mbn-ico">📁</span>Доки
+            </button>
+          )}
+          {tabAllowed('chat') && (
+            <button className={activeTab === 'chat' ? 'active' : ''} onClick={() => gotoTab('chat')} style={{ position: 'relative' }}>
+              <span className="mbn-ico">💬</span>Чат{chatUnreadTotal > 0 ? ` (${chatUnreadTotal})` : ''}
+            </button>
+          )}
+          {user?.role === 'admin' && (
+            <button className={activeTab === 'users' ? 'active' : ''} onClick={() => gotoTab('users')}>
+              <span className="mbn-ico">👥</span>Доступ
+            </button>
+          )}
+          {user?.role === 'admin' && (
+            <button className={activeTab === 'log' ? 'active' : ''} onClick={() => gotoTab('log')}>
+              <span className="mbn-ico">📋</span>Журнал
             </button>
           )}
           <button onClick={() => setMoreNavOpen(true)}>
@@ -8684,27 +8720,27 @@ ${bodyHtml}
             <label htmlFor="folder-input" className="btn-folder" onClick={pickFolderNative}>
               📁 Распознать папку
             </label>
-            <label htmlFor="statement-input" className="btn-folder" style={{ background: '#16a085' }} title="Excel-выписки банка (.xlsx), можно несколько сразу: дубликаты пропускаются, фактуры автоматически привяжутся к платежам">
+            <label htmlFor="statement-input" className="btn-folder hide-mobile" style={{ background: '#16a085' }} title="Excel-выписки банка (.xlsx), можно несколько сразу: дубликаты пропускаются, фактуры автоматически привяжутся к платежам">
               🏦 Выписки банка
             </label>
             {user?.role === 'admin' && (
               <React.Fragment>
-                <button type="button" className="btn-folder" style={{ background: '#5e5ce6' }} onClick={downloadBackup} disabled={backupBusy || restoreBusy}
+                <button type="button" className="btn-folder hide-mobile" style={{ background: '#5e5ce6' }} onClick={downloadBackup} disabled={backupBusy || restoreBusy}
                   title="Скачать полный бэкап: все таблицы (JSON) + манифест файлов (URL) одним ZIP">
                   {backupBusy ? '⏳ Бэкап…' : '📦 Бэкап'}
                 </button>
-                <button type="button" className="btn-folder" style={{ background: '#0a84ff' }} onClick={backupToCloud} disabled={backupBusy || restoreBusy}
+                <button type="button" className="btn-folder hide-mobile" style={{ background: '#0a84ff' }} onClick={backupToCloud} disabled={backupBusy || restoreBusy}
                   title="Сохранить бэкап в облако (Cloudflare R2, папка backups/). Автоматически делается раз в сутки, хранятся последние 14 копий">
                   ☁️ В облако
                 </button>
-                <label className="btn-folder" style={{ background: '#bf5af2', opacity: restoreBusy ? 0.6 : 1 }}
+                <label className="btn-folder hide-mobile" style={{ background: '#bf5af2', opacity: restoreBusy ? 0.6 : 1 }}
                   title="Восстановить таблицы из файла бэкапа (.zip): существующие записи обновятся, недостающие добавятся">
                   {restoreBusy ? '⏳ Восстановление…' : '♻ Восстановить'}
                   <input type="file" accept=".zip" style={{ display: 'none' }} disabled={restoreBusy || backupBusy} onChange={handleRestoreFile} />
                 </label>
               </React.Fragment>
             )}
-            <div className="toolbar-controls">
+            <div className="toolbar-controls hide-mobile">
               <div className="control-group compact">
                 <label>Валюта:</label>
                 <select value={currency} onChange={e => setCurrency(e.target.value)}>
@@ -8846,7 +8882,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-29 · v106.2 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-29 · v106.3 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
