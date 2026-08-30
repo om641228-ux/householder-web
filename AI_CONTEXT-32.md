@@ -2203,3 +2203,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
   3) «Сменить объект/тип/подтип/оплату/валюту…» (5 select)
 - Остались: «Выбрано: N», «🗑 Удалить», «✖ Сбросить», «Показать копии/все».
 - Только frontend (App.js), md5 e3ce255f56ecaa19789cd07ae8cff101.
+
+## v106.6 (2026-08-30) — мобильная: компактные строки выбора и сортировки
+- «Выбрано: N / 🗑 Удалить / ✖ Сбросить» — в одну строку (bulk-actions-row → display:contents, панель flex nowrap + overflow-x:auto).
+- «Все» (itemsPerPage) + «По дате чека» + «По дате распознавания» — в одну прокручиваемую строку: исходный select скрыт (hide-mobile), мобильная копия в sort-row через новый класс .mobile-only; контейнеру добавлен класс selectall-sort-row (nowrap + overflow-x).
+- md5 App.js 03c0dadeb976fc9d4268928f9aaea064. Только frontend.

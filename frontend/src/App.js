@@ -752,6 +752,13 @@ body.mobile-view .mini-header { margin: 6px 6px 0 !important; border-radius: 12p
 body.mobile-view .tabs-inline { display: none !important; } /* верхнее меню заменяет нижняя навигация */
 body.mobile-view .recognize-bar { display: none !important; } /* кнопки распознавания — в шапке */
 body.mobile-view .hide-mobile { display: none !important; } /* бэкап/облако/восстановить/выписки + селекторы на вкладке Загрузка */
+.mobile-only { display: none !important; } /* видно только в мобильной версии */
+body.mobile-view .mobile-only { display: inline-block !important; }
+body.mobile-view .bulk-actions-panel { display: flex !important; flex-wrap: nowrap !important; overflow-x: auto !important; -webkit-overflow-scrolling: touch; scrollbar-width: none; align-items: center !important; gap: 8px !important; }
+body.mobile-view .bulk-actions-row { display: contents !important; } /* «Выбрано / Удалить / Сбросить» — в одну строку */
+body.mobile-view .bulk-actions-row > * { flex-shrink: 0 !important; }
+body.mobile-view .selectall-sort-row { flex-wrap: nowrap !important; overflow-x: auto !important; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+body.mobile-view .selectall-sort-row > * { flex-shrink: 0 !important; }
 body.mobile-view .receipts-grid { grid-template-columns: 1fr !important; }
 body.mobile-view .filters { flex-direction: column !important; align-items: stretch !important; }
 body.mobile-view .filters > div { width: 100%; margin-left: 0 !important; justify-content: flex-start !important; flex-wrap: wrap !important; }
@@ -2156,7 +2163,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.5 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.6 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -8882,7 +8889,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-29 · v106.5 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-30 · v106.6 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9187,7 +9194,7 @@ ${bodyHtml}
             </div>
             </div>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginLeft: 'auto', flexWrap: 'wrap' }}>
-            <select value={itemsPerPage} onChange={e => {setItemsPerPage(e.target.value === 'all' ? 'all' : parseInt(e.target.value)); setCurrentPage(1);}}
+            <select className="hide-mobile" value={itemsPerPage} onChange={e => {setItemsPerPage(e.target.value === 'all' ? 'all' : parseInt(e.target.value)); setCurrentPage(1);}}
               style={{ padding: '6px 8px', fontSize: 13, borderRadius: 6, border: '1px solid #ccc', width: 'auto' }}>
               {ITEMS_PER_PAGE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt === 'all' ? 'Все' : opt}</option>)}
             </select>
@@ -9318,7 +9325,7 @@ ${bodyHtml}
             </div>
           )}
 
-          <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <div className="selectall-sort-row" style={{ marginBottom: 10, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
             <label style={{ cursor: 'pointer', fontSize: 14 }}>
               <input
                 type="checkbox"
@@ -9336,7 +9343,11 @@ ${bodyHtml}
               Выбрать все на странице
             </label>
             <div className="sort-row" style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto', flexWrap: isMobileView ? 'nowrap' : 'wrap', overflowX: isMobileView ? 'auto' : 'visible', WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none', maxWidth: '100%' }}>
-              <span style={{ fontSize: 13, color: '#7f8c8d', flexShrink: 0 }}>Сортировка:</span>
+              <select className="mobile-only" value={itemsPerPage} onChange={e => {setItemsPerPage(e.target.value === 'all' ? 'all' : parseInt(e.target.value)); setCurrentPage(1);}}
+                style={{ padding: '6px 8px', fontSize: 13, borderRadius: 6, border: '1px solid #ccc', width: 'auto', flexShrink: 0 }}>
+                {ITEMS_PER_PAGE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt === 'all' ? 'Все' : opt}</option>)}
+              </select>
+              <span className="hide-mobile" style={{ fontSize: 13, color: '#7f8c8d', flexShrink: 0 }}>Сортировка:</span>
               <button
                 onClick={() => { if (sortMode === 'receipt') setSortDir(d => d === 'desc' ? 'asc' : 'desc'); else { setSortMode('receipt'); setSortDir('desc'); } setCurrentPage(1); }}
                 style={{
