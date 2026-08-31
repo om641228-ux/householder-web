@@ -2164,7 +2164,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.7 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.8 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -4441,8 +4441,8 @@ function App() {
     if (t === 'cash') { loadReceipts(); loadCashMovements(); }
   };
   const mobileTabsOrder = [
-    tabAllowed('list') && 'list',
     user?.role !== 'viewer' && tabAllowed('upload') && 'upload',
+    tabAllowed('list') && 'list',
     tabAllowed('cash') && 'cash',
     (user?.role === 'admin' || user?.role === 'manager' || user?.role === 'user') && tabAllowed('crm') && 'crm',
     tabAllowed('analysis') && 'analysis',
@@ -7877,12 +7877,6 @@ ${bodyHtml}
                   title="Распознать и сохранить (AI)"
                   style={{ border: 'none', background: (!selectedFiles.length || recognizing) ? '#c7d7ea' : '#0071e3', color: '#fff', borderRadius: 9, padding: '7px 12px', fontSize: 14, fontWeight: 700, cursor: (!selectedFiles.length || recognizing) ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}
                 >{recognizing && progressStage ? `⚡ ${uploadProgress}%` : '⚡ Распознать'}</button>
-                <button
-                  onClick={recognizeViaMacOcr}
-                  disabled={!selectedFiles.length || recognizing}
-                  title="Локально (Mac OCR, бесплатно)"
-                  style={{ border: '1.5px solid #27ae60', background: '#f0faf4', color: '#1e8449', borderRadius: 9, padding: '6px 10px', fontSize: 13, fontWeight: 700, cursor: (!selectedFiles.length || recognizing) ? 'not-allowed' : 'pointer', opacity: (!selectedFiles.length || recognizing) ? 0.55 : 1, whiteSpace: 'nowrap' }}
-                >⌘ OCR</button>
               </div>
             )}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -7956,14 +7950,14 @@ ${bodyHtml}
       {/* v106: нижняя мобильная навигация — основные разделы под большим пальцем, остальные в «Ещё» */}
       {isMobileView && (
         <nav className="mobile-bottomnav">
-          {tabAllowed('list') && (
-            <button className={activeTab === 'list' ? 'active' : ''} onClick={() => { setActiveTab('list'); loadReceipts(); }}>
-              <span className="mbn-ico">🧾</span>Фактуры
-            </button>
-          )}
           {user?.role !== 'viewer' && tabAllowed('upload') && (
             <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>
               <span className="mbn-ico">📤</span>Загрузка
+            </button>
+          )}
+          {tabAllowed('list') && (
+            <button className={activeTab === 'list' ? 'active' : ''} onClick={() => { setActiveTab('list'); loadReceipts(); }}>
+              <span className="mbn-ico">🧾</span>Фактуры
             </button>
           )}
           {tabAllowed('cash') && (
@@ -8890,7 +8884,7 @@ ${bodyHtml}
             </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-30 · v106.7 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-31 · v106.8 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
