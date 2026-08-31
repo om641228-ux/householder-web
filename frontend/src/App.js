@@ -2164,7 +2164,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.10 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.11 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -7882,7 +7882,7 @@ ${bodyHtml}
             )}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                сборка 2026-08-31 · v106.10 · Mac OCR: {macOcrUrl ? 'туннель' : '127.0.0.1:8787'}
+                сборка 2026-08-31 · v106.11 · Mac OCR: {macOcrUrl ? 'туннель' : '127.0.0.1:8787'}
                 <button
                   onClick={configureMacOcr}
                   title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8752,7 +8752,7 @@ ${bodyHtml}
               </React.Fragment>
             )}
             <button
-              className="recognize-main-btn"
+              className="recognize-main-btn hide-mobile"
               onClick={() => recognizeAndSave()}
               disabled={!selectedFiles.length || recognizing}
               style={{ position: 'relative', overflow: 'hidden', width: 'auto', marginTop: 0 }}
@@ -8796,6 +8796,7 @@ ${bodyHtml}
               ) : 'Распознать и сохранить'}
             </button>
             <button
+              className="hide-mobile"
               onClick={recognizeViaMacOcr}
               disabled={!selectedFiles.length || recognizing}
               title="Бесплатный OCR на вашем Mac (Apple Vision, mac-ocr-server 127.0.0.1:8787). Текст распознаётся локально, карточку собирает и сохраняет сервер. Несколько выбранных страниц = один документ"
