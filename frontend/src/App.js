@@ -2164,7 +2164,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.8 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.9 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -7867,6 +7867,12 @@ ${bodyHtml}
                   );
                 })}
               </div>
+              <button onClick={() => { setModelModalOpen(true); loadModels(); }}
+                title={`Модель распознавания: ${activeModelDisplay.displayName} — нажмите, чтобы сменить`}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, border: '1px solid #d0d0d5', background: '#fff', borderRadius: 8, padding: '4px 10px', fontSize: 12, fontWeight: 600, cursor: 'pointer', maxWidth: 240, minHeight: 0 }}>
+                <span className="provider-badge" style={{ backgroundColor: getProviderColor(activeModelDisplay.provider) }}>{activeModelDisplay.provider}</span>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#1d1d1f' }}>{activeModelDisplay.displayName}</span>
+              </button>
             </div>
             {/* v106.2: на мобильном кнопки распознавания — в шапке, между «Выбор модели» и «Выйти» */}
             {isMobileView && activeTab === 'upload' && (
@@ -8742,6 +8748,63 @@ ${bodyHtml}
                 </label>
               </React.Fragment>
             )}
+            <button
+              className="recognize-main-btn"
+              onClick={() => recognizeAndSave()}
+              disabled={!selectedFiles.length || recognizing}
+              style={{ position: 'relative', overflow: 'hidden', width: 'auto', marginTop: 0 }}
+            >
+              <span className="model-active-badge-inline">
+                <span className="provider-badge" style={{ backgroundColor: getProviderColor(activeModelDisplay.provider) }}>
+                  {activeModelDisplay.provider}
+                </span>
+                <span className="model-active-name">{activeModelDisplay.displayName}</span>
+              </span>
+              {selectedModel === 'local-mac-ocr' && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); configureMacOcr(); }}
+                  title="Адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
+                  style={{ marginLeft: 6, border: 'none', background: 'none', cursor: 'pointer', fontSize: 15, padding: 0 }}
+                >⚙</button>
+              )}
+              {recognizing && progressStage ? (
+                <>
+                  <span style={{
+                    position: 'absolute', left: 0, top: 0, bottom: 0,
+                    width: `${uploadProgress}%`,
+                    // v56.1: цвет полосы по этапу — загрузка синяя, распознавание зелёное
+                    background: progressStage === 'upload' ? 'rgba(66,165,245,0.55)' : 'rgba(102,187,106,0.55)',
+                    transition: 'width 0.4s ease'
+                  }} />
+                  <span style={{ position: 'relative', zIndex: 1 }}>
+                    {progressStage === 'upload'
+                      ? <>⬆️ Загрузка… <span style={{ color: '#ffd54f', fontWeight: 800, textShadow: '0 1px 2px rgba(0,0,0,0.35)' }}>{uploadProgress}%</span></>
+                      : progressStage === 'analyze'
+                        ? '🔍 Анализирую страницы…'
+                        : progressStage === 'local'
+                          ? <>🖥 Локальный OCR… <span style={{ color: '#ffd54f', fontWeight: 800, textShadow: '0 1px 2px rgba(0,0,0,0.35)' }}>{uploadProgress}%</span></>
+                          : <>🤖 Распознавание AI… <span style={{ color: '#ffd54f', fontWeight: 800, textShadow: '0 1px 2px rgba(0,0,0,0.35)' }}>{uploadProgress}%</span></>}
+                  </span>
+                </>
+              ) : recognizing ? (
+                '⏳ Идёт загрузка папки…'
+              ) : selectedFiles.length > 1 ? (
+                `📄 Распознать ${selectedFiles.length} стр. (AI разберёт: отдельно или как один)`
+              ) : 'Распознать и сохранить'}
+            </button>
+            <button
+              onClick={recognizeViaMacOcr}
+              disabled={!selectedFiles.length || recognizing}
+              title="Бесплатный OCR на вашем Mac (Apple Vision, mac-ocr-server 127.0.0.1:8787). Текст распознаётся локально, карточку собирает и сохраняет сервер. Несколько выбранных страниц = один документ"
+              style={{
+                marginTop: 0, width: 'auto', padding: '8px 14px', fontSize: 13, fontWeight: 600,
+                borderRadius: 10, border: '1.5px solid #27ae60', background: '#f0faf4', color: '#1e8449',
+                cursor: (!selectedFiles.length || recognizing) ? 'not-allowed' : 'pointer',
+                opacity: (!selectedFiles.length || recognizing) ? 0.55 : 1
+              }}
+            >
+              🖥 Локально (Mac OCR, бесплатно)
+            </button>
             <div className="toolbar-controls hide-mobile">
               <div className="control-group compact">
                 <label>Валюта:</label>
@@ -8825,66 +8888,9 @@ ${bodyHtml}
           )}
 
           <div className="recognize-bar">
-            <button
-              className="recognize-main-btn"
-              onClick={() => recognizeAndSave()}
-              disabled={!selectedFiles.length || recognizing}
-              style={recognizing ? { position: 'relative', overflow: 'hidden' } : {}}
-            >
-              <span className="model-active-badge-inline">
-                <span className="provider-badge" style={{ backgroundColor: getProviderColor(activeModelDisplay.provider) }}>
-                  {activeModelDisplay.provider}
-                </span>
-                <span className="model-active-name">{activeModelDisplay.displayName}</span>
-              </span>
-              {selectedModel === 'local-mac-ocr' && (
-                <button
-                  onClick={(e) => { e.stopPropagation(); configureMacOcr(); }}
-                  title="Адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
-                  style={{ marginLeft: 6, border: 'none', background: 'none', cursor: 'pointer', fontSize: 15, padding: 0 }}
-                >⚙</button>
-              )}
-              {recognizing && progressStage ? (
-                <>
-                  <span style={{
-                    position: 'absolute', left: 0, top: 0, bottom: 0,
-                    width: `${uploadProgress}%`,
-                    // v56.1: цвет полосы по этапу — загрузка синяя, распознавание зелёное
-                    background: progressStage === 'upload' ? 'rgba(66,165,245,0.55)' : 'rgba(102,187,106,0.55)',
-                    transition: 'width 0.4s ease'
-                  }} />
-                  <span style={{ position: 'relative', zIndex: 1 }}>
-                    {progressStage === 'upload'
-                      ? <>⬆️ Загрузка… <span style={{ color: '#ffd54f', fontWeight: 800, textShadow: '0 1px 2px rgba(0,0,0,0.35)' }}>{uploadProgress}%</span></>
-                      : progressStage === 'analyze'
-                        ? '🔍 Анализирую страницы…'
-                        : progressStage === 'local'
-                          ? <>🖥 Локальный OCR… <span style={{ color: '#ffd54f', fontWeight: 800, textShadow: '0 1px 2px rgba(0,0,0,0.35)' }}>{uploadProgress}%</span></>
-                          : <>🤖 Распознавание AI… <span style={{ color: '#ffd54f', fontWeight: 800, textShadow: '0 1px 2px rgba(0,0,0,0.35)' }}>{uploadProgress}%</span></>}
-                  </span>
-                </>
-              ) : recognizing ? (
-                '⏳ Идёт загрузка папки…'
-              ) : selectedFiles.length > 1 ? (
-                `📄 Распознать ${selectedFiles.length} стр. (AI разберёт: отдельно или как один)`
-              ) : 'Распознать и сохранить'}
-            </button>
-            <button
-              onClick={recognizeViaMacOcr}
-              disabled={!selectedFiles.length || recognizing}
-              title="Бесплатный OCR на вашем Mac (Apple Vision, mac-ocr-server 127.0.0.1:8787). Текст распознаётся локально, карточку собирает и сохраняет сервер. Несколько выбранных страниц = один документ"
-              style={{
-                marginTop: 8, width: '100%', padding: '12px', fontSize: 15, fontWeight: 600,
-                borderRadius: 10, border: '1.5px solid #27ae60', background: '#f0faf4', color: '#1e8449',
-                cursor: (!selectedFiles.length || recognizing) ? 'not-allowed' : 'pointer',
-                opacity: (!selectedFiles.length || recognizing) ? 0.55 : 1
-              }}
-            >
-              🖥 Локально (Mac OCR, бесплатно)
-            </button>
             {/* Метка сборки: если её не видно на сайте — фронтенд не пересобрался/закэширован */}
             <div style={{ marginTop: 6, fontSize: 11, color: '#95a5a6', textAlign: 'center' }}>
-              сборка 2026-08-31 · v106.8 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
+              сборка 2026-08-31 · v106.9 · Mac OCR: {macOcrUrl ? 'туннель (свой URL)' : 'прямой 127.0.0.1:8787'}
               <button
                 onClick={configureMacOcr}
                 title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
