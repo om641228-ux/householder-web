@@ -2164,7 +2164,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.13 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.14 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -3552,11 +3552,11 @@ function CrmTab({ user, token, isMobileView }) {
     <div style={{ padding: '6px 15px 20px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '4px 0 10px' }}>
         {!isMobileView && <h2 style={{ margin: 0 }}>🤝 CRM</h2>}
-        <button onClick={() => setSection('calendar')} style={stPill(section === 'calendar')}>📅 Календарь</button>
-        <button onClick={() => setSection('tasks')} style={stPill(section === 'tasks')}>📋 Задачи ({tasksL.filter(t => t.status !== 'closed').length})</button>
-        <button onClick={() => setSection('cps')} style={stPill(section === 'cps')}>👥 Контрагенты ({cpsL.length})</button>
-        <button onClick={() => setSection('contacts')} style={stPill(section === 'contacts')}>📇 Контакты ({contactsL.length})</button>
-        <button onClick={() => openTaskModal(null)} style={{ ...stBtn, marginLeft: 'auto' }}>＋ Новая задача</button>
+        <button onClick={() => setSection('calendar')} title="Календарь" style={stPill(section === 'calendar')}>{isMobileView ? '📅' : '📅 Календарь'}</button>
+        <button onClick={() => setSection('tasks')} title="Задачи" style={stPill(section === 'tasks')}>{isMobileView ? `📋 ${tasksL.filter(t => t.status !== 'closed').length}` : `📋 Задачи (${tasksL.filter(t => t.status !== 'closed').length})`}</button>
+        <button onClick={() => setSection('cps')} title="Контрагенты" style={stPill(section === 'cps')}>{isMobileView ? `👥 ${cpsL.length}` : `👥 Контрагенты (${cpsL.length})`}</button>
+        <button onClick={() => setSection('contacts')} title="Контакты" style={stPill(section === 'contacts')}>{isMobileView ? `📇 ${contactsL.length}` : `📇 Контакты (${contactsL.length})`}</button>
+        <button onClick={() => openTaskModal(null)} title="Новая задача" style={{ ...stBtn, marginLeft: 'auto' }}>{isMobileView ? '＋' : '＋ Новая задача'}</button>
       </div>
       {!isMobileView && (
       <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 10 }}>
@@ -7887,7 +7887,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-08-31 · v106.13 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-02 · v106.14 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7900,7 +7900,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-08-31 · v106.13</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-02 · v106.14</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">
