@@ -2164,7 +2164,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.12 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.13 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2572,7 +2572,7 @@ function ChatTab({ user, token }) {
   );
 }
 
-function CrmTab({ user, token }) {
+function CrmTab({ user, token, isMobileView }) {
   const currentUser = (user && user.name && user.name !== 'admin' && !String(user.name).startsWith('user'))
     ? user.name
     : (user && user.email ? user.email.split('@')[0] : (user && user.role === 'admin' ? 'Admin' : 'User'));
@@ -3551,18 +3551,20 @@ function CrmTab({ user, token }) {
   return (
     <div style={{ padding: '6px 15px 20px' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '4px 0 10px' }}>
-        <h2 style={{ margin: 0 }}>🤝 CRM</h2>
+        {!isMobileView && <h2 style={{ margin: 0 }}>🤝 CRM</h2>}
         <button onClick={() => setSection('calendar')} style={stPill(section === 'calendar')}>📅 Календарь</button>
         <button onClick={() => setSection('tasks')} style={stPill(section === 'tasks')}>📋 Задачи ({tasksL.filter(t => t.status !== 'closed').length})</button>
         <button onClick={() => setSection('cps')} style={stPill(section === 'cps')}>👥 Контрагенты ({cpsL.length})</button>
         <button onClick={() => setSection('contacts')} style={stPill(section === 'contacts')}>📇 Контакты ({contactsL.length})</button>
         <button onClick={() => openTaskModal(null)} style={{ ...stBtn, marginLeft: 'auto' }}>＋ Новая задача</button>
       </div>
+      {!isMobileView && (
       <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 10 }}>
         {useServer
           ? <>Данные CRM хранятся на сервере (Supabase) и общие для всей команды. Вы вошли как <strong>{currentUser}</strong>: задачу закрывает исполнитель («✅ Выполнена»), постановщик подтверждает закрытие или возвращает на доработку.</>
           : <>Данные CRM хранятся локально в этом браузере (localStorage). Вы вошли как <strong>{currentUser}</strong>: задачу закрывает исполнитель («✅ Выполнена»), постановщик подтверждает закрытие или возвращает на доработку.</>}
       </div>
+      )}
 
       {crmError && (
         <div style={{ background: '#fdf2e3', border: '1px solid #e67e22', borderRadius: 10, padding: '8px 12px', fontSize: 13, marginBottom: 10, display: 'flex', gap: 10, alignItems: 'center' }}>
@@ -3574,6 +3576,7 @@ function CrmTab({ user, token }) {
 
       {!crmLoading && (<>
       {/* Сводка по задачам */}
+      {!isMobileView && (
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
         {[
           { label: 'В работе', n: cntOpen, color: '#0071e3' },
@@ -3587,6 +3590,7 @@ function CrmTab({ user, token }) {
           </div>
         ))}
       </div>
+      )}
 
       {/* ======== РАЗДЕЛ: КАЛЕНДАРЬ ======== */}
       {section === 'calendar' && (
@@ -7881,20 +7885,23 @@ ${bodyHtml}
               </div>
             )}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                {isMobileView ? '2026-08-31 · v106.12' : 'сборка 2026-08-31 · v106.12 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
-                {!isMobileView && (
+              {!isMobileView && (
+                <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
+                  {'сборка 2026-08-31 · v106.13 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
                     style={{ marginLeft: 4, border: 'none', background: 'none', cursor: 'pointer', fontSize: 12, padding: 0, minHeight: 0 }}
                   >⚙</button>
-                )}
-              </span>
+                </span>
+              )}
               <span className="user-name">{formatUserName(user)}</span>
               <button className="logout-btn" onClick={logout} title="Выйти" style={isMobileView ? { fontWeight: 900, fontSize: 17, lineHeight: 1, padding: '6px 14px' } : undefined}>{isMobileView ? '⬆' : 'Выйти'}</button>
             </div>
           </div>
+          {isMobileView && (
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-08-31 · v106.13</div>
+          )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">
             {user?.role !== 'viewer' && tabAllowed('upload') && (
@@ -9337,7 +9344,7 @@ ${bodyHtml}
                 onChange={(e) => e.target.checked ? selectAllVisible() : deselectAll()}
                 style={{ marginRight: 6 }}
               />
-              Выбрать все на странице
+              {isMobileView ? 'Все' : 'Выбрать все на странице'}
             </label>
             <div className="sort-row" style={{ display: 'flex', gap: 6, alignItems: 'center', marginLeft: 'auto', flexWrap: isMobileView ? 'nowrap' : 'wrap', overflowX: isMobileView ? 'auto' : 'visible', WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none', maxWidth: '100%' }}>
               <select className="mobile-only" value={itemsPerPage} onChange={e => {setItemsPerPage(e.target.value === 'all' ? 'all' : parseInt(e.target.value)); setCurrentPage(1);}}
@@ -10678,7 +10685,7 @@ ${bodyHtml}
       })()}
 
       {/* Вкладка «CRM» (v32) */}
-      {activeTab === 'crm' && <CrmTab user={user} token={token} />}
+      {activeTab === 'crm' && <CrmTab user={user} token={token} isMobileView={isMobileView} />}
       {/* ===================== v90: ВКЛАДКА CASH — ОТДЕЛЬНАЯ структура (cash_movements) =====================
           Своя таблица, НЕ связана с банковскими выписками и налогами. Строки: дата, контрагент, сумма со знаком
           (− расход красным / + приход зелёным), выбор/удаление, добавление, привязка фактур через вкладку «Чеки». */}
