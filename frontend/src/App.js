@@ -2164,7 +2164,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.11 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.12 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -7864,9 +7864,9 @@ ${bodyHtml}
               </div>
               <button onClick={() => { setModelModalOpen(true); loadModels(); }}
                 title={`Модель распознавания: ${activeModelDisplay.displayName} — нажмите, чтобы сменить`}
-                style={{ display: 'flex', alignItems: 'center', gap: 6, border: '1px solid #d0d0d5', background: '#fff', borderRadius: 8, padding: '4px 10px', fontSize: 12, fontWeight: 600, cursor: 'pointer', maxWidth: 240, minHeight: 0 }}>
+                style={{ display: 'flex', alignItems: 'center', gap: 6, border: '1px solid #d0d0d5', background: '#fff', borderRadius: 8, padding: '4px 10px', fontSize: 11, fontWeight: 400, cursor: 'pointer', maxWidth: 240, minHeight: 0 }}>
                 <span className="provider-badge" style={{ backgroundColor: getProviderColor(activeModelDisplay.provider) }}>{activeModelDisplay.provider}</span>
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#1d1d1f' }}>{activeModelDisplay.displayName}</span>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#95a5a6', fontWeight: 400 }}>{activeModelDisplay.displayName}</span>
               </button>
             </div>
             {/* v106.2: на мобильном кнопки распознавания — в шапке, между «Выбор модели» и «Выйти» */}
@@ -7877,20 +7877,22 @@ ${bodyHtml}
                   disabled={!selectedFiles.length || recognizing}
                   title="Распознать и сохранить (AI)"
                   style={{ border: 'none', background: (!selectedFiles.length || recognizing) ? '#c7d7ea' : '#0071e3', color: '#fff', borderRadius: 9, padding: '7px 12px', fontSize: 14, fontWeight: 700, cursor: (!selectedFiles.length || recognizing) ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}
-                >{recognizing && progressStage ? `⚡ ${uploadProgress}%` : '⚡ Распознать'}</button>
+                >{recognizing && progressStage ? `⚡ ${uploadProgress}%` : '⚡'}</button>
               </div>
             )}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                сборка 2026-08-31 · v106.11 · Mac OCR: {macOcrUrl ? 'туннель' : '127.0.0.1:8787'}
-                <button
-                  onClick={configureMacOcr}
-                  title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
-                  style={{ marginLeft: 4, border: 'none', background: 'none', cursor: 'pointer', fontSize: 12, padding: 0, minHeight: 0 }}
-                >⚙</button>
+                {isMobileView ? '2026-08-31 · v106.12' : 'сборка 2026-08-31 · v106.12 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                {!isMobileView && (
+                  <button
+                    onClick={configureMacOcr}
+                    title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
+                    style={{ marginLeft: 4, border: 'none', background: 'none', cursor: 'pointer', fontSize: 12, padding: 0, minHeight: 0 }}
+                  >⚙</button>
+                )}
               </span>
               <span className="user-name">{formatUserName(user)}</span>
-              <button className="logout-btn" onClick={logout}>Выйти</button>
+              <button className="logout-btn" onClick={logout} title="Выйти" style={isMobileView ? { fontWeight: 900, fontSize: 17, lineHeight: 1, padding: '6px 14px' } : undefined}>{isMobileView ? '⬆' : 'Выйти'}</button>
             </div>
           </div>
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}' + MOBILE_CSS}</style>
