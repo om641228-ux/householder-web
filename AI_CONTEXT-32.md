@@ -2251,3 +2251,7 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Frontend (App.js): компонент LinksTab (перед CrmTab) — поиск сущностей, кнопка «Построить связи», SVG-граф (центр сущность, кольцо документов с линиями связей, внешнее кольцо связанных сущностей — кликабельны), список связей текстом. Вкладка «🔗 Связи» в tabs-inline и в мобильном «Ещё». onOpenDoc ищет чек в загруженном receipts.
 - health build: v107-2026-09-02, feature 'doc-links-graph'.
 - md5 App.js 4d86a137e69f46590bfebecc9e682b30, index.js 0282951d43699b6b7c5826011a7574bf.
+
+## v107.1 (2026-09-02) — фикс сборки Railway
+- Удалены «// eslint-disable-line react-hooks/exhaustive-deps» (2 шт) из LinksTab — в CRA react-scripts этот плагин не зарегистрирован, неизвестное правило = ошибка компиляции. Обычные «// eslint-disable-line» (без имени правила) допустимы.
+- md5 App.js a11938f297825c105557fc227a1049fc.
