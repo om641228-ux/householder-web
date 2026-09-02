@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v107.3-2026-09-02', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v107.4-2026-09-02', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4237,12 +4237,21 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
         }
       }
     }
-    for (let i = 0; i < linkRows.length; i += 500) {
+    // v107.4: дедупликация — одна пара документов может делить НЕСКОЛЬКО сущностей одного типа
+    // (иначе в одном upsert-пакете две строки с одинаковым ключом → «ON CONFLICT cannot affect row a second time»)
+    const linkMap = new Map();
+    for (const l of linkRows) {
+      const k = l.doc_a + '|' + l.doc_b + '|' + l.link_type;
+      const prev = linkMap.get(k);
+      if (!prev || Number(l.confidence) > Number(prev.confidence)) linkMap.set(k, l);
+    }
+    const linkRowsDedup = [...linkMap.values()];
+    for (let i = 0; i < linkRowsDedup.length; i += 500) {
       const { error: le } = await supabaseAdmin.from('doc_links')
-        .upsert(linkRows.slice(i, i + 500), { onConflict: 'doc_a,doc_b,link_type' });
+        .upsert(linkRowsDedup.slice(i, i + 500), { onConflict: 'doc_a,doc_b,link_type' });
       if (le) stats.errors.push('doc_links: ' + le.message);
     }
-    stats.links = linkRows.length;
+    stats.links = linkMap.size;
     if (typeof logActivity === 'function') logActivity(req.user, 'Связи', 'построение графа', `документов: ${stats.docs}, сущностей: ${entArr.length}, связей: ${stats.links}`, req);
     res.json({ ok: true, stats });
   } catch (e) {

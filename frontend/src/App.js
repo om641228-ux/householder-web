@@ -2164,7 +2164,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v107.1 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v107.4 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2633,7 +2633,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
   const W = 900, H = 620, CX = W / 2, CY = H / 2;
   const docs = graph ? graph.docs.slice(0, 24) : [];
   const rels = graph ? graph.relEntities.slice(0, 12) : [];
-  const R1 = Math.min(200, 90 + docs.length * 8), R2 = R1 + 110;
+  const R1 = Math.max(150, Math.min(200, 90 + docs.length * 8)), R2 = R1 + 110;
   const docPos = docs.map((d, i) => {
     const a = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(docs.length, 1);
     return { d, x: CX + R1 * Math.cos(a), y: CY + R1 * Math.sin(a) };
@@ -2680,7 +2680,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
         </div>
       )}
       {loading && <div style={{ color: '#8e8e93', fontSize: 13, marginBottom: 8 }}>⏳ Загружаю сущности…</div>}
-      {!loading && entities.length === 0 && !err && (
+      {!loading && entities.length === 0 && !err && !graph && (
         <div style={{ color: '#8e8e93', fontSize: 14, margin: '20px 0' }}>
           Сущностей пока нет. Нажмите «🔄 Построить связи» — граф соберётся из всех распознанных документов (без расхода AI-квоты).
         </div>
@@ -8078,7 +8078,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-02 · v107.1 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-02 · v107.4 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8091,7 +8091,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-02 · v107.1</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-02 · v107.4</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">
