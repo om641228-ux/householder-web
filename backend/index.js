@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v107-2026-09-02', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v107.2-2026-09-02', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4153,10 +4153,18 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
     const { error: tErr } = await supabaseAdmin.from('entities').select('id').limit(1);
     if (tErr) return res.status(500).json({ error: 'Нет таблиц графа. Выполните в Supabase SQL Editor: ' + LINKS_SQL });
 
-    const cols = 'id, store_name, counterparty, invoice_number, contract_number, cups, meter_number, total_amount, currency, receipt_date, raw_text';
+    // v107.2: только реально существующие колонки (в receipts нет counterparty и т.п.)
+    const wantCols = ['id', 'store_name', 'counterparty', 'invoice_number', 'contract_number', 'cups', 'meter_number', 'total_amount', 'currency', 'receipt_date', 'raw_text'];
+    let avail = wantCols;
+    try {
+      const existingCols = await getTableColumns();
+      if (Array.isArray(existingCols) && existingCols.length) avail = wantCols.filter(c => existingCols.includes(c));
+    } catch (_) { /* если не удалось определить — пробуем как есть */ }
+    if (!avail.includes('id')) avail.unshift('id');
+    const cols = avail.join(', ');
     const all = [];
     for (let from = 0; ; from += 500) {
-      const { data, error } = await supabaseAdmin.from('receipts').select(cols).range(from, from + 499);
+      const { data, error } = await supabaseAdmin.from('receipts').select(cols).order('id').range(from, from + 499);
       if (error) throw error;
       all.push(...(data || []));
       if (!data || data.length < 500) break;

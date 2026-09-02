@@ -2255,3 +2255,7 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 ## v107.1 (2026-09-02) — фикс сборки Railway
 - Удалены «// eslint-disable-line react-hooks/exhaustive-deps» (2 шт) из LinksTab — в CRA react-scripts этот плагин не зарегистрирован, неизвестное правило = ошибка компиляции. Обычные «// eslint-disable-line» (без имени правила) допустимы.
 - md5 App.js a11938f297825c105557fc227a1049fc.
+
+## v107.2 (2026-09-02) — фикс /api/links/build: нет колонки counterparty
+- Выборка receipts теперь только по существующим колонкам через getTableColumns(); добавлен .order('id') для стабильной пагинации range().
+- Только backend, md5 в истории.
