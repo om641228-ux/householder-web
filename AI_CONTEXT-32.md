@@ -2259,3 +2259,6 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 ## v107.2 (2026-09-02) — фикс /api/links/build: нет колонки counterparty
 - Выборка receipts теперь только по существующим колонкам через getTableColumns(); добавлен .order('id') для стабильной пагинации range().
 - Только backend, md5 в истории.
+
+## v107.3 (2026-09-02) — фикс «Failed to fetch» на /api/links/build
+- Переписано на пакетные операции: entities upsert чанками по 500, doc_entities — полная замена (delete all + insert чанками), связи из in-memory карты. Раньше были тысячи последовательных запросов к Supabase → обрыв соединения.

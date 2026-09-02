@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v107.2-2026-09-02', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v107.3-2026-09-02', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4171,36 +4171,53 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
     }
     stats.docs = all.length;
 
-    let { data: existing } = await supabaseAdmin.from('entities').select('id, type, value, label');
-    const entId = new Map((existing || []).map(e => [e.type + '|' + e.value, e.id]));
-
+    // v107.3: всё пакетно — иначе тысячи последовательных запросов рвут соединение (Failed to fetch)
+    const entKeys = new Map();   // 'type|value' -> {type,value,label}
+    const docEnts = new Map();   // docId -> [ent]
     for (const r of all) {
       const ents = extractDocEntities(r);
-      const rows = [];
-      for (const e of ents) {
-        let id = entId.get(e.type + '|' + e.value);
-        if (!id) {
-          const { data: up, error: ue } = await supabaseAdmin.from('entities')
-            .upsert({ type: e.type, value: e.value, label: e.label }, { onConflict: 'type,value' }).select('id').single();
-          if (ue) { stats.errors.push('entity: ' + ue.message); continue; }
-          id = up.id; entId.set(e.type + '|' + e.value, id); stats.entitiesNew++;
-        }
-        rows.push({ doc_id: String(r.id), entity_id: id, role: e.role });
-      }
-      await supabaseAdmin.from('doc_entities').delete().eq('doc_id', String(r.id));
-      if (rows.length) {
-        const { error: de } = await supabaseAdmin.from('doc_entities').insert(rows);
-        if (de) stats.errors.push('doc_entities: ' + de.message); else stats.docEntities += rows.length;
-      }
+      docEnts.set(String(r.id), ents);
+      for (const e of ents) entKeys.set(e.type + '|' + e.value, e);
     }
 
-    // Перестраиваем автоматические связи (created_by='rule')
+    // 1) сущности — пакетный upsert по 500
+    const entArr = [...entKeys.values()];
+    for (let i = 0; i < entArr.length; i += 500) {
+      const { error: ue } = await supabaseAdmin.from('entities')
+        .upsert(entArr.slice(i, i + 500).map(e => ({ type: e.type, value: e.value, label: e.label })), { onConflict: 'type,value' });
+      if (ue) stats.errors.push('entities: ' + ue.message);
+    }
+    const entAll = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin.from('entities').select('id, type, value, label').order('id').range(from, from + 999);
+      if (error) { stats.errors.push('entities-read: ' + error.message); break; }
+      entAll.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
+    const entId = new Map(entAll.map(e => [e.type + '|' + e.value, e.id]));
+    const entMeta = new Map(entAll.map(e => [e.id, e]));
+
+    // 2) привязки документов — полная замена пакетами по 500
+    const deRows = [];
+    for (const [docId, ents] of docEnts) {
+      for (const e of ents) {
+        const id = entId.get(e.type + '|' + e.value);
+        if (id) deRows.push({ doc_id: docId, entity_id: id, role: e.role });
+      }
+    }
+    const { error: delErr } = await supabaseAdmin.from('doc_entities').delete().not('doc_id', 'is', null);
+    if (delErr) stats.errors.push('doc_entities-clear: ' + delErr.message);
+    for (let i = 0; i < deRows.length; i += 500) {
+      const { error: de } = await supabaseAdmin.from('doc_entities').insert(deRows.slice(i, i + 500));
+      if (de) stats.errors.push('doc_entities: ' + de.message);
+    }
+    stats.docEntities = deRows.length;
+    stats.entitiesNew = entArr.length; // все сущности графа (пакетный upsert не считает «новые» отдельно)
+
+    // 3) перестраиваем автоматические связи (created_by='rule')
     await supabaseAdmin.from('doc_links').delete().eq('created_by', 'rule');
-    const { data: deAll } = await supabaseAdmin.from('doc_entities').select('doc_id, entity_id');
-    const { data: entAll } = await supabaseAdmin.from('entities').select('id, type, value, label');
-    const entMeta = new Map((entAll || []).map(e => [e.id, e]));
     const byEnt = new Map();
-    for (const row of (deAll || [])) {
+    for (const row of deRows) {
       if (!byEnt.has(row.entity_id)) byEnt.set(row.entity_id, new Set());
       byEnt.get(row.entity_id).add(row.doc_id);
     }
@@ -4226,7 +4243,7 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
       if (le) stats.errors.push('doc_links: ' + le.message);
     }
     stats.links = linkRows.length;
-    if (typeof logActivity === 'function') logActivity(req.user, 'Связи', 'построение графа', `документов: ${stats.docs}, новых сущностей: ${stats.entitiesNew}, связей: ${stats.links}`, req);
+    if (typeof logActivity === 'function') logActivity(req.user, 'Связи', 'построение графа', `документов: ${stats.docs}, сущностей: ${entArr.length}, связей: ${stats.links}`, req);
     res.json({ ok: true, stats });
   } catch (e) {
     res.status(500).json({ error: e.message });
