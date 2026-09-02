@@ -2245,3 +2245,9 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 
 ## v106.14 (2026-09-02) — мобильная CRM: кнопки только значки+цифры
 - 📅 (без текста), 📋 3, 👥 1, 📇 1, ＋ — названия убраны, добавлены title-подсказки; на десктопе полный текст.
+
+## v107 (2026-09-02) — ШАГ 1: граф связей документов
+- Backend (index.js): таблицы entities/doc_entities/doc_links (SQL выдаётся в ошибках API и в файле v107-граф-связей.sql); extractDocEntities (детерминированно: company/IBAN/CIF/NIF/№ фактуры/договора/CUPS/сумма+дата); POST /api/links/build (admin/manager) — полное перестроение; GET /api/links/entities?q=; GET /api/links/graph?entity=. doc_id хранится как text (без FK на receipts).
+- Frontend (App.js): компонент LinksTab (перед CrmTab) — поиск сущностей, кнопка «Построить связи», SVG-граф (центр сущность, кольцо документов с линиями связей, внешнее кольцо связанных сущностей — кликабельны), список связей текстом. Вкладка «🔗 Связи» в tabs-inline и в мобильном «Ещё». onOpenDoc ищет чек в загруженном receipts.
+- health build: v107-2026-09-02, feature 'doc-links-graph'.
+- md5 App.js 4d86a137e69f46590bfebecc9e682b30, index.js 0282951d43699b6b7c5826011a7574bf.

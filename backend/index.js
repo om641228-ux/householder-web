@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v106-2026-08-29', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v107-2026-09-02', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4095,6 +4095,209 @@ app.post('/api/translate-receipt', requireAuth, async (req, res) => {
 });
 
 // ========== LIST RECEIPTS ==========
+// ==================== v107: ГРАФ СВЯЗЕЙ ДОКУМЕНТОВ (шаг 1: сущности + детерминированные связи) ====================
+// SQL (один раз в Supabase SQL Editor) — также возвращается в ошибках API, если таблиц нет:
+const LINKS_SQL = "create table if not exists entities (id uuid primary key default gen_random_uuid(), type text not null, value text not null, label text, created_at timestamptz default now(), unique(type, value)); "
+  + "create table if not exists doc_entities (doc_id text not null, entity_id uuid not null references entities(id) on delete cascade, role text default 'mention', primary key (doc_id, entity_id, role)); "
+  + "create table if not exists doc_links (id uuid primary key default gen_random_uuid(), doc_a text not null, doc_b text not null, link_type text not null, confidence numeric default 1, evidence text, created_by text default 'rule', created_at timestamptz default now(), unique(doc_a, doc_b, link_type));";
+
+const LINK_TYPE_BY_ENTITY = {
+  company: 'same_counterparty', person: 'same_person', iban: 'same_account',
+  tax_id: 'same_tax_id', invoice_no: 'invoice_match', contract_no: 'contract_match',
+  cups: 'same_supply', meter: 'same_meter', amount_date: 'same_amount_date'
+};
+const ENTITY_TYPE_LABELS = { company: 'Компания', person: 'Персона', iban: 'Счёт IBAN', tax_id: 'Налоговый №', invoice_no: '№ фактуры', contract_no: '№ договора', cups: 'CUPS', meter: 'Счётчик', amount_date: 'Сумма+дата' };
+
+function normEnt(v) {
+  return String(v || '').toLowerCase().replace(/[.,\/\\()\[\]"'«»`;:]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// Детерминированное извлечение сущностей из карточки документа (без AI, без квоты)
+function extractDocEntities(r) {
+  const out = new Map();
+  const add = (type, value, label, role) => {
+    const nv = type === 'amount_date' ? String(value) : normEnt(value);
+    if (!nv || nv.length < 2 || nv.length > 120) return;
+    const k = type + '|' + nv;
+    if (!out.has(k)) out.set(k, { type, value: nv, label: String(label || value).slice(0, 200), role: role || 'mention' });
+  };
+  if (r.store_name) add('company', r.store_name, r.store_name, 'issuer');
+  if (r.counterparty) add('company', r.counterparty, r.counterparty, 'counterparty');
+  if (r.invoice_number) add('invoice_no', r.invoice_number, r.invoice_number, 'subject');
+  if (r.contract_number) add('contract_no', r.contract_number, r.contract_number, 'subject');
+  if (r.cups) add('cups', r.cups, r.cups, 'subject');
+  if (r.meter_number) add('meter', r.meter_number, r.meter_number, 'subject');
+  const text = String(r.raw_text || '').slice(0, 60000);
+  if (text) {
+    const ibans = text.match(/\b[A-Z]{2}\d{2}(?: ?[0-9A-Z]{4}){3,7}\b/g) || [];
+    for (const ib of new Set(ibans.map(x => x.replace(/\s/g, '')))) {
+      if (ib.length >= 15 && ib.length <= 34) add('iban', ib.toLowerCase(), ib, 'account');
+    }
+    const cifs = text.match(/\b[ABCDEFGHJNPQRSUVW]\d{7}[0-9A-J]\b/g) || [];
+    for (const c of new Set(cifs)) add('tax_id', c.toLowerCase(), c, 'tax_id');
+    const nifs = text.match(/\b\d{8}[A-Z]\b/g) || [];
+    for (const n of new Set(nifs)) add('tax_id', n.toLowerCase(), n, 'tax_id');
+  }
+  if (r.total_amount != null && r.total_amount !== '' && r.receipt_date) {
+    const amt = Number(r.total_amount);
+    if (isFinite(amt)) add('amount_date', amt.toFixed(2) + '|' + String(r.currency || '').toLowerCase() + '|' + r.receipt_date,
+      amt + ' ' + (r.currency || '') + ' · ' + r.receipt_date, 'amount');
+  }
+  return [...out.values()];
+}
+
+// Построение/перестроение графа по всем документам
+app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const stats = { docs: 0, entitiesNew: 0, docEntities: 0, links: 0, errors: [] };
+    const { error: tErr } = await supabaseAdmin.from('entities').select('id').limit(1);
+    if (tErr) return res.status(500).json({ error: 'Нет таблиц графа. Выполните в Supabase SQL Editor: ' + LINKS_SQL });
+
+    const cols = 'id, store_name, counterparty, invoice_number, contract_number, cups, meter_number, total_amount, currency, receipt_date, raw_text';
+    const all = [];
+    for (let from = 0; ; from += 500) {
+      const { data, error } = await supabaseAdmin.from('receipts').select(cols).range(from, from + 499);
+      if (error) throw error;
+      all.push(...(data || []));
+      if (!data || data.length < 500) break;
+    }
+    stats.docs = all.length;
+
+    let { data: existing } = await supabaseAdmin.from('entities').select('id, type, value, label');
+    const entId = new Map((existing || []).map(e => [e.type + '|' + e.value, e.id]));
+
+    for (const r of all) {
+      const ents = extractDocEntities(r);
+      const rows = [];
+      for (const e of ents) {
+        let id = entId.get(e.type + '|' + e.value);
+        if (!id) {
+          const { data: up, error: ue } = await supabaseAdmin.from('entities')
+            .upsert({ type: e.type, value: e.value, label: e.label }, { onConflict: 'type,value' }).select('id').single();
+          if (ue) { stats.errors.push('entity: ' + ue.message); continue; }
+          id = up.id; entId.set(e.type + '|' + e.value, id); stats.entitiesNew++;
+        }
+        rows.push({ doc_id: String(r.id), entity_id: id, role: e.role });
+      }
+      await supabaseAdmin.from('doc_entities').delete().eq('doc_id', String(r.id));
+      if (rows.length) {
+        const { error: de } = await supabaseAdmin.from('doc_entities').insert(rows);
+        if (de) stats.errors.push('doc_entities: ' + de.message); else stats.docEntities += rows.length;
+      }
+    }
+
+    // Перестраиваем автоматические связи (created_by='rule')
+    await supabaseAdmin.from('doc_links').delete().eq('created_by', 'rule');
+    const { data: deAll } = await supabaseAdmin.from('doc_entities').select('doc_id, entity_id');
+    const { data: entAll } = await supabaseAdmin.from('entities').select('id, type, value, label');
+    const entMeta = new Map((entAll || []).map(e => [e.id, e]));
+    const byEnt = new Map();
+    for (const row of (deAll || [])) {
+      if (!byEnt.has(row.entity_id)) byEnt.set(row.entity_id, new Set());
+      byEnt.get(row.entity_id).add(row.doc_id);
+    }
+    const linkRows = [];
+    for (const [eid, docSet] of byEnt) {
+      const arr = [...docSet];
+      if (arr.length < 2 || arr.length > 100) continue; // защита от «сверхсвязных» сущностей
+      const meta = entMeta.get(eid) || {};
+      const lt = LINK_TYPE_BY_ENTITY[meta.type] || 'related';
+      for (let i = 0; i < arr.length; i++) {
+        for (let j = i + 1; j < arr.length; j++) {
+          linkRows.push({
+            doc_a: arr[i], doc_b: arr[j], link_type: lt,
+            confidence: meta.type === 'amount_date' ? 0.7 : 0.95,
+            evidence: String(meta.label || meta.value || '').slice(0, 200), created_by: 'rule'
+          });
+        }
+      }
+    }
+    for (let i = 0; i < linkRows.length; i += 500) {
+      const { error: le } = await supabaseAdmin.from('doc_links')
+        .upsert(linkRows.slice(i, i + 500), { onConflict: 'doc_a,doc_b,link_type' });
+      if (le) stats.errors.push('doc_links: ' + le.message);
+    }
+    stats.links = linkRows.length;
+    if (typeof logActivity === 'function') logActivity(req.user, 'Связи', 'построение графа', `документов: ${stats.docs}, новых сущностей: ${stats.entitiesNew}, связей: ${stats.links}`, req);
+    res.json({ ok: true, stats });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Список сущностей с количеством документов
+app.get('/api/links/entities', requireAuth, tabGuard('list'), async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const type = String(req.query.type || '').trim();
+    let query = supabaseAdmin.from('entities').select('id, type, value, label').order('created_at', { ascending: false }).limit(500);
+    if (type) query = query.eq('type', type);
+    if (q) query = query.or('label.ilike.%' + q.replace(/[%,]/g, ' ') + '%,value.ilike.%' + q.replace(/[%,]/g, ' ') + '%');
+    const { data, error } = await query;
+    if (error) {
+      if (/does not exist/i.test(error.message || '')) return res.status(500).json({ error: 'Нет таблиц графа. Выполните в Supabase SQL Editor: ' + LINKS_SQL });
+      throw error;
+    }
+    const ids = (data || []).map(e => e.id);
+    const counts = {};
+    for (let i = 0; i < ids.length; i += 200) {
+      const { data: de } = await supabaseAdmin.from('doc_entities').select('entity_id').in('entity_id', ids.slice(i, i + 200));
+      for (const r of (de || [])) counts[r.entity_id] = (counts[r.entity_id] || 0) + 1;
+    }
+    res.json({ entities: (data || []).map(e => ({ ...e, typeLabel: ENTITY_TYPE_LABELS[e.type] || e.type, docs: counts[e.id] || 0 })) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Граф вокруг одной сущности: документы + связанные сущности + связи документов
+app.get('/api/links/graph', requireAuth, tabGuard('list'), async (req, res) => {
+  try {
+    const eid = String(req.query.entity || '');
+    if (!eid) return res.status(400).json({ error: 'Параметр entity обязателен' });
+    const { data: ent, error: ee } = await supabaseAdmin.from('entities').select('*').eq('id', eid).maybeSingle();
+    if (ee) throw ee;
+    if (!ent) return res.status(404).json({ error: 'Сущность не найдена' });
+
+    const { data: deRows } = await supabaseAdmin.from('doc_entities').select('doc_id, role').eq('entity_id', eid);
+    const docIds = (deRows || []).map(r => r.doc_id).slice(0, 80);
+    let docs = [];
+    if (docIds.length) {
+      const { data: rds } = await supabaseAdmin.from('receipts')
+        .select('id, store_name, store_name_ru, receipt_date, total_amount, currency, document_type, image_url, invoice_number, contract_number')
+        .in('id', docIds);
+      docs = rds || [];
+    }
+    const present = new Set(docs.map(d => String(d.id)));
+
+    let relEntities = [];
+    if (docIds.length) {
+      const { data: de2 } = await supabaseAdmin.from('doc_entities').select('entity_id, doc_id').in('doc_id', docIds);
+      const cnt = {};
+      for (const r of (de2 || [])) if (r.entity_id !== eid) cnt[r.entity_id] = (cnt[r.entity_id] || 0) + 1;
+      const rids = Object.keys(cnt);
+      for (let i = 0; i < rids.length; i += 200) {
+        const { data: ents2 } = await supabaseAdmin.from('entities').select('id, type, value, label').in('id', rids.slice(i, i + 200));
+        relEntities.push(...(ents2 || []).map(e => ({ ...e, typeLabel: ENTITY_TYPE_LABELS[e.type] || e.type, shared: cnt[e.id] })));
+      }
+      relEntities.sort((a, b) => b.shared - a.shared);
+      relEntities = relEntities.slice(0, 60);
+    }
+
+    let links = [];
+    if (present.size) {
+      const idList = [...present].join(',');
+      const { data: ls } = await supabaseAdmin.from('doc_links')
+        .select('doc_a, doc_b, link_type, confidence, evidence')
+        .or('doc_a.in.(' + idList + '),doc_b.in.(' + idList + ')');
+      links = (ls || []).filter(l => present.has(String(l.doc_a)) && present.has(String(l.doc_b)));
+    }
+    res.json({ entity: { ...ent, typeLabel: ENTITY_TYPE_LABELS[ent.type] || ent.type }, docs, relEntities, links });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/receipts', requireAuth, tabGuard('list'), async (req, res) => {
   try {
     const user = req.user;

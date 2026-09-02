@@ -913,7 +913,7 @@ const fmtDocDate = (iso) => iso ? iso.split('-').reverse().join('.') : '';
 // v74: вкладка «👥 Пользователи» (только admin) — управление доступом: роли, разделы документов, объекты
 function UsersTab({ token, objectsList }) {
   const SEC_LABELS = { home: '🏠 Дома', auto: '🚗 Авто', personal: '👤 Личное' };
-  const TAB_LABELS = { upload: '📤 Загрузка', list: '🧾 Чеки/документы', analysis: '📊 Анализ', taxes: '🧾 Налоги', cash: '💵 Cash', crm: '🤝 CRM', docs: '📁 Документы', chat: '💬 Чат', log: '📋 Журнал' };
+  const TAB_LABELS = { upload: '📤 Загрузка', list: '🧾 Чеки/документы', links: '🔗 Связи', analysis: '📊 Анализ', taxes: '🧾 Налоги', cash: '💵 Cash', crm: '🤝 CRM', docs: '📁 Документы', chat: '💬 Чат', log: '📋 Журнал' };
   const [list, setList] = useState([]);
   const [err, setErr] = useState('');
   const [edit, setEdit] = useState(null); // {id,name,password,role,sections[],objects[],disabled,isNew}
@@ -2164,7 +2164,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v106.14 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v107 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2568,6 +2568,197 @@ function ChatTab({ user, token }) {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ========== v107: вкладка «🔗 Связи» — граф сущностей и документов ==========
+// Шаг 1: детерминированные сущности (компания, IBAN, налоговый №, № фактуры/договора, CUPS, сумма+дата),
+// связи по общим сущностям. Выбрав сущность — виден весь граф: документы + связанные сущности.
+const LINK_TYPE_RU = {
+  same_counterparty: 'контрагент', same_person: 'персона', same_account: 'счёт',
+  same_tax_id: 'налоговый №', invoice_match: '№ фактуры', contract_match: '№ договора',
+  same_supply: 'CUPS', same_meter: 'счётчик', same_amount_date: 'сумма+дата', related: 'связь'
+};
+const DOC_TYPE_COLORS = { receipt: '#0071e3', invoice: '#5e5ce6', contract: '#bf5af2', act: '#ff9f0a', ticket: '#30b0c7', other: '#8e8e93' };
+const ENT_TYPE_COLORS = { company: '#34c759', person: '#ff9f0a', iban: '#0a84ff', tax_id: '#bf5af2', invoice_no: '#5e5ce6', contract_no: '#ff375f', cups: '#30b0c7', meter: '#30b0c7', amount_date: '#8e8e93' };
+
+function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
+  const [entities, setEntities] = useState([]);
+  const [q, setQ] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [building, setBuilding] = useState(false);
+  const [report, setReport] = useState(null);
+  const [graph, setGraph] = useState(null);
+  const [graphLoading, setGraphLoading] = useState(false);
+  const [err, setErr] = useState('');
+
+  const loadEntities = async (query) => {
+    setLoading(true); setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/links/entities?token=${token}&q=${encodeURIComponent(query || '')}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setEntities(j.entities || []);
+    } catch (e) { setErr(e.message); }
+    setLoading(false);
+  };
+  useEffect(() => { if (token) loadEntities(''); }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { const t = setTimeout(() => { if (token) loadEntities(q); }, 400); return () => clearTimeout(t); }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const build = async () => {
+    setBuilding(true); setErr(''); setReport(null);
+    try {
+      const r = await fetch(`${API_URL}/api/links/build?token=${token}`, { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setReport(j.stats);
+      await loadEntities(q);
+    } catch (e) { setErr(e.message); }
+    setBuilding(false);
+  };
+
+  const openGraph = async (id) => {
+    setGraphLoading(true); setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/links/graph?token=${token}&entity=${id}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setGraph(j);
+    } catch (e) { setErr(e.message); }
+    setGraphLoading(false);
+  };
+
+  // Раскладка графа: центр — сущность, внутреннее кольцо — документы, внешнее — связанные сущности
+  const W = 900, H = 620, CX = W / 2, CY = H / 2;
+  const docs = graph ? graph.docs.slice(0, 24) : [];
+  const rels = graph ? graph.relEntities.slice(0, 12) : [];
+  const R1 = Math.min(200, 90 + docs.length * 8), R2 = R1 + 110;
+  const docPos = docs.map((d, i) => {
+    const a = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(docs.length, 1);
+    return { d, x: CX + R1 * Math.cos(a), y: CY + R1 * Math.sin(a) };
+  });
+  const relPos = rels.map((e, i) => {
+    const a = -Math.PI / 2 + (2 * Math.PI * (i + 0.5)) / Math.max(rels.length, 1);
+    return { e, x: CX + R2 * Math.cos(a), y: CY + R2 * Math.sin(a) };
+  });
+  const posByDocId = new Map(docPos.map(p => [String(p.d.id), p]));
+  const visLinks = graph ? graph.links.filter(l => posByDocId.has(String(l.doc_a)) && posByDocId.has(String(l.doc_b))) : [];
+
+  const chip = (e, active) => (
+    <button key={e.id} onClick={() => openGraph(e.id)}
+      title={`${e.typeLabel}: ${e.label}`}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: active ? '2px solid #0071e3' : '1px solid #d0d0d5', background: active ? '#eaf3fb' : '#fff', borderRadius: 20, padding: '5px 12px', fontSize: 13, cursor: 'pointer', margin: '0 6px 6px 0' }}>
+      <span style={{ width: 9, height: 9, borderRadius: '50%', background: ENT_TYPE_COLORS[e.type] || '#8e8e93', flexShrink: 0 }} />
+      <span style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.label}</span>
+      <span style={{ color: '#8e8e93', fontSize: 12 }}>×{e.docs}</span>
+    </button>
+  );
+
+  return (
+    <div style={{ padding: isMobileView ? '6px 10px 20px' : '6px 15px 20px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '4px 0 10px' }}>
+        {!isMobileView && <h2 style={{ margin: 0 }}>🔗 Связи документов</h2>}
+        <input type="text" value={q} onChange={e => setQ(e.target.value)} placeholder="Поиск сущности: компания, IBAN, № фактуры…"
+          style={{ flex: '1 1 220px', minWidth: 0, padding: '8px 12px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 14 }} />
+        {canBuild && (
+          <button onClick={build} disabled={building}
+            style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: building ? '#c7d7ea' : '#0071e3', color: '#fff', fontWeight: 700, fontSize: 14, cursor: building ? 'wait' : 'pointer' }}>
+            {building ? '⏳ Строю граф…' : '🔄 Построить связи'}
+          </button>
+        )}
+      </div>
+      {report && (
+        <div style={{ background: '#e8f8ef', border: '1px solid #34c759', borderRadius: 10, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>
+          ✅ Граф построен: документов {report.docs} · новых сущностей {report.entitiesNew} · привязок {report.docEntities} · связей {report.links}
+          {report.errors && report.errors.length > 0 && <div style={{ color: '#e67e22', marginTop: 4 }}>⚠️ Ошибок: {report.errors.length} (например: {report.errors[0]})</div>}
+        </div>
+      )}
+      {err && (
+        <div style={{ background: '#fdecea', border: '1px solid #e74c3c', borderRadius: 10, padding: '10px 12px', fontSize: 13, marginBottom: 10, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          ❌ {err}
+        </div>
+      )}
+      {loading && <div style={{ color: '#8e8e93', fontSize: 13, marginBottom: 8 }}>⏳ Загружаю сущности…</div>}
+      {!loading && entities.length === 0 && !err && (
+        <div style={{ color: '#8e8e93', fontSize: 14, margin: '20px 0' }}>
+          Сущностей пока нет. Нажмите «🔄 Построить связи» — граф соберётся из всех распознанных документов (без расхода AI-квоты).
+        </div>
+      )}
+      <div style={{ marginBottom: 10, maxHeight: isMobileView ? 120 : 170, overflowY: 'auto' }}>
+        {entities.filter(e => e.docs > 0 || q).map(e => chip(e, graph && graph.entity.id === e.id))}
+      </div>
+
+      {graphLoading && <div style={{ color: '#8e8e93', fontSize: 13 }}>⏳ Строю граф…</div>}
+      {graph && !graphLoading && (
+        <div>
+          <div style={{ fontSize: 14, margin: '6px 0', color: '#1d1d1f' }}>
+            <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: ENT_TYPE_COLORS[graph.entity.type] || '#8e8e93', marginRight: 6 }} />
+            <b>{graph.entity.label}</b> <span style={{ color: '#8e8e93' }}>({graph.entity.typeLabel})</span>
+            <span style={{ color: '#8e8e93' }}> — документов: {graph.docs.length}, связанных сущностей: {graph.relEntities.length}</span>
+            <button onClick={() => setGraph(null)} style={{ marginLeft: 10, border: '1px solid #d0d0d5', background: '#fff', borderRadius: 6, padding: '2px 10px', fontSize: 12, cursor: 'pointer' }}>✕ Скрыть</button>
+          </div>
+          <div style={{ border: '1px solid #e3e6ea', borderRadius: 12, background: '#fafafa', overflow: 'auto' }}>
+            <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', minWidth: isMobileView ? 640 : 0, display: 'block' }}>
+              {/* связи документ-документ */}
+              {visLinks.map((l, i) => {
+                const a = posByDocId.get(String(l.doc_a)), b = posByDocId.get(String(l.doc_b));
+                return <line key={'l' + i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#c7c7cc" strokeWidth={1.2} strokeDasharray={l.link_type === 'same_amount_date' ? '4 3' : undefined} />;
+              })}
+              {/* связи сущность-документ */}
+              {docPos.map((p, i) => <line key={'c' + i} x1={CX} y1={CY} x2={p.x} y2={p.y} stroke="#0071e3" strokeOpacity={0.35} strokeWidth={1.5} />)}
+              {/* центральная сущность */}
+              <g>
+                <circle cx={CX} cy={CY} r={40} fill={ENT_TYPE_COLORS[graph.entity.type] || '#8e8e93'} />
+                <text x={CX} y={CY - 46} textAnchor="middle" fontSize={14} fontWeight={700} fill="#1d1d1f">{String(graph.entity.label).slice(0, 28)}</text>
+                <text x={CX} y={CY + 5} textAnchor="middle" fontSize={11} fill="#fff">{graph.entity.typeLabel}</text>
+              </g>
+              {/* документы */}
+              {docPos.map((p, i) => {
+                const col = DOC_TYPE_COLORS[p.d.document_type] || DOC_TYPE_COLORS.other;
+                const name = (p.d.store_name_ru || p.d.store_name || 'Без названия');
+                return (
+                  <g key={'d' + i} onClick={() => onOpenDoc(p.d.id)} style={{ cursor: 'pointer' }}>
+                    <title>{name} · {p.d.receipt_date || ''} · {p.d.total_amount ?? ''} {p.d.currency || ''}</title>
+                    <circle cx={p.x} cy={p.y} r={24} fill={col} fillOpacity={0.15} stroke={col} strokeWidth={2} />
+                    <text x={p.x} y={p.y + 5} textAnchor="middle" fontSize={16}>📄</text>
+                    <text x={p.x} y={p.y + 38} textAnchor="middle" fontSize={11} fill="#1d1d1f" fontWeight={600}>{name.slice(0, 16)}</text>
+                    <text x={p.x} y={p.y + 51} textAnchor="middle" fontSize={10} fill="#8e8e93">{p.d.receipt_date || ''}</text>
+                  </g>
+                );
+              })}
+              {/* связанные сущности */}
+              {relPos.map((p, i) => (
+                <g key={'e' + i} onClick={() => openGraph(p.e.id)} style={{ cursor: 'pointer' }}>
+                  <title>{p.e.typeLabel}: {p.e.label} — общих документов: {p.e.shared}</title>
+                  <rect x={p.x - 55} y={p.y - 14} width={110} height={28} rx={14} fill="#fff" stroke={ENT_TYPE_COLORS[p.e.type] || '#8e8e93'} strokeWidth={1.6} />
+                  <text x={p.x} y={p.y + 4} textAnchor="middle" fontSize={10.5} fill="#1d1d1f">{String(p.e.label).slice(0, 16)} ×{p.e.shared}</text>
+                </g>
+              ))}
+            </svg>
+          </div>
+          {/* список связей текстом — для проверки и мобильных */}
+          <div style={{ marginTop: 10, fontSize: 13 }}>
+            <b>Связи ({graph.links.length}):</b>
+            <div style={{ maxHeight: 200, overflowY: 'auto', marginTop: 4 }}>
+              {graph.links.slice(0, 100).map((l, i) => {
+                const da = graph.docs.find(d => String(d.id) === String(l.doc_a));
+                const db = graph.docs.find(d => String(d.id) === String(l.doc_b));
+                const nm = (d) => (d ? (d.store_name_ru || d.store_name || '—') : l.doc_a);
+                return (
+                  <div key={i} style={{ padding: '3px 0', borderBottom: '1px solid #f0f0f2', color: '#3a3a3c' }}>
+                    <span style={{ color: '#8e8e93' }}>{LINK_TYPE_RU[l.link_type] || l.link_type}:</span>{' '}
+                    <a onClick={() => da && onOpenDoc(da.id)} style={{ color: '#0071e3', cursor: 'pointer' }}>{nm(da)}</a>
+                    {' ↔ '}
+                    <a onClick={() => db && onOpenDoc(db.id)} style={{ color: '#0071e3', cursor: 'pointer' }}>{db ? (db.store_name_ru || db.store_name || '—') : l.doc_b}</a>
+                    {l.evidence ? <span style={{ color: '#8e8e93' }}> · {l.evidence}</span> : null}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -7887,7 +8078,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-02 · v106.14 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-02 · v107 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -7900,7 +8091,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-02 · v106.14</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-02 · v107</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">
@@ -7940,6 +8131,12 @@ ${bodyHtml}
             {tabAllowed('docs') && (
               <button className={activeTab === 'docs' ? 'active' : ''} onClick={() => setActiveTab('docs')}>
                 📁 Документы
+              </button>
+            )}
+            {/* v107: вкладка «Связи» — граф сущностей и документов */}
+            {tabAllowed('list') && (
+              <button className={activeTab === 'links' ? 'active' : ''} onClick={() => setActiveTab('links')}>
+                🔗 Связи
               </button>
             )}
             {/* v83: чат с бейджем непрочитанных */}
@@ -8031,6 +8228,7 @@ ${bodyHtml}
             {tabAllowed('analysis') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('analysis'); loadReceipts(); loadBankMovements(); loadPlannedPayments(); }}>📊 Анализ</button>}
             {tabAllowed('taxes') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('taxes'); loadReceipts(); loadBankMovements(); }}>🧾 Налоги</button>}
             {tabAllowed('docs') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('docs'); }}>📁 Документы</button>}
+            {tabAllowed('list') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('links'); }}>🔗 Связи</button>}
             {tabAllowed('chat') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('chat'); }}>💬 Чат{chatUnreadTotal > 0 ? ` (${chatUnreadTotal})` : ''}</button>}
             {user?.role === 'admin' && <button onClick={() => { setMoreNavOpen(false); setActiveTab('users'); }}>👥 Доступ</button>}
             {user?.role === 'admin' && <button onClick={() => { setMoreNavOpen(false); setActiveTab('log'); }}>📋 Журнал</button>}
@@ -10686,6 +10884,10 @@ ${bodyHtml}
 
       {/* Вкладка «CRM» (v32) */}
       {activeTab === 'crm' && <CrmTab user={user} token={token} isMobileView={isMobileView} />}
+      {activeTab === 'links' && tabAllowed('list') && (
+        <LinksTab token={token} isMobileView={isMobileView} canBuild={user?.role === 'admin' || user?.role === 'manager'}
+          onOpenDoc={(id) => { const r = receipts.find(x => String(x.id) === String(id)); if (r) setViewModal(r); else { alert('Документ не загружен в список — откройте вкладку «Фактуры» и найдите его там.'); } }} />
+      )}
       {/* ===================== v90: ВКЛАДКА CASH — ОТДЕЛЬНАЯ структура (cash_movements) =====================
           Своя таблица, НЕ связана с банковскими выписками и налогами. Строки: дата, контрагент, сумма со знаком
           (− расход красным / + приход зелёным), выбор/удаление, добавление, привязка фактур через вкладку «Чеки». */}
