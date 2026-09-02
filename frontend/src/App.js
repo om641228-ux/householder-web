@@ -2164,7 +2164,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v107.4 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v108 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2578,9 +2578,9 @@ function ChatTab({ user, token }) {
 const LINK_TYPE_RU = {
   same_counterparty: 'контрагент', same_person: 'персона', same_account: 'счёт',
   same_tax_id: 'налоговый №', invoice_match: '№ фактуры', contract_match: '№ договора',
-  same_supply: 'CUPS', same_meter: 'счётчик', same_amount_date: 'сумма+дата', related: 'связь'
+  same_supply: 'CUPS', same_meter: 'счётчик', same_amount_date: 'сумма+дата', payment_of: '💸 оплата фактуры', related: 'связь'
 };
-const DOC_TYPE_COLORS = { receipt: '#0071e3', invoice: '#5e5ce6', contract: '#bf5af2', act: '#ff9f0a', ticket: '#30b0c7', other: '#8e8e93' };
+const DOC_TYPE_COLORS = { receipt: '#0071e3', invoice: '#5e5ce6', contract: '#bf5af2', act: '#ff9f0a', ticket: '#30b0c7', bank: '#16a085', other: '#8e8e93' };
 const ENT_TYPE_COLORS = { company: '#34c759', person: '#ff9f0a', iban: '#0a84ff', tax_id: '#bf5af2', invoice_no: '#5e5ce6', contract_no: '#ff375f', cups: '#30b0c7', meter: '#30b0c7', amount_date: '#8e8e93' };
 
 function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
@@ -2718,10 +2718,12 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
                 const col = DOC_TYPE_COLORS[p.d.document_type] || DOC_TYPE_COLORS.other;
                 const name = (p.d.store_name_ru || p.d.store_name || 'Без названия');
                 return (
-                  <g key={'d' + i} onClick={() => onOpenDoc(p.d.id)} style={{ cursor: 'pointer' }}>
+                  <g key={'d' + i} onClick={() => String(p.d.id).startsWith('bm:')
+                    ? alert('🏦 Движение банка\n\n' + name + '\n' + (p.d.concept || '') + '\n' + (p.d.total_amount ?? '') + ' ' + (p.d.currency || '') + ' · ' + (p.d.receipt_date || '') + (p.d.iban ? '\n' + p.d.iban : '') + '\n\nПривязки к фактурам — во вкладке «Анализ».')
+                    : onOpenDoc(p.d.id)} style={{ cursor: 'pointer' }}>
                     <title>{name} · {p.d.receipt_date || ''} · {p.d.total_amount ?? ''} {p.d.currency || ''}</title>
                     <circle cx={p.x} cy={p.y} r={24} fill={col} fillOpacity={0.15} stroke={col} strokeWidth={2} />
-                    <text x={p.x} y={p.y + 5} textAnchor="middle" fontSize={16}>📄</text>
+                    <text x={p.x} y={p.y + 5} textAnchor="middle" fontSize={16}>{p.d.document_type === 'bank' ? '🏦' : '📄'}</text>
                     <text x={p.x} y={p.y + 38} textAnchor="middle" fontSize={11} fill="#1d1d1f" fontWeight={600}>{name.slice(0, 16)}</text>
                     <text x={p.x} y={p.y + 51} textAnchor="middle" fontSize={10} fill="#8e8e93">{p.d.receipt_date || ''}</text>
                   </g>
@@ -2748,9 +2750,13 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
                 return (
                   <div key={i} style={{ padding: '3px 0', borderBottom: '1px solid #f0f0f2', color: '#3a3a3c' }}>
                     <span style={{ color: '#8e8e93' }}>{LINK_TYPE_RU[l.link_type] || l.link_type}:</span>{' '}
-                    <a onClick={() => da && onOpenDoc(da.id)} style={{ color: '#0071e3', cursor: 'pointer' }}>{nm(da)}</a>
+                    {da && !String(da.id).startsWith('bm:')
+                      ? <a onClick={() => onOpenDoc(da.id)} style={{ color: '#0071e3', cursor: 'pointer' }}>{nm(da)}</a>
+                      : <span>{'🏦 '}{da ? nm(da) : l.doc_a}</span>}
                     {' ↔ '}
-                    <a onClick={() => db && onOpenDoc(db.id)} style={{ color: '#0071e3', cursor: 'pointer' }}>{db ? (db.store_name_ru || db.store_name || '—') : l.doc_b}</a>
+                    {db && !String(db.id).startsWith('bm:')
+                      ? <a onClick={() => onOpenDoc(db.id)} style={{ color: '#0071e3', cursor: 'pointer' }}>{db.store_name_ru || db.store_name || '—'}</a>
+                      : <span>{'🏦 '}{db ? (db.store_name_ru || db.store_name || '—') : l.doc_b}</span>}
                     {l.evidence ? <span style={{ color: '#8e8e93' }}> · {l.evidence}</span> : null}
                   </div>
                 );
@@ -8078,7 +8084,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-02 · v107.4 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-02 · v108 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8091,7 +8097,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-02 · v107.4</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-02 · v108</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">

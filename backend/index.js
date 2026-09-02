@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v107.4-2026-09-02', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v108-2026-09-02', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4107,6 +4107,7 @@ const LINK_TYPE_BY_ENTITY = {
   cups: 'same_supply', meter: 'same_meter', amount_date: 'same_amount_date'
 };
 const ENTITY_TYPE_LABELS = { company: 'Компания', person: 'Персона', iban: 'Счёт IBAN', tax_id: 'Налоговый №', invoice_no: '№ фактуры', contract_no: '№ договора', cups: 'CUPS', meter: 'Счётчик', amount_date: 'Сумма+дата' };
+// v108: bank — банковское движение (узел графа), payment_of — прямая связь «движение оплатило фактуру»
 
 function normEnt(v) {
   return String(v || '').toLowerCase().replace(/[.,\/\\()\[\]"'«»`;:]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -4146,6 +4147,33 @@ function extractDocEntities(r) {
   return [...out.values()];
 }
 
+// v108: сущности из банковского движения (выписка): контрагент, счёт, налоговые №, № фактур из концепта, сумма+дата
+function extractMovementEntities(mv) {
+  const out = new Map();
+  const add = (type, value, label, role) => {
+    const nv = type === 'amount_date' ? String(value) : normEnt(value);
+    if (!nv || nv.length < 2 || nv.length > 120) return;
+    const k = type + '|' + nv;
+    if (!out.has(k)) out.set(k, { type, value: nv, label: String(label || value).slice(0, 200), role: role || 'mention' });
+  };
+  if (mv.counterparty) add('company', mv.counterparty, mv.counterparty, 'counterparty');
+  if (mv.iban) add('iban', mv.iban, mv.iban, 'account');
+  const text = ((mv.concept || '') + ' ' + (mv.counterparty || '')).slice(0, 10000);
+  const ibans = text.match(/\b[A-Z]{2}\d{2}(?: ?[0-9A-Z]{4}){3,7}\b/g) || [];
+  for (const ib of new Set(ibans.map(x => x.replace(/\s/g, '')))) {
+    if (ib.length >= 15 && ib.length <= 34) add('iban', ib.toLowerCase(), ib, 'account');
+  }
+  const cifs = text.match(/\b[ABCDEFGHJNPQRSUVW]\d{7}[0-9A-J]\b/g) || [];
+  for (const c of new Set(cifs)) add('tax_id', c.toLowerCase(), c, 'tax_id');
+  const invs = text.match(/\b\d{1,4}\/\d{1,4}\b/g) || [];
+  for (const iv of new Set(invs)) add('invoice_no', iv, iv, 'subject');
+  if (mv.amount != null && mv.operation_date) {
+    const amt = Math.abs(Number(mv.amount));
+    if (isFinite(amt)) add('amount_date', amt.toFixed(2) + '||' + mv.operation_date, amt + ' · ' + mv.operation_date, 'amount');
+  }
+  return [...out.values()];
+}
+
 // Построение/перестроение графа по всем документам
 app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
   try {
@@ -4171,6 +4199,29 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
     }
     stats.docs = all.length;
 
+    // v108: банковские движения — узлы графа «bm:<id>»
+    const paymentLinks = [];
+    try {
+      const mvs = [];
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await supabaseAdmin.from('bank_movements')
+          .select('id, counterparty, concept, amount, operation_date, iban, matched_receipt_id')
+          .order('id').range(from, from + 999);
+        if (error) throw error;
+        mvs.push(...(data || []));
+        if (!data || data.length < 1000) break;
+      }
+      stats.movements = mvs.length;
+      for (const mv of mvs) {
+        const bmId = 'bm:' + mv.id;
+        const ents = extractMovementEntities(mv);
+        docEnts.set(bmId, ents);
+        for (const e of ents) entKeys.set(e.type + '|' + e.value, e);
+        if (mv.matched_receipt_id) {
+          paymentLinks.push({ doc_a: bmId, doc_b: String(mv.matched_receipt_id), link_type: 'payment_of', confidence: 1, evidence: 'автопривязка выписки', created_by: 'rule' });
+        }
+      }
+    } catch (me) { stats.errors.push('bank_movements: ' + me.message); }
     // v107.3: всё пакетно — иначе тысячи последовательных запросов рвут соединение (Failed to fetch)
     const entKeys = new Map();   // 'type|value' -> {type,value,label}
     const docEnts = new Map();   // docId -> [ent]
@@ -4239,6 +4290,7 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
     }
     // v107.4: дедупликация — одна пара документов может делить НЕСКОЛЬКО сущностей одного типа
     // (иначе в одном upsert-пакете две строки с одинаковым ключом → «ON CONFLICT cannot affect row a second time»)
+    linkRows.push(...paymentLinks);
     const linkMap = new Map();
     for (const l of linkRows) {
       const k = l.doc_a + '|' + l.doc_b + '|' + l.link_type;
@@ -4296,11 +4348,27 @@ app.get('/api/links/graph', requireAuth, tabGuard('list'), async (req, res) => {
     const { data: deRows } = await supabaseAdmin.from('doc_entities').select('doc_id, role').eq('entity_id', eid);
     const docIds = (deRows || []).map(r => r.doc_id).slice(0, 80);
     let docs = [];
-    if (docIds.length) {
+    const rIds = docIds.filter(x => !String(x).startsWith('bm:'));
+    const bmIds = docIds.filter(x => String(x).startsWith('bm:')).map(x => String(x).slice(3));
+    if (rIds.length) {
       const { data: rds } = await supabaseAdmin.from('receipts')
         .select('id, store_name, store_name_ru, receipt_date, total_amount, currency, document_type, image_url, invoice_number, contract_number')
-        .in('id', docIds);
+        .in('id', rIds);
       docs = rds || [];
+    }
+    if (bmIds.length) {
+      const { data: bms } = await supabaseAdmin.from('bank_movements')
+        .select('id, counterparty, concept, amount, operation_date, iban')
+        .in('id', bmIds);
+      for (const mv of (bms || [])) {
+        docs.push({
+          id: 'bm:' + mv.id, document_type: 'bank',
+          store_name: mv.counterparty || mv.concept || 'Движение банка',
+          store_name_ru: null,
+          receipt_date: mv.operation_date, total_amount: Math.abs(Number(mv.amount) || 0),
+          currency: 'EUR', concept: mv.concept || '', iban: mv.iban || ''
+        });
+      }
     }
     const present = new Set(docs.map(d => String(d.id)));
 
