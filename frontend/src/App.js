@@ -2164,7 +2164,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v111.2 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v111.3 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2601,6 +2601,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
   const [scopeMgrOpen, setScopeMgrOpen] = useState(false);
   const [nsName, setNsName] = useState('');
   const [nsObjects, setNsObjects] = useState('');
+  const [nsInclude, setNsInclude] = useState('');
   const [nsExclude, setNsExclude] = useState('');
   const [nsIbans, setNsIbans] = useState('');
   const [bridges, setBridges] = useState(null);
@@ -2668,11 +2669,11 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
       const csv = (v) => v.split(',').map(x => x.trim()).filter(Boolean);
       const r = await fetch(`${API_URL}/api/links/scopes?token=${token}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: nsName.trim(), filter: { objects: csv(nsObjects), excludeNames: csv(nsExclude), ibans: csv(nsIbans) } })
+        body: JSON.stringify({ name: nsName.trim(), filter: { objects: csv(nsObjects), includeNames: csv(nsInclude), excludeNames: csv(nsExclude), ibans: csv(nsIbans) } })
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
-      setNsName(''); setNsObjects(''); setNsExclude(''); setNsIbans('');
+      setNsName(''); setNsObjects(''); setNsInclude(''); setNsExclude(''); setNsIbans('');
       await loadScopes();
       if (j.scope) setScopeId(j.scope.id);
     } catch (e) { setErr(e.message); }
@@ -2687,6 +2688,22 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
       await loadScopes(); await loadEntities(q);
     } catch (e) { setErr(e.message); }
   };
+  const clearGraph = async () => {
+    const what = scopeId ? 'граф области «' + ((scopes.find(x => x.id === scopeId) || {}).name || scopeId) + '»' : 'ВЕСЬ граф «Все документы»';
+    if (!window.confirm('Очистить ' + what + '?\nСущности и связи будут удалены (документы и выписки не пострадают). Потом нажмите «🔄 Построить связи».')) return;
+    setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/links/clear?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope: scopeId || 'all' })
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) throw new Error(j.error || (j.errors || []).join('; ') || ('HTTP ' + r.status));
+      setGraph(null); setReport(null); setAiProg(null);
+      await loadEntities(q);
+    } catch (e) { setErr(e.message); }
+  };
+
   const loadBridges = async () => {
     setBridges(null); setErr('');
     try {
@@ -2751,6 +2768,10 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
         <button onClick={loadBridges} title="Сущности, встречающиеся сразу в нескольких областях"
           style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 14, cursor: 'pointer' }}>🌉</button>
         {canBuild && (
+          <button onClick={clearGraph} title="Очистить граф текущей области (сущности и связи; документы не трогаются)"
+            style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #f5c2c7', background: '#fff', fontSize: 14, cursor: 'pointer' }}>🧹</button>
+        )}
+        {canBuild && (
           <button onClick={build} disabled={building}
             style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: building ? '#c7d7ea' : '#0071e3', color: '#fff', fontWeight: 700, fontSize: 14, cursor: building ? 'wait' : 'pointer' }}>
             {building ? '⏳ Строю граф…' : '🔄 Построить связи'}
@@ -2791,6 +2812,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
                 <span style={{ flex: 1 }}><b>{sc.name}</b>
                   <span style={{ color: '#8e8e93', fontSize: 11 }}>
                     {sc.filter && sc.filter.objects && sc.filter.objects.length ? ' · объекты: ' + sc.filter.objects.join(', ') : ''}
+                    {sc.filter && sc.filter.includeNames && sc.filter.includeNames.length ? ' · только: ' + sc.filter.includeNames.join(', ') : ''}
                     {sc.filter && sc.filter.excludeNames && sc.filter.excludeNames.length ? ' · кроме: ' + sc.filter.excludeNames.join(', ') : ''}
                     {sc.filter && sc.filter.ibans && sc.filter.ibans.length ? ' · счета: ' + sc.filter.ibans.join(', ') : ''}
                   </span>
@@ -2802,6 +2824,8 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
               <input value={nsName} onChange={e => setNsName(e.target.value)} placeholder="Название (напр. Личное без Alcojora)"
                 style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
               <input value={nsObjects} onChange={e => setNsObjects(e.target.value)} placeholder="Объекты через запятую (kit, maria, duqe, other) — пусто = все"
+                style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
+              <input value={nsInclude} onChange={e => setNsInclude(e.target.value)} placeholder="Включить по названию (напр. Alcojora) — через запятую, пусто = все"
                 style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
               <input value={nsExclude} onChange={e => setNsExclude(e.target.value)} placeholder="Исключить по названию (напр. Alcojora) — через запятую"
                 style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
@@ -8265,7 +8289,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-03 · v111.2 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-03 · v111.3 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8278,7 +8302,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-03 · v111.2</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-03 · v111.3</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">

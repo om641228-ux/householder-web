@@ -4128,6 +4128,8 @@ function receiptInScope(r, f) {
   if (Array.isArray(f.objects) && f.objects.length && !f.objects.includes(r.object || 'other')) return false;
   if (Array.isArray(f.docTypes) && f.docTypes.length && !f.docTypes.includes(r.document_type || 'other')) return false;
   const nm = ((r.store_name || '') + ' ' + (r.store_name_ru || '')).toLowerCase();
+  if (Array.isArray(f.includeNames) && f.includeNames.length
+      && !f.includeNames.some(inc => inc && nm.includes(String(inc).toLowerCase()))) return false; // v111.3: «включить по названию»
   for (const ex of (f.excludeNames || [])) { if (ex && nm.includes(String(ex).toLowerCase())) return false; }
   return true;
 }
@@ -4135,6 +4137,8 @@ function movementInScope(mv, f) {
   if (!f) return true;
   if (Array.isArray(f.ibans) && f.ibans.length && !f.ibans.includes(mv.iban || '')) return false;
   const nm = ((mv.counterparty || '') + ' ' + (mv.concept || '')).toLowerCase();
+  if (Array.isArray(f.includeNames) && f.includeNames.length
+      && !f.includeNames.some(inc => inc && nm.includes(String(inc).toLowerCase()))) return false;
   for (const ex of (f.excludeNames || [])) { if (ex && nm.includes(String(ex).toLowerCase())) return false; }
   return true;
 }
@@ -4162,6 +4166,7 @@ app.post('/api/links/scopes', requireAuth, requireRole('admin', 'manager'), asyn
     const filter = {
       objects: Array.isArray(f.objects) ? f.objects.map(String).slice(0, 50) : [],
       docTypes: Array.isArray(f.docTypes) ? f.docTypes.map(String).slice(0, 50) : [],
+      includeNames: Array.isArray(f.includeNames) ? f.includeNames.map(String).slice(0, 50) : [],
       excludeNames: Array.isArray(f.excludeNames) ? f.excludeNames.map(String).slice(0, 50) : [],
       ibans: Array.isArray(f.ibans) ? f.ibans.map(String).slice(0, 50) : []
     };
@@ -4180,6 +4185,32 @@ app.delete('/api/links/scopes', requireAuth, requireRole('admin', 'manager'), as
     const { error } = await supabaseAdmin.from('graph_scopes').delete().eq('id', id);
     if (error) throw error;
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v111.3: очистка графа области (или всего графа при scope=all) — документы и выписки НЕ трогаются
+app.post('/api/links/clear', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const scopeId = String((req.body && req.body.scope) || 'all').trim();
+    const scoped = await hasScopeSupport();
+    const sid = scopeId === 'all' ? ZERO_SCOPE : scopeId;
+    const filt = (q) => (scoped && scopeId !== 'everything') ? q.eq('scope_id', sid) : q.not('doc_id', 'is', null);
+    // scope='everything' — полный снос ВСЕХ областей
+    const wipeAll = scopeId === 'everything';
+    const q1 = wipeAll ? supabaseAdmin.from('doc_links').delete().not('doc_a', 'is', null)
+      : scoped ? supabaseAdmin.from('doc_links').delete().eq('scope_id', sid) : supabaseAdmin.from('doc_links').delete().not('doc_a', 'is', null);
+    const { error: e1 } = await q1;
+    const q2 = wipeAll ? supabaseAdmin.from('entity_links').delete().not('entity_a', 'is', null)
+      : scoped ? supabaseAdmin.from('entity_links').delete().eq('scope_id', sid) : supabaseAdmin.from('entity_links').delete().not('entity_a', 'is', null);
+    const { error: e2 } = await q2;
+    const q3 = wipeAll ? supabaseAdmin.from('doc_entities').delete().not('doc_id', 'is', null)
+      : scoped ? supabaseAdmin.from('doc_entities').delete().eq('scope_id', sid) : supabaseAdmin.from('doc_entities').delete().not('doc_id', 'is', null);
+    const { error: e3 } = await q3;
+    const q4 = wipeAll ? supabaseAdmin.from('entities').delete().neq('scope_id', '00000000-0000-0000-0000-000000000001')
+      : scoped ? supabaseAdmin.from('entities').delete().eq('scope_id', sid) : supabaseAdmin.from('entities').delete().not('id', 'is', null);
+    const { error: e4 } = await q4;
+    const errs = [e1, e2, e3, e4].filter(Boolean).map(e => e.message);
+    res.json({ ok: errs.length === 0, errors: errs });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

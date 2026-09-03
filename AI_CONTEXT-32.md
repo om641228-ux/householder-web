@@ -2308,3 +2308,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 
 ## v111.2 (2026-09-03) — fix «Нет таблицы graph_scopes» после выполнения SQL
 - hasScopeSupport кэшировал отрицательный результат навсегда → после выполнения SQL бэкенд всё равно не видел таблицу до рестарта. Теперь кэшируется только успех.
+
+## v111.3 (2026-09-03) — includeNames + очистка графа
+- Фильтр области: includeNames («включить по названию») для receipts и bank_movements; CRUD принимает includeNames.
+- POST /api/links/clear {scope} — чистит entities/doc_entities/doc_links/entity_links области ('all' = ZERO_SCOPE, 'everything' = все области). Документы не трогает.
+- LinksTab: поле «Включить по названию» в менеджере областей, кнопка 🧹 очистки графа текущей области.
