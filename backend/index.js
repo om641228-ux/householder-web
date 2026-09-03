@@ -4126,7 +4126,9 @@ async function hasScopeSupport() {
 function receiptInScope(r, f) {
   if (!f) return true;
   if (Array.isArray(f.objects) && f.objects.length && !f.objects.includes(r.object || 'other')) return false;
+  if (Array.isArray(f.excludeObjects) && f.excludeObjects.includes(r.object || 'other')) return false; // v112: ❌ игнорировать объект
   if (Array.isArray(f.docTypes) && f.docTypes.length && !f.docTypes.includes(r.document_type || 'other')) return false;
+  if (Array.isArray(f.excludeDocTypes) && f.excludeDocTypes.includes(r.document_type || 'other')) return false;
   const nm = ((r.store_name || '') + ' ' + (r.store_name_ru || '')).toLowerCase();
   if (Array.isArray(f.includeNames) && f.includeNames.length
       && !f.includeNames.some(inc => inc && nm.includes(String(inc).toLowerCase()))) return false; // v111.3: «включить по названию»
@@ -4136,6 +4138,7 @@ function receiptInScope(r, f) {
 function movementInScope(mv, f) {
   if (!f) return true;
   if (Array.isArray(f.ibans) && f.ibans.length && !f.ibans.includes(mv.iban || '')) return false;
+  if (Array.isArray(f.excludeIbans) && f.excludeIbans.includes(mv.iban || '')) return false;
   const nm = ((mv.counterparty || '') + ' ' + (mv.concept || '')).toLowerCase();
   if (Array.isArray(f.includeNames) && f.includeNames.length
       && !f.includeNames.some(inc => inc && nm.includes(String(inc).toLowerCase()))) return false;
@@ -4168,6 +4171,9 @@ app.post('/api/links/scopes', requireAuth, requireRole('admin', 'manager'), asyn
       docTypes: Array.isArray(f.docTypes) ? f.docTypes.map(String).slice(0, 50) : [],
       includeNames: Array.isArray(f.includeNames) ? f.includeNames.map(String).slice(0, 50) : [],
       excludeNames: Array.isArray(f.excludeNames) ? f.excludeNames.map(String).slice(0, 50) : [],
+      excludeObjects: Array.isArray(f.excludeObjects) ? f.excludeObjects.map(String).slice(0, 50) : [],
+      excludeDocTypes: Array.isArray(f.excludeDocTypes) ? f.excludeDocTypes.map(String).slice(0, 50) : [],
+      excludeIbans: Array.isArray(f.excludeIbans) ? f.excludeIbans.map(String).slice(0, 50) : [],
       ibans: Array.isArray(f.ibans) ? f.ibans.map(String).slice(0, 50) : []
     };
     const { data, error } = await supabaseAdmin.from('graph_scopes').insert([{ name, filter }]).select().single();
@@ -4185,6 +4191,34 @@ app.delete('/api/links/scopes', requireAuth, requireRole('admin', 'manager'), as
     const { error } = await supabaseAdmin.from('graph_scopes').delete().eq('id', id);
     if (error) throw error;
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v112: дерево источников для визуального редактора области (объекты/типы/счета/контрагенты с количеством)
+app.get('/api/links/tree', requireAuth, tabGuard('list'), async (req, res) => {
+  try {
+    const objects = new Map(), docTypes = new Map(), cps = new Map();
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin.from('receipts').select('object, document_type, store_name').order('id').range(from, from + 999);
+      if (error) throw error;
+      for (const r of (data || [])) {
+        const o = r.object || 'other'; objects.set(o, (objects.get(o) || 0) + 1);
+        const t = r.document_type || 'other'; docTypes.set(t, (docTypes.get(t) || 0) + 1);
+        const c = String(r.store_name || '').trim(); if (c) cps.set(c, (cps.get(c) || 0) + 1);
+      }
+      if (!data || data.length < 1000) break;
+    }
+    const ibans = new Map();
+    try {
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await supabaseAdmin.from('bank_movements').select('iban').order('id').range(from, from + 999);
+        if (error) break;
+        for (const m of (data || [])) { const i = String(m.iban || '').trim() || '(без счёта)'; ibans.set(i, (ibans.get(i) || 0) + 1); }
+        if (!data || data.length < 1000) break;
+      }
+    } catch (_) { /* выписок может не быть */ }
+    const top = (mp, n) => [...mp.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([name, count]) => ({ name, count }));
+    res.json({ tree: { objects: top(objects, 50), docTypes: top(docTypes, 50), ibans: top(ibans, 50), counterparties: top(cps, 100) } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

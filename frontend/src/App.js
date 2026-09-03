@@ -2164,7 +2164,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v111.3 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v112 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2603,6 +2603,23 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
   const [nsObjects, setNsObjects] = useState('');
   const [nsInclude, setNsInclude] = useState('');
   const [nsExclude, setNsExclude] = useState('');
+  // v112: дерево источников — визуальный выбор ✅ включить / ❌ игнорировать
+  const [scopeTree, setScopeTree] = useState(null);
+  const [treeSel, setTreeSel] = useState({ objects: {}, docTypes: {}, ibans: {}, cps: {} });
+  const loadTree = async () => {
+    try {
+      const r = await fetch(`${API_URL}/api/links/tree?token=${token}`);
+      const j = await r.json();
+      if (r.ok) setScopeTree(j.tree);
+    } catch (_) { /* дерево опционально */ }
+  };
+  const treeToggle = (group, name) => setTreeSel(prev => {
+    const cur = prev[group][name] || '';
+    const next = cur === '' ? 'inc' : cur === 'inc' ? 'exc' : '';
+    const g = { ...prev[group] };
+    if (next) g[name] = next; else delete g[name];
+    return { ...prev, [group]: g };
+  });
   const [nsIbans, setNsIbans] = useState('');
   const [bridges, setBridges] = useState(null);
   const loadScopes = async () => {
@@ -2667,13 +2684,19 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
     if (!nsName.trim()) return;
     try {
       const csv = (v) => v.split(',').map(x => x.trim()).filter(Boolean);
+      const pick = (g, mode) => Object.keys(treeSel[g]).filter(k => treeSel[g][k] === mode);
       const r = await fetch(`${API_URL}/api/links/scopes?token=${token}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: nsName.trim(), filter: { objects: csv(nsObjects), includeNames: csv(nsInclude), excludeNames: csv(nsExclude), ibans: csv(nsIbans) } })
+        body: JSON.stringify({ name: nsName.trim(), filter: {
+          objects: pick('objects', 'inc'), excludeObjects: pick('objects', 'exc'),
+          docTypes: pick('docTypes', 'inc'), excludeDocTypes: pick('docTypes', 'exc'),
+          ibans: pick('ibans', 'inc'), excludeIbans: pick('ibans', 'exc'),
+          includeNames: [...csv(nsInclude), ...pick('cps', 'inc')], excludeNames: [...csv(nsExclude), ...pick('cps', 'exc')]
+        } })
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
-      setNsName(''); setNsObjects(''); setNsInclude(''); setNsExclude(''); setNsIbans('');
+      setNsName(''); setNsObjects(''); setNsInclude(''); setNsExclude(''); setNsIbans(''); setTreeSel({ objects: {}, docTypes: {}, ibans: {}, cps: {} });
       await loadScopes();
       if (j.scope) setScopeId(j.scope.id);
     } catch (e) { setErr(e.message); }
@@ -2763,7 +2786,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
           <option value="">🌐 Все документы</option>
           {scopes.map(sc => <option key={sc.id} value={sc.id}>🗂 {sc.name}</option>)}
         </select>
-        <button onClick={() => setScopeMgrOpen(true)} title="Управление областями"
+        <button onClick={() => { setScopeMgrOpen(true); loadTree(); }} title="Управление областями"
           style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 14, cursor: 'pointer' }}>🗂</button>
         <button onClick={loadBridges} title="Сущности, встречающиеся сразу в нескольких областях"
           style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 14, cursor: 'pointer' }}>🌉</button>
@@ -2823,13 +2846,43 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
             <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
               <input value={nsName} onChange={e => setNsName(e.target.value)} placeholder="Название (напр. Личное без Alcojora)"
                 style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
-              <input value={nsObjects} onChange={e => setNsObjects(e.target.value)} placeholder="Объекты через запятую (kit, maria, duqe, other) — пусто = все"
-                style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
+              <div style={{ border: '1px solid #e3e6ea', borderRadius: 10, padding: 10, background: '#fafafa' }}>
+                <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 6 }}>Источники графа — клик по строке: ⚪ не выбрано → ✅ включить → ❌ игнорировать</div>
+                {!scopeTree && <div style={{ fontSize: 12, color: '#8e8e93' }}>⏳ Загружаю структуру…</div>}
+                {scopeTree && [
+                  ['🧾 Объекты (Фактуры/Доки)', 'objects', scopeTree.objects],
+                  ['📄 Типы документов', 'docTypes', scopeTree.docTypes],
+                  ['🏦 Счета выписок (IBAN)', 'ibans', scopeTree.ibans],
+                  ['🏢 Контрагенты (топ-100)', 'cps', scopeTree.counterparties]
+                ].map(([title, group, items]) => {
+                  const selCount = Object.keys(treeSel[group]).length;
+                  return (
+                    <details key={group} style={{ marginBottom: 6 }} open={selCount > 0}>
+                      <summary style={{ fontSize: 13, fontWeight: 600, cursor: 'pointer', padding: '4px 0' }}>
+                        {title} {selCount > 0 && <span style={{ color: '#7c3aed' }}>({selCount} выбрано)</span>}
+                      </summary>
+                      <div style={{ maxHeight: 130, overflowY: 'auto', margin: '4px 0 4px 8px' }}>
+                        {(items || []).map(it => {
+                          const st = treeSel[group][it.name] || '';
+                          return (
+                            <div key={it.name} onClick={() => treeToggle(group, it.name)}
+                              style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 6px', borderRadius: 6, cursor: 'pointer', fontSize: 13,
+                                background: st === 'inc' ? '#e8f8ef' : st === 'exc' ? '#fdecea' : 'transparent' }}>
+                              <span style={{ width: 18, textAlign: 'center' }}>{st === 'inc' ? '✅' : st === 'exc' ? '❌' : '⚪'}</span>
+                              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                textDecoration: st === 'exc' ? 'line-through' : 'none', color: st === 'exc' ? '#c0392b' : '#1d1d1f' }}>{it.name}</span>
+                              <span style={{ color: '#8e8e93', fontSize: 11 }}>{it.count}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </details>
+                  );
+                })}
+              </div>
               <input value={nsInclude} onChange={e => setNsInclude(e.target.value)} placeholder="Включить по названию (напр. Alcojora) — через запятую, пусто = все"
                 style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
               <input value={nsExclude} onChange={e => setNsExclude(e.target.value)} placeholder="Исключить по названию (напр. Alcojora) — через запятую"
-                style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
-              <input value={nsIbans} onChange={e => setNsIbans(e.target.value)} placeholder="IBAN счетов выписки через запятую — пусто = все"
                 style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
               <button onClick={createScope} disabled={!nsName.trim()}
                 style={{ padding: '9px', borderRadius: 8, border: 'none', background: nsName.trim() ? '#7c3aed' : '#d9ccee', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>
@@ -8289,7 +8342,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-03 · v111.3 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-04 · v112 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8302,7 +8355,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-03 · v111.3</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v112</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">

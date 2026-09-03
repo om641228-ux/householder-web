@@ -2313,3 +2313,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Фильтр области: includeNames («включить по названию») для receipts и bank_movements; CRUD принимает includeNames.
 - POST /api/links/clear {scope} — чистит entities/doc_entities/doc_links/entity_links области ('all' = ZERO_SCOPE, 'everything' = все области). Документы не трогает.
 - LinksTab: поле «Включить по названию» в менеджере областей, кнопка 🧹 очистки графа текущей области.
+
+## v112 (2026-09-04) — визуальное дерево источников в редакторе области
+- GET /api/links/tree: объекты/типы документов/IBAN/топ-100 контрагентов с количеством.
+- Фильтр области: + excludeObjects, excludeDocTypes, excludeIbans (❌ игнорировать); контрагенты из дерева мапятся в includeNames/excludeNames.
+- Менеджер областей: дерево-чеклист с циклом ⚪→✅→❌ (include/ignore), счётчики документов, секции details. Старые поля «объекты/IBAN текстом» убраны.
