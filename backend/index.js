@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v108-2026-09-02', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v108.1-2026-09-03', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4199,6 +4199,10 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
     }
     stats.docs = all.length;
 
+    // v107.3: всё пакетно — иначе тысячи последовательных запросов рвут соединение (Failed to fetch)
+    const entKeys = new Map();   // 'type|value' -> {type,value,label}
+    const docEnts = new Map();   // docId -> [ent]
+
     // v108: банковские движения — узлы графа «bm:<id>»
     const paymentLinks = [];
     try {
@@ -4222,9 +4226,6 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
         }
       }
     } catch (me) { stats.errors.push('bank_movements: ' + me.message); }
-    // v107.3: всё пакетно — иначе тысячи последовательных запросов рвут соединение (Failed to fetch)
-    const entKeys = new Map();   // 'type|value' -> {type,value,label}
-    const docEnts = new Map();   // docId -> [ent]
     for (const r of all) {
       const ents = extractDocEntities(r);
       docEnts.set(String(r.id), ents);

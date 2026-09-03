@@ -2266,3 +2266,12 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 ## v107.4 (2026-09-02) — фиксы графа связей
 - Backend: дедупликация doc_links по (doc_a,doc_b,link_type) перед upsert (была ошибка «ON CONFLICT cannot affect row a second time», когда пара документов делит несколько сущностей одного типа).
 - Frontend: «Сущностей пока нет» не показывается при открытом графе; минимальный радиус кольца документов 150 (узел не налезает на центр).
+
+## v108 (2026-09-02) — банковские движения в графе связей
+- Backend: extractMovementEntities (контрагент, IBAN, CIF, № фактуры «25/135» из концепта, сумма+дата без валюты); движения — узлы «bm:<id>»; прямые связи payment_of по matched_receipt_id (confidence 1). Граф: /api/links/graph возвращает движения как docs с document_type='bank'.
+- Frontend: цвет bank #16a085, иконка 🏦, клик по движению — alert с деталями (не карточка чека); LINK_TYPE_RU payment_of «💸 оплата фактуры».
+- SQL менять не нужно (doc_id text).
+
+## v108.1 (2026-09-03) — fix TDZ «Cannot access docEnts before initialization»
+- В /api/links/build блок bank_movements (v108) стоял ВЫШЕ объявлений `const entKeys`/`const docEnts` — TDZ-ошибка, движения не попадали в граф. Объявления перенесены выше блока.
+- После деплоя: нажать «🔄 Построить связи» заново.
