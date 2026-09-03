@@ -2288,3 +2288,6 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 
 ## v109.1 (2026-09-03) — fix шапки в Chrome/Opera
 - Убран overflow:hidden у .mini-header (обрезал «Выйти» и вкладки); CSS-страховка: .tabs-inline/.mini-header/.header-right flex-wrap + кнопки вкладок flex:0 0 auto, перенос на вторую строку вместо клипа.
+
+## v109.2 (2026-09-03) — плашка меню: прямоугольник со скруглёнными углами
+- .tabs-inline: border-radius 14px (было 999px-пилюля, при переносе на 2 строки выглядело плохо), padding 5px 8px.
