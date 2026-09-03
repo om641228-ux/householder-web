@@ -2164,7 +2164,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v108.2 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v109 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2581,7 +2581,8 @@ const LINK_TYPE_RU = {
   same_supply: 'CUPS', same_meter: 'счётчик', same_amount_date: 'сумма+дата', payment_of: '💸 оплата фактуры', related: 'связь'
 };
 const DOC_TYPE_COLORS = { receipt: '#0071e3', invoice: '#5e5ce6', contract: '#bf5af2', act: '#ff9f0a', ticket: '#30b0c7', bank: '#16a085', other: '#8e8e93' };
-const ENT_TYPE_COLORS = { company: '#34c759', person: '#ff9f0a', iban: '#0a84ff', tax_id: '#bf5af2', invoice_no: '#5e5ce6', contract_no: '#ff375f', cups: '#30b0c7', meter: '#30b0c7', amount_date: '#8e8e93' };
+const ENT_TYPE_COLORS = { company: '#34c759', person: '#ff9f0a', iban: '#0a84ff', tax_id: '#bf5af2', invoice_no: '#5e5ce6', contract_no: '#ff375f', poa: '#ff9500', cups: '#30b0c7', meter: '#30b0c7', amount_date: '#8e8e93' };
+const ENT_TYPE_FILTERS = [ ['', 'Все'], ['company', '🏢 Компании'], ['person', '👤 Персоны'], ['contract_no', '📄 Договоры'], ['poa', '📜 Доверенности'], ['invoice_no', '🧾 № фактур'], ['iban', '💳 Счета'], ['tax_id', '🔢 Налоговые №'], ['amount_date', '💶 Суммы'] ];
 
 function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
   const [entities, setEntities] = useState([]);
@@ -2593,10 +2594,12 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
   const [graphLoading, setGraphLoading] = useState(false);
   const [err, setErr] = useState('');
 
-  const loadEntities = async (query) => {
+  const [typeFilter, setTypeFilter] = useState('');
+  const loadEntities = async (query, type) => {
     setLoading(true); setErr('');
     try {
-      const r = await fetch(`${API_URL}/api/links/entities?token=${token}&q=${encodeURIComponent(query || '')}`);
+      const t = type !== undefined ? type : typeFilter;
+      const r = await fetch(`${API_URL}/api/links/entities?token=${token}&q=${encodeURIComponent(query || '')}${t ? '&type=' + t : ''}`);
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
       setEntities(j.entities || []);
@@ -2685,6 +2688,14 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
           Сущностей пока нет. Нажмите «🔄 Построить связи» — граф соберётся из всех распознанных документов (без расхода AI-квоты).
         </div>
       )}
+      <div style={{ margin: '0 0 8px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {ENT_TYPE_FILTERS.map(([t, lbl]) => (
+          <button key={t || 'all'} onClick={() => { setTypeFilter(t); loadEntities(q, t); }}
+            style={{ border: typeFilter === t ? '2px solid #0071e3' : '1px solid #d0d0d5', background: typeFilter === t ? '#eaf3fb' : '#fff', borderRadius: 16, padding: '3px 10px', fontSize: 12, cursor: 'pointer', color: '#1d1d1f' }}>
+            {lbl}
+          </button>
+        ))}
+      </div>
       <div style={{ marginBottom: 10, maxHeight: isMobileView ? 120 : 170, overflowY: 'auto' }}>
         {entities.filter(e => e.docs > 0 || q).map(e => chip(e, graph && graph.entity.id === e.id))}
       </div>
@@ -2698,6 +2709,25 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
             <span style={{ color: '#8e8e93' }}> — документов: {graph.docs.length}, связанных сущностей: {graph.relEntities.length}</span>
             <button onClick={() => setGraph(null)} style={{ marginLeft: 10, border: '1px solid #d0d0d5', background: '#fff', borderRadius: 6, padding: '2px 10px', fontSize: 12, cursor: 'pointer' }}>✕ Скрыть</button>
           </div>
+          {graph.entLinks && graph.entLinks.length > 0 && (
+            <div style={{ background: '#f5f0fa', border: '1px solid #d9ccee', borderRadius: 10, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>
+              <b>🌳 Иерархия ({graph.entLinks.length}):</b>
+              <div style={{ maxHeight: 160, overflowY: 'auto', marginTop: 4 }}>
+                {graph.entLinks.slice(0, 60).map((l, i) => {
+                  const mineIsA = String(l.a.id) === String(graph.entity.id);
+                  const other = mineIsA ? l.b : l.a;
+                  return (
+                    <div key={i} style={{ padding: '3px 0', borderBottom: '1px solid #e9e0f5', color: '#3a3a3c' }}>
+                      <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: '50%', background: ENT_TYPE_COLORS[other.type] || '#8e8e93', marginRight: 6 }} />
+                      {mineIsA
+                        ? <span>{l.typeLabel} → <a onClick={() => openGraph(other.id)} style={{ color: '#0071e3', cursor: 'pointer', fontWeight: 600 }}>{other.label}</a> <span style={{ color: '#8e8e93' }}>({other.typeLabel})</span></span>
+                        : <span><a onClick={() => openGraph(other.id)} style={{ color: '#0071e3', cursor: 'pointer', fontWeight: 600 }}>{other.label}</a> <span style={{ color: '#8e8e93' }}>({other.typeLabel})</span> → {l.typeLabel} → эта сущность</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           <div style={{ border: '1px solid #e3e6ea', borderRadius: 12, background: '#fafafa', overflow: 'auto' }}>
             <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', minWidth: isMobileView ? 640 : 0, display: 'block' }}>
               {/* связи документ-документ */}
@@ -8084,7 +8114,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-03 · v108.2 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-03 · v109 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8097,7 +8127,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-03 · v108.2</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-03 · v109</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">
