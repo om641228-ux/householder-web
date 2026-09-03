@@ -4111,6 +4111,106 @@ const ENTITY_TYPE_LABELS = { company: 'Компания', person: 'Персон�
 const SUBJECT_TYPES = new Set(['company', 'person']);
 const ATTRIBUTE_TYPES = new Set(['iban', 'tax_id', 'invoice_no', 'contract_no', 'poa', 'cups', 'meter']);
 const ENT_LINK_LABELS = { belongs_to: 'принадлежит', represents: 'представляет' };
+
+// v111: изолированные области графа (scopes). «Все документы» = ZERO_SCOPE (текущее поведение).
+const ZERO_SCOPE = '00000000-0000-0000-0000-000000000000';
+let _scopeSupport = null;
+async function hasScopeSupport() {
+  if (_scopeSupport !== null) return _scopeSupport;
+  try {
+    const { error } = await supabaseAdmin.from('graph_scopes').select('id').limit(1);
+    _scopeSupport = !error;
+  } catch (_) { _scopeSupport = false; }
+  return _scopeSupport;
+}
+function receiptInScope(r, f) {
+  if (!f) return true;
+  if (Array.isArray(f.objects) && f.objects.length && !f.objects.includes(r.object || 'other')) return false;
+  if (Array.isArray(f.docTypes) && f.docTypes.length && !f.docTypes.includes(r.document_type || 'other')) return false;
+  const nm = ((r.store_name || '') + ' ' + (r.store_name_ru || '')).toLowerCase();
+  for (const ex of (f.excludeNames || [])) { if (ex && nm.includes(String(ex).toLowerCase())) return false; }
+  return true;
+}
+function movementInScope(mv, f) {
+  if (!f) return true;
+  if (Array.isArray(f.ibans) && f.ibans.length && !f.ibans.includes(mv.iban || '')) return false;
+  const nm = ((mv.counterparty || '') + ' ' + (mv.concept || '')).toLowerCase();
+  for (const ex of (f.excludeNames || [])) { if (ex && nm.includes(String(ex).toLowerCase())) return false; }
+  return true;
+}
+async function getScopeFilter(scopeId) {
+  if (!scopeId || scopeId === ZERO_SCOPE || scopeId === 'all') return null;
+  const { data } = await supabaseAdmin.from('graph_scopes').select('filter').eq('id', scopeId).maybeSingle();
+  return (data && data.filter) || {};
+}
+
+// v111: CRUD областей
+app.get('/api/links/scopes', requireAuth, tabGuard('list'), async (req, res) => {
+  try {
+    if (!(await hasScopeSupport())) return res.json({ scopes: [], supported: false });
+    const { data, error } = await supabaseAdmin.from('graph_scopes').select('*').order('created_at');
+    if (error) throw error;
+    res.json({ scopes: data || [], supported: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/links/scopes', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    if (!(await hasScopeSupport())) return res.status(500).json({ error: 'Нет таблицы graph_scopes. Выполните v111-области.sql в Supabase' });
+    const name = String((req.body && req.body.name) || '').trim().slice(0, 80);
+    if (!name) return res.status(400).json({ error: 'Название области обязательно' });
+    const f = (req.body && req.body.filter) || {};
+    const filter = {
+      objects: Array.isArray(f.objects) ? f.objects.map(String).slice(0, 50) : [],
+      docTypes: Array.isArray(f.docTypes) ? f.docTypes.map(String).slice(0, 50) : [],
+      excludeNames: Array.isArray(f.excludeNames) ? f.excludeNames.map(String).slice(0, 50) : [],
+      ibans: Array.isArray(f.ibans) ? f.ibans.map(String).slice(0, 50) : []
+    };
+    const { data, error } = await supabaseAdmin.from('graph_scopes').insert([{ name, filter }]).select().single();
+    if (error) throw error;
+    res.json({ ok: true, scope: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/links/scopes', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const id = String(req.query.id || '');
+    if (!id) return res.status(400).json({ error: 'id обязателен' });
+    await supabaseAdmin.from('doc_links').delete().eq('scope_id', id);
+    await supabaseAdmin.from('entity_links').delete().eq('scope_id', id);
+    await supabaseAdmin.from('doc_entities').delete().eq('scope_id', id);
+    const { error } = await supabaseAdmin.from('graph_scopes').delete().eq('id', id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v113: «Мосты» — сущности, встречающиеся сразу в нескольких областях (контроль пересечений)
+app.get('/api/links/bridges', requireAuth, tabGuard('list'), async (req, res) => {
+  try {
+    if (!(await hasScopeSupport())) return res.json({ bridges: [], supported: false });
+    const ents = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin.from('entities').select('type, value, label, scope_id').order('id').range(from, from + 999);
+      if (error) throw error;
+      ents.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
+    const groups = new Map(); // type|value -> {label, scopes:Set}
+    for (const e of ents) {
+      const k = e.type + '|' + e.value;
+      if (!groups.has(k)) groups.set(k, { type: e.type, label: e.label, scopes: new Set() });
+      groups.get(k).scopes.add(e.scope_id || ZERO_SCOPE);
+    }
+    const { data: sc } = await supabaseAdmin.from('graph_scopes').select('id, name');
+    const scopeNames = new Map((sc || []).map(x => [x.id, x.name]));
+    scopeNames.set(ZERO_SCOPE, 'Все документы');
+    const bridges = [...groups.values()]
+      .filter(g => g.scopes.size > 1)
+      .map(g => ({ type: g.type, typeLabel: ENTITY_TYPE_LABELS[g.type] || g.type, label: g.label, scopes: [...g.scopes].map(id => scopeNames.get(id) || 'Область') }))
+      .sort((a, b) => b.scopes.length - a.scopes.length)
+      .slice(0, 200);
+    res.json({ bridges, supported: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 // v108: bank — банковское движение (узел графа), payment_of — прямая связь «движение оплатило фактуру»
 
 function normEnt(v) {
@@ -4232,10 +4332,17 @@ app.post('/api/links/ai-extract', requireAuth, requireRole('admin', 'manager'), 
   try {
     const offset = Math.max(0, parseInt((req.body && req.body.offset) || '0', 10) || 0);
     const limit = Math.min(8, Math.max(1, parseInt((req.body && req.body.limit) || '6', 10) || 6));
-    const { data: docs, error } = await supabaseAdmin.from('receipts')
-      .select('id, store_name, receipt_date, raw_text')
+    const scopeId = String((req.body && req.body.scope) || '').trim() || ZERO_SCOPE;
+    const scoped = await hasScopeSupport();
+    const scopeFilter = scoped ? await getScopeFilter(scopeId) : null;
+    const withScope = (row) => scoped ? { ...row, scope_id: scopeId } : row;
+    const ocEnt = scoped ? 'type,value,scope_id' : 'type,value';
+    const ocDocLink = scoped ? 'doc_a,doc_b,link_type,scope_id' : 'doc_a,doc_b,link_type';
+    const { data: docsRaw, error } = await supabaseAdmin.from('receipts')
+      .select('id, store_name, store_name_ru, receipt_date, raw_text, object, document_type')
       .not('raw_text', 'is', null).order('id').range(offset, offset + limit - 1);
     if (error) throw error;
+    const docs = scopeFilter ? (docsRaw || []).filter(r => receiptInScope(r, scopeFilter)) : docsRaw;
     const { count } = await supabaseAdmin.from('receipts').select('id', { count: 'exact', head: true }).not('raw_text', 'is', null);
 
     const stats = { processed: 0, entitiesAdded: 0, linksAdded: 0, errors: [] };
@@ -4264,14 +4371,14 @@ app.post('/api/links/ai-extract', requireAuth, requireRole('admin', 'manager'), 
         (ex.meters || []).forEach(v => push('meter', v));
         if (items.length) {
           const { data: ups, error: ue } = await supabaseAdmin.from('entities')
-            .upsert(items.map(e => ({ type: e.type, value: e.value, label: e.label })), { onConflict: 'type,value' })
+            .upsert(items.map(e => withScope({ type: e.type, value: e.value, label: e.label })), { onConflict: ocEnt })
             .select('id, type');
           if (ue) throw ue;
           const seenRow = new Set();
           for (const e of (ups || [])) {
             const k = String(d.id) + '|' + e.id;
             if (seenRow.has(k)) continue; seenRow.add(k);
-            deRows.push({ doc_id: String(d.id), entity_id: e.id, role: 'ai' });
+            deRows.push(withScope({ doc_id: String(d.id), entity_id: e.id, role: 'ai' }));
             touchedEnts.set(e.id, e.type);
           }
           stats.entitiesAdded += (ups || []).length;
@@ -4292,7 +4399,7 @@ app.post('/api/links/ai-extract', requireAuth, requireRole('admin', 'manager'), 
       const lt = LINK_TYPE_BY_ENTITY[entType] || 'related';
       for (let i = 0; i < arr.length; i++) {
         for (let j = i + 1; j < arr.length; j++) {
-          linkRows.push({ doc_a: arr[i], doc_b: arr[j], link_type: lt, confidence: 0.75, evidence: 'AI-извлечение', created_by: 'ai' });
+          linkRows.push(withScope({ doc_a: arr[i], doc_b: arr[j], link_type: lt, confidence: 0.75, evidence: 'AI-извлечение', created_by: 'ai' }));
         }
       }
     }
@@ -4301,7 +4408,7 @@ app.post('/api/links/ai-extract', requireAuth, requireRole('admin', 'manager'), 
       for (const l of linkRows) { const k = l.doc_a + '|' + l.doc_b + '|' + l.link_type; if (!lm.has(k)) lm.set(k, l); }
       const dedup = [...lm.values()];
       for (let i = 0; i < dedup.length; i += 500) {
-        const { error: le } = await supabaseAdmin.from('doc_links').upsert(dedup.slice(i, i + 500), { onConflict: 'doc_a,doc_b,link_type' });
+        const { error: le } = await supabaseAdmin.from('doc_links').upsert(dedup.slice(i, i + 500), { onConflict: ocDocLink });
         if (le) stats.errors.push('doc_links: ' + le.message);
       }
       stats.linksAdded = dedup.length;
@@ -4318,9 +4425,18 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
     const stats = { docs: 0, entitiesNew: 0, docEntities: 0, links: 0, errors: [] };
     const { error: tErr } = await supabaseAdmin.from('entities').select('id').limit(1);
     if (tErr) return res.status(500).json({ error: 'Нет таблиц графа. Выполните в Supabase SQL Editor: ' + LINKS_SQL });
+    // v111: область графа (?scope=<uuid>); без параметра — «Все документы» (ZERO_SCOPE, старое поведение)
+    const scopeId = String(req.query.scope || '').trim() || ZERO_SCOPE;
+    const scoped = await hasScopeSupport();
+    const scopeFilter = scoped ? await getScopeFilter(scopeId) : null;
+    stats.scope = scopeId;
+    const ocEnt = scoped ? 'type,value,scope_id' : 'type,value';
+    const ocDocLink = scoped ? 'doc_a,doc_b,link_type,scope_id' : 'doc_a,doc_b,link_type';
+    const ocEntLink = scoped ? 'entity_a,entity_b,link_type,scope_id' : 'entity_a,entity_b,link_type';
+    const withScope = (row) => scoped ? { ...row, scope_id: scopeId } : row;
 
     // v107.2: только реально существующие колонки (в receipts нет counterparty и т.п.)
-    const wantCols = ['id', 'store_name', 'counterparty', 'invoice_number', 'contract_number', 'cups', 'meter_number', 'total_amount', 'currency', 'receipt_date', 'raw_text'];
+    const wantCols = ['id', 'store_name', 'store_name_ru', 'counterparty', 'invoice_number', 'contract_number', 'cups', 'meter_number', 'total_amount', 'currency', 'receipt_date', 'raw_text', 'object', 'document_type'];
     let avail = wantCols;
     try {
       const existingCols = await getTableColumns();
@@ -4335,7 +4451,8 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
       all.push(...(data || []));
       if (!data || data.length < 500) break;
     }
-    stats.docs = all.length;
+    const scopeDocs = scopeFilter ? all.filter(r => receiptInScope(r, scopeFilter)) : all;
+    stats.docs = scopeDocs.length;
 
     // v107.3: всё пакетно — иначе тысячи последовательных запросов рвут соединение (Failed to fetch)
     const entKeys = new Map();   // 'type|value' -> {type,value,label}
@@ -4364,8 +4481,9 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
         }
         if (!failed) break;
       }
-      stats.movements = mvs.length;
-      for (const mv of mvs) {
+      const scopeMvs = scopeFilter ? mvs.filter(mv => movementInScope(mv, scopeFilter)) : mvs;
+      stats.movements = scopeMvs.length;
+      for (const mv of scopeMvs) {
         const bmId = 'bm:' + mv.id;
         const ents = extractMovementEntities(mv);
         docEnts.set(bmId, ents);
@@ -4375,7 +4493,7 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
         }
       }
     } catch (me) { stats.errors.push('bank_movements: ' + me.message); }
-    for (const r of all) {
+    for (const r of scopeDocs) {
       const ents = extractDocEntities(r);
       docEnts.set(String(r.id), ents);
       for (const e of ents) entKeys.set(e.type + '|' + e.value, e);
@@ -4385,12 +4503,14 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
     const entArr = [...entKeys.values()];
     for (let i = 0; i < entArr.length; i += 500) {
       const { error: ue } = await supabaseAdmin.from('entities')
-        .upsert(entArr.slice(i, i + 500).map(e => ({ type: e.type, value: e.value, label: e.label })), { onConflict: 'type,value' });
+        .upsert(entArr.slice(i, i + 500).map(e => withScope({ type: e.type, value: e.value, label: e.label })), { onConflict: ocEnt });
       if (ue) stats.errors.push('entities: ' + ue.message);
     }
     const entAll = [];
     for (let from = 0; ; from += 1000) {
-      const { data, error } = await supabaseAdmin.from('entities').select('id, type, value, label').order('id').range(from, from + 999);
+      let q = supabaseAdmin.from('entities').select('id, type, value, label').order('id').range(from, from + 999);
+      if (scoped) q = q.eq('scope_id', scopeId);
+      const { data, error } = await q;
       if (error) { stats.errors.push('entities-read: ' + error.message); break; }
       entAll.push(...(data || []));
       if (!data || data.length < 1000) break;
@@ -4403,11 +4523,15 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
     for (const [docId, ents] of docEnts) {
       for (const e of ents) {
         const id = entId.get(e.type + '|' + e.value);
-        if (id) deRows.push({ doc_id: docId, entity_id: id, role: e.role });
+        if (id) deRows.push(withScope({ doc_id: docId, entity_id: id, role: e.role }));
       }
     }
     // v110: AI-привязки (role='ai') не трогаем — их перестраивает отдельный AI-проход
-    const { error: delErr } = await supabaseAdmin.from('doc_entities').delete().neq('role', 'ai');
+    // v111: чистим только текущую область
+    let delQ = supabaseAdmin.from('doc_entities').delete().neq('role', 'ai');
+    if (scoped) delQ = delQ.eq('scope_id', scopeId);
+    else delQ = delQ.not('doc_id', 'is', null);
+    const { error: delErr } = await delQ;
     if (delErr) stats.errors.push('doc_entities-clear: ' + delErr.message);
     for (let i = 0; i < deRows.length; i += 500) {
       const { error: de } = await supabaseAdmin.from('doc_entities').insert(deRows.slice(i, i + 500));
@@ -4422,7 +4546,7 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
       const pushEl = (a, b, lt, conf, ev) => {
         if (!a || !b || a === b) return;
         const k = a + '|' + b + '|' + lt;
-        if (!elMap.has(k)) elMap.set(k, { entity_a: a, entity_b: b, link_type: lt, confidence: conf, evidence: String(ev || '').slice(0, 200), created_by: 'rule' });
+        if (!elMap.has(k)) elMap.set(k, withScope({ entity_a: a, entity_b: b, link_type: lt, confidence: conf, evidence: String(ev || '').slice(0, 200), created_by: 'rule' }));
       };
       for (const [, ents] of docEnts) {
         const subjects = [], attrs = [], persons = [], companies = [];
@@ -4438,21 +4562,25 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
         for (const p of persons) for (const c of companies.slice(0, 3)) pushEl(p.id, c.id, 'represents', 0.6, p.e.label + ' ↔ ' + c.e.label);
       }
       const entLinkRows = [...elMap.values()];
-      const { error: elc } = await supabaseAdmin.from('entity_links').delete().eq('created_by', 'rule');
+      let elcQ = supabaseAdmin.from('entity_links').delete().eq('created_by', 'rule');
+      if (scoped) elcQ = elcQ.eq('scope_id', scopeId);
+      const { error: elc } = await elcQ;
       if (elc) {
         if (/does not exist/i.test(elc.message || '')) stats.errors.push('entity_links: нет таблицы — выполните v109-иерархия.sql в Supabase');
         else stats.errors.push('entity_links-clear: ' + elc.message);
       } else {
         for (let i = 0; i < entLinkRows.length; i += 500) {
-          const { error: eli } = await supabaseAdmin.from('entity_links').upsert(entLinkRows.slice(i, i + 500), { onConflict: 'entity_a,entity_b,link_type' });
+          const { error: eli } = await supabaseAdmin.from('entity_links').upsert(entLinkRows.slice(i, i + 500), { onConflict: ocEntLink });
           if (eli) stats.errors.push('entity_links: ' + eli.message);
         }
       }
       stats.entityLinks = entLinkRows.length;
     } catch (ele) { stats.errors.push('entity_links: ' + ele.message); }
 
-    // 3) перестраиваем автоматические связи (created_by='rule')
-    await supabaseAdmin.from('doc_links').delete().eq('created_by', 'rule');
+    // 3) перестраиваем автоматические связи (created_by='rule') — только текущей области
+    let dlDel = supabaseAdmin.from('doc_links').delete().eq('created_by', 'rule');
+    if (scoped) dlDel = dlDel.eq('scope_id', scopeId);
+    await dlDel;
     const byEnt = new Map();
     for (const row of deRows) {
       if (!byEnt.has(row.entity_id)) byEnt.set(row.entity_id, new Set());
@@ -4466,17 +4594,17 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
       const lt = LINK_TYPE_BY_ENTITY[meta.type] || 'related';
       for (let i = 0; i < arr.length; i++) {
         for (let j = i + 1; j < arr.length; j++) {
-          linkRows.push({
+          linkRows.push(withScope({
             doc_a: arr[i], doc_b: arr[j], link_type: lt,
             confidence: meta.type === 'amount_date' ? 0.7 : 0.95,
             evidence: String(meta.label || meta.value || '').slice(0, 200), created_by: 'rule'
-          });
+          }));
         }
       }
     }
     // v107.4: дедупликация — одна пара документов может делить НЕСКОЛЬКО сущностей одного типа
     // (иначе в одном upsert-пакете две строки с одинаковым ключом → «ON CONFLICT cannot affect row a second time»)
-    linkRows.push(...paymentLinks);
+    linkRows.push(...paymentLinks.map(withScope));
     const linkMap = new Map();
     for (const l of linkRows) {
       const k = l.doc_a + '|' + l.doc_b + '|' + l.link_type;
@@ -4486,7 +4614,7 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
     const linkRowsDedup = [...linkMap.values()];
     for (let i = 0; i < linkRowsDedup.length; i += 500) {
       const { error: le } = await supabaseAdmin.from('doc_links')
-        .upsert(linkRowsDedup.slice(i, i + 500), { onConflict: 'doc_a,doc_b,link_type' });
+        .upsert(linkRowsDedup.slice(i, i + 500), { onConflict: ocDocLink });
       if (le) stats.errors.push('doc_links: ' + le.message);
     }
     stats.links = linkMap.size;
@@ -4502,8 +4630,10 @@ app.get('/api/links/entities', requireAuth, tabGuard('list'), async (req, res) =
   try {
     const q = String(req.query.q || '').trim();
     const type = String(req.query.type || '').trim();
+    const scopeId = String(req.query.scope || '').trim();
     let query = supabaseAdmin.from('entities').select('id, type, value, label').order('created_at', { ascending: false }).limit(500);
     if (type) query = query.eq('type', type);
+    if (scopeId && (await hasScopeSupport())) query = query.eq('scope_id', scopeId === 'all' ? ZERO_SCOPE : scopeId);
     if (q) query = query.or('label.ilike.%' + q.replace(/[%,]/g, ' ') + '%,value.ilike.%' + q.replace(/[%,]/g, ' ') + '%');
     const { data, error } = await query;
     if (error) {
@@ -4575,17 +4705,21 @@ app.get('/api/links/graph', requireAuth, tabGuard('list'), async (req, res) => {
     let links = [];
     if (present.size) {
       const idList = [...present].join(',');
-      const { data: ls } = await supabaseAdmin.from('doc_links')
+      let lq = supabaseAdmin.from('doc_links')
         .select('doc_a, doc_b, link_type, confidence, evidence, created_by')
         .or('doc_a.in.(' + idList + '),doc_b.in.(' + idList + ')');
+      if (ent.scope_id && (await hasScopeSupport())) lq = lq.eq('scope_id', ent.scope_id);
+      const { data: ls } = await lq;
       links = (ls || []).filter(l => present.has(String(l.doc_a)) && present.has(String(l.doc_b)));
     }
     // v109: иерархия — связи сущности с другими сущностями (belongs_to / represents)
     let entLinks = [];
     try {
-      const { data: el } = await supabaseAdmin.from('entity_links')
+      let elq = supabaseAdmin.from('entity_links')
         .select('entity_a, entity_b, link_type, confidence, evidence')
         .or('entity_a.eq.' + eid + ',entity_b.eq.' + eid);
+      if (ent.scope_id && (await hasScopeSupport())) elq = elq.eq('scope_id', ent.scope_id);
+      const { data: el } = await elq;
       const otherIds = new Set();
       for (const l of (el || [])) { otherIds.add(l.entity_a); otherIds.add(l.entity_b); }
       otherIds.delete(eid);

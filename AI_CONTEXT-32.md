@@ -2297,3 +2297,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Rule-build (/api/links/build) больше НЕ стирает AI-привязки (delete .neq('role','ai')).
 - /api/links/graph отдаёт created_by у связей.
 - LinksTab: кнопка «🤖 AI-извлечение» (фиолетовая) с живым прогрессом «обработано X из Y · сущностей · связей»; AI-связи на графе — фиолетовый пунктир.
+
+## v111 (2026-09-03) — изолированные области графа + «Мосты» (v111+v112+v113)
+- НОВАЯ ТАБЛИЦА graph_scopes (v111-области.sql — выполнить в Supabase!): filter jsonb {objects, docTypes, excludeNames, ibans}. scope_id во entities/doc_entities/doc_links/entity_links (default ZERO_SCOPE = «Все документы»). Старые unique-констрейнты заменены составными с scope_id.
+- Эндпоинты: GET/POST/DELETE /api/links/scopes; GET /api/links/bridges (сущности в ≥2 областях). build/ai-extract/entities/graph принимают scope. Без таблицы graph_scopes — полный откат на старое поведение (hasScopeSupport probe).
+- LinksTab: селектор области (🌐 Все документы / 🗂 области), кнопка 🗂 — менеджер областей (создание: название, объекты, исключения, IBAN; удаление), кнопка 🌉 Мосты — пересечения областей.

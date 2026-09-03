@@ -2164,7 +2164,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v110 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v111 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2595,11 +2595,28 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
   const [err, setErr] = useState('');
 
   const [typeFilter, setTypeFilter] = useState('');
+  // v111: области графа (изолированные графы)
+  const [scopes, setScopes] = useState([]);
+  const [scopeId, setScopeId] = useState('');
+  const [scopeMgrOpen, setScopeMgrOpen] = useState(false);
+  const [nsName, setNsName] = useState('');
+  const [nsObjects, setNsObjects] = useState('');
+  const [nsExclude, setNsExclude] = useState('');
+  const [nsIbans, setNsIbans] = useState('');
+  const [bridges, setBridges] = useState(null);
+  const loadScopes = async () => {
+    try {
+      const r = await fetch(`${API_URL}/api/links/scopes?token=${token}`);
+      const j = await r.json();
+      if (r.ok && j.supported) setScopes(j.scopes || []);
+    } catch (_) { /* областей нет — работаем как раньше */ }
+  };
+  useEffect(() => { if (token) loadScopes(); }, [token]);
   const loadEntities = async (query, type) => {
     setLoading(true); setErr('');
     try {
       const t = type !== undefined ? type : typeFilter;
-      const r = await fetch(`${API_URL}/api/links/entities?token=${token}&q=${encodeURIComponent(query || '')}${t ? '&type=' + t : ''}`);
+      const r = await fetch(`${API_URL}/api/links/entities?token=${token}&q=${encodeURIComponent(query || '')}${t ? '&type=' + t : ''}${scopeId ? '&scope=' + scopeId : ''}`);
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
       setEntities(j.entities || []);
@@ -2612,7 +2629,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
   const build = async () => {
     setBuilding(true); setErr(''); setReport(null);
     try {
-      const r = await fetch(`${API_URL}/api/links/build?token=${token}`, { method: 'POST' });
+      const r = await fetch(`${API_URL}/api/links/build?token=${token}${scopeId ? '&scope=' + scopeId : ''}`, { method: 'POST' });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
       setReport(j.stats);
@@ -2631,7 +2648,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
       while (!done) {
         const r = await fetch(`${API_URL}/api/links/ai-extract?token=${token}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ offset, limit: 6 })
+          body: JSON.stringify({ offset, limit: 6, scope: scopeId || undefined })
         });
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
@@ -2643,6 +2660,41 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
       await loadEntities(q);
     } catch (e) { setErr(e.message); }
     setAiBusy(false);
+  };
+
+  const createScope = async () => {
+    if (!nsName.trim()) return;
+    try {
+      const csv = (v) => v.split(',').map(x => x.trim()).filter(Boolean);
+      const r = await fetch(`${API_URL}/api/links/scopes?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: nsName.trim(), filter: { objects: csv(nsObjects), excludeNames: csv(nsExclude), ibans: csv(nsIbans) } })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setNsName(''); setNsObjects(''); setNsExclude(''); setNsIbans('');
+      await loadScopes();
+      if (j.scope) setScopeId(j.scope.id);
+    } catch (e) { setErr(e.message); }
+  };
+  const deleteScope = async (id) => {
+    if (!window.confirm('Удалить область вместе с её графом?')) return;
+    try {
+      const r = await fetch(`${API_URL}/api/links/scopes?token=${token}&id=${id}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      if (scopeId === id) { setScopeId(''); setGraph(null); }
+      await loadScopes(); await loadEntities(q);
+    } catch (e) { setErr(e.message); }
+  };
+  const loadBridges = async () => {
+    setBridges(null); setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/links/bridges?token=${token}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setBridges(j.bridges || []);
+    } catch (e) { setErr(e.message); }
   };
 
   const openGraph = async (id) => {
@@ -2688,6 +2740,16 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
         {!isMobileView && <h2 style={{ margin: 0 }}>🔗 Связи документов</h2>}
         <input type="text" value={q} onChange={e => setQ(e.target.value)} placeholder="Поиск сущности: компания, IBAN, № фактуры…"
           style={{ flex: '1 1 220px', minWidth: 0, padding: '8px 12px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 14 }} />
+        <select value={scopeId} onChange={e => { setScopeId(e.target.value); setGraph(null); setReport(null); setAiProg(null); }}
+          title="Область графа: изолированный граф по выбранным документам"
+          style={{ padding: '8px 10px', borderRadius: 8, border: scopeId ? '2px solid #7c3aed' : '1px solid #d0d0d5', fontSize: 13, background: '#fff', maxWidth: 200 }}>
+          <option value="">🌐 Все документы</option>
+          {scopes.map(sc => <option key={sc.id} value={sc.id}>🗂 {sc.name}</option>)}
+        </select>
+        <button onClick={() => setScopeMgrOpen(true)} title="Управление областями"
+          style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 14, cursor: 'pointer' }}>🗂</button>
+        <button onClick={loadBridges} title="Сущности, встречающиеся сразу в нескольких областях"
+          style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 14, cursor: 'pointer' }}>🌉</button>
         {canBuild && (
           <button onClick={build} disabled={building}
             style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: building ? '#c7d7ea' : '#0071e3', color: '#fff', fontWeight: 700, fontSize: 14, cursor: building ? 'wait' : 'pointer' }}>
@@ -2702,6 +2764,58 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
           </button>
         )}
       </div>
+      {bridges && (
+        <div style={{ background: '#fff8e6', border: '1px solid #f0ad4e', borderRadius: 10, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>
+          <b>🌉 Мосты между областями ({bridges.length})</b>
+          <button onClick={() => setBridges(null)} style={{ float: 'right', border: 'none', background: 'none', cursor: 'pointer' }}>✕</button>
+          <div style={{ maxHeight: 180, overflowY: 'auto', marginTop: 4 }}>
+            {bridges.length === 0 && <div style={{ color: '#8e8e93' }}>Пересечений нет — области полностью изолированы ✅</div>}
+            {bridges.map((b, i) => (
+              <div key={i} style={{ padding: '3px 0', borderBottom: '1px solid #f7ecd7' }}>
+                ⚠️ <b>{b.label}</b> <span style={{ color: '#8e8e93' }}>({b.typeLabel})</span> — в областях: {b.scopes.join(' · ')}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {scopeMgrOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={() => setScopeMgrOpen(false)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 18, maxWidth: 480, width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
+            <h3 style={{ margin: '0 0 10px' }}>🗂 Области графа</h3>
+            <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 10 }}>
+              Область = изолированный граф по своему набору документов. Пустой фильтр = все документы области.
+            </div>
+            {scopes.map(sc => (
+              <div key={sc.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: '1px solid #f0f0f2', fontSize: 13 }}>
+                <span style={{ flex: 1 }}><b>{sc.name}</b>
+                  <span style={{ color: '#8e8e93', fontSize: 11 }}>
+                    {sc.filter && sc.filter.objects && sc.filter.objects.length ? ' · объекты: ' + sc.filter.objects.join(', ') : ''}
+                    {sc.filter && sc.filter.excludeNames && sc.filter.excludeNames.length ? ' · кроме: ' + sc.filter.excludeNames.join(', ') : ''}
+                    {sc.filter && sc.filter.ibans && sc.filter.ibans.length ? ' · счета: ' + sc.filter.ibans.join(', ') : ''}
+                  </span>
+                </span>
+                <button onClick={() => deleteScope(sc.id)} style={{ border: 'none', background: 'none', color: '#e74c3c', cursor: 'pointer' }}>✕</button>
+              </div>
+            ))}
+            <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
+              <input value={nsName} onChange={e => setNsName(e.target.value)} placeholder="Название (напр. Личное без Alcojora)"
+                style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
+              <input value={nsObjects} onChange={e => setNsObjects(e.target.value)} placeholder="Объекты через запятую (kit, maria, duqe, other) — пусто = все"
+                style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
+              <input value={nsExclude} onChange={e => setNsExclude(e.target.value)} placeholder="Исключить по названию (напр. Alcojora) — через запятую"
+                style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
+              <input value={nsIbans} onChange={e => setNsIbans(e.target.value)} placeholder="IBAN счетов выписки через запятую — пусто = все"
+                style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
+              <button onClick={createScope} disabled={!nsName.trim()}
+                style={{ padding: '9px', borderRadius: 8, border: 'none', background: nsName.trim() ? '#7c3aed' : '#d9ccee', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>
+                ＋ Создать область
+              </button>
+            </div>
+            <button onClick={() => setScopeMgrOpen(false)} style={{ marginTop: 10, width: '100%', padding: '8px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', cursor: 'pointer' }}>Закрыть</button>
+          </div>
+        </div>
+      )}
       {aiProg && (aiBusy || aiProg.done > 0) && (
         <div style={{ background: '#f5f0fa', border: '1px solid #7c3aed', borderRadius: 10, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>
           🤖 AI-извлечение: обработано {aiProg.done}{aiProg.total ? ' из ' + aiProg.total : ''} документов · сущностей добавлено {aiProg.added} · AI-связей {aiProg.links}
@@ -8151,7 +8265,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-03 · v110 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-03 · v111 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8164,7 +8278,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-03 · v110</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-03 · v111</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">
