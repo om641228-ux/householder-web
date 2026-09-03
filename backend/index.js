@@ -4116,12 +4116,12 @@ const ENT_LINK_LABELS = { belongs_to: 'принадлежит', represents: 'п�
 const ZERO_SCOPE = '00000000-0000-0000-0000-000000000000';
 let _scopeSupport = null;
 async function hasScopeSupport() {
-  if (_scopeSupport !== null) return _scopeSupport;
+  if (_scopeSupport === true) return true; // v111.2: кэшируем ТОЛЬКО успех — SQL могли выполнить после старта сервера
   try {
     const { error } = await supabaseAdmin.from('graph_scopes').select('id').limit(1);
-    _scopeSupport = !error;
-  } catch (_) { _scopeSupport = false; }
-  return _scopeSupport;
+    _scopeSupport = !error ? true : null;
+  } catch (_) { _scopeSupport = null; }
+  return _scopeSupport === true;
 }
 function receiptInScope(r, f) {
   if (!f) return true;

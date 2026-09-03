@@ -2302,3 +2302,9 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - НОВАЯ ТАБЛИЦА graph_scopes (v111-области.sql — выполнить в Supabase!): filter jsonb {objects, docTypes, excludeNames, ibans}. scope_id во entities/doc_entities/doc_links/entity_links (default ZERO_SCOPE = «Все документы»). Старые unique-констрейнты заменены составными с scope_id.
 - Эндпоинты: GET/POST/DELETE /api/links/scopes; GET /api/links/bridges (сущности в ≥2 областях). build/ai-extract/entities/graph принимают scope. Без таблицы graph_scopes — полный откат на старое поведение (hasScopeSupport probe).
 - LinksTab: селектор области (🌐 Все документы / 🗂 области), кнопка 🗂 — менеджер областей (создание: название, объекты, исключения, IBAN; удаление), кнопка 🌉 Мосты — пересечения областей.
+
+## v111.1 fix (2026-09-03) — SQL: FK entities_scope_id_fkey падал
+- Причина: существующие entities получили scope_id=00000000-…, а такой строки в graph_scopes не было. FIX: системная область «Все документы» с нулевым id вставляется ДО FK; FK пересоздаётся (drop if exists + add). Файл v111-области.sql обновлён, идемпотентен.
+
+## v111.2 (2026-09-03) — fix «Нет таблицы graph_scopes» после выполнения SQL
+- hasScopeSupport кэшировал отрицательный результат навсегда → после выполнения SQL бэкенд всё равно не видел таблицу до рестарта. Теперь кэшируется только успех.
