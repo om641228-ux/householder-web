@@ -2285,3 +2285,6 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - НОВАЯ ТАБЛИЦА entity_links (v109-иерархия.sql — выполнить в Supabase!): belongs_to (IBAN/налоговый №/№ фактуры/договор/доверенность/CUPS/счётчик → компания/персона), represents (персона → компания). Строится в /api/links/build, stats.entityLinks.
 - /api/links/graph возвращает entLinks (иерархия выбранной сущности).
 - LinksTab: фильтры по типам сущностей (Все/Компании/Персоны/Договоры/Доверенности/№ фактур/Счета/Налоговые №/Суммы), блок «🌳 Иерархия» в графе, цвет poa #ff9500.
+
+## v109.1 (2026-09-03) — fix шапки в Chrome/Opera
+- Убран overflow:hidden у .mini-header (обрезал «Выйти» и вкладки); CSS-страховка: .tabs-inline/.mini-header/.header-right flex-wrap + кнопки вкладок flex:0 0 auto, перенос на вторую строку вместо клипа.
