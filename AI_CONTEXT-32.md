@@ -2291,3 +2291,9 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 
 ## v109.2 (2026-09-03) — плашка меню: прямоугольник со скруглёнными углами
 - .tabs-inline: border-radius 14px (было 999px-пилюля, при переносе на 2 строки выглядело плохо), padding 5px 8px.
+
+## v110 (2026-09-03) — AI-извлечение сущностей (Kimi читает все документы)
+- Новый эндпоинт POST /api/links/ai-extract {offset, limit≤6-8}: Kimi (kimi-k3, JSON mode) читает raw_text документов порциями, извлекает persons/companies/tax_ids/ibans/invoice_numbers/contracts/poa_numbers/cups/meters → upsert entities + doc_entities role='ai' + doc_links created_by='ai' (confidence 0.75).
+- Rule-build (/api/links/build) больше НЕ стирает AI-привязки (delete .neq('role','ai')).
+- /api/links/graph отдаёт created_by у связей.
+- LinksTab: кнопка «🤖 AI-извлечение» (фиолетовая) с живым прогрессом «обработано X из Y · сущностей · связей»; AI-связи на графе — фиолетовый пунктир.

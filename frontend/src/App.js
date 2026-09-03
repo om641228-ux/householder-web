@@ -2164,7 +2164,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v109.2 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v110 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2621,6 +2621,30 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
     setBuilding(false);
   };
 
+  // v110: AI сам читает все тексты документов → извлекает сущности → достраивает связи
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiProg, setAiProg] = useState(null);
+  const aiExtract = async () => {
+    setAiBusy(true); setErr(''); setAiProg({ done: 0, total: null, added: 0, links: 0 });
+    let offset = 0, done = false, added = 0, links = 0;
+    try {
+      while (!done) {
+        const r = await fetch(`${API_URL}/api/links/ai-extract?token=${token}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ offset, limit: 6 })
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+        offset = j.nextOffset; done = j.done;
+        added += (j.stats && j.stats.entitiesAdded) || 0;
+        links += (j.stats && j.stats.linksAdded) || 0;
+        setAiProg({ done: offset, total: j.total, added, links });
+      }
+      await loadEntities(q);
+    } catch (e) { setErr(e.message); }
+    setAiBusy(false);
+  };
+
   const openGraph = async (id) => {
     setGraphLoading(true); setErr('');
     try {
@@ -2670,7 +2694,20 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
             {building ? '⏳ Строю граф…' : '🔄 Построить связи'}
           </button>
         )}
+        {canBuild && (
+          <button onClick={aiExtract} disabled={aiBusy || building}
+            title="AI (Kimi) читает тексты всех документов — чеков, PDF, выписок, деклараций — извлекает сущности и достраивает связи"
+            style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: aiBusy ? '#d9ccee' : '#7c3aed', color: '#fff', fontWeight: 700, fontSize: 14, cursor: aiBusy ? 'wait' : 'pointer' }}>
+            {aiBusy ? `🤖 AI читает… ${aiProg ? aiProg.done + (aiProg.total ? '/' + aiProg.total : '') : ''}` : '🤖 AI-извлечение'}
+          </button>
+        )}
       </div>
+      {aiProg && (aiBusy || aiProg.done > 0) && (
+        <div style={{ background: '#f5f0fa', border: '1px solid #7c3aed', borderRadius: 10, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>
+          🤖 AI-извлечение: обработано {aiProg.done}{aiProg.total ? ' из ' + aiProg.total : ''} документов · сущностей добавлено {aiProg.added} · AI-связей {aiProg.links}
+          {aiBusy && <span style={{ color: '#7c3aed' }}> — идёт обработка, не закрывайте вкладку…</span>}
+        </div>
+      )}
       {report && (
         <div style={{ background: '#e8f8ef', border: '1px solid #34c759', borderRadius: 10, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>
           ✅ Граф построен: документов {report.docs} · 🏦 движений {report.movements != null ? report.movements : '—'} · новых сущностей {report.entitiesNew} · привязок {report.docEntities} · связей {report.links}
@@ -2733,7 +2770,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
               {/* связи документ-документ */}
               {visLinks.map((l, i) => {
                 const a = posByDocId.get(String(l.doc_a)), b = posByDocId.get(String(l.doc_b));
-                return <line key={'l' + i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#c7c7cc" strokeWidth={1.2} strokeDasharray={l.link_type === 'same_amount_date' ? '4 3' : undefined} />;
+                return <line key={'l' + i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={l.created_by === 'ai' ? '#7c3aed' : '#c7c7cc'} strokeWidth={1.2} strokeDasharray={(l.link_type === 'same_amount_date' || l.created_by === 'ai') ? '4 3' : undefined} />;
               })}
               {/* связи сущность-документ */}
               {docPos.map((p, i) => <line key={'c' + i} x1={CX} y1={CY} x2={p.x} y2={p.y} stroke="#0071e3" strokeOpacity={0.35} strokeWidth={1.5} />)}
@@ -8114,7 +8151,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-03 · v109.2 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-03 · v110 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8127,7 +8164,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-03 · v109.2</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-03 · v110</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">

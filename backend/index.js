@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v109.2-2026-09-03', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v110-2026-09-03', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4187,6 +4187,131 @@ function extractMovementEntities(mv) {
   return [...out.values()];
 }
 
+// v110: AI-извлечение сущностей из текста документа (Kimi, текстовый вызов)
+async function aiExtractEntitiesFromText(text) {
+  const cfg = OPENAI_COMPAT_PROVIDERS.kimi;
+  if (!cfg || !cfg.apiKey) throw new Error('Kimi API key not configured');
+  const prompt = `Ты извлекаешь сущности из текста финансового/юридического документа (Испания: чек, фактура, банковская выписка, налоговая декларация, договор, доверенность).
+Верни СТРОГО JSON без markdown и пояснений:
+{"persons":[],"companies":[],"tax_ids":[],"ibans":[],"invoice_numbers":[],"contracts":[],"poa_numbers":[],"cups":[],"meters":[]}
+Правила:
+- persons — полные имена людей (Имя Фамилия);
+- companies — юридические лица и автономо (с формой: S.L., SLU, S.A. и т.п., если есть);
+- tax_ids — CIF/NIF/NIE;
+- ibans — банковские счета IBAN;
+- invoice_numbers — номера фактур/счетов;
+- contracts — номера или точные названия договоров;
+- poa_numbers — номера нотариальных доверенностей (poder notarial);
+- cups — коды CUPS (электро/газ);
+- meters — номера счётчиков.
+Только значения, ЯВНО присутствующие в тексте. Ничего не выдумывай. Категории без значений — пустые массивы.
+
+Текст документа:
+` + String(text || '').slice(0, 12000);
+  const body = {
+    model: cfg.defaultModel,
+    messages: [{ role: 'user', content: prompt }],
+    max_completion_tokens: 4096,
+    reasoning_effort: 'low',
+    response_format: { type: 'json_object' }
+  };
+  const res = await axios.post(`${cfg.baseURL}/chat/completions`, body, {
+    headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', ...cfg.extraHeaders },
+    timeout: 120000
+  });
+  const content = res.data?.choices?.[0]?.message?.content || '{}';
+  try { return JSON.parse(content); } catch (_) {
+    const m = content.match(/\{[\s\S]*\}/);
+    if (m) { try { return JSON.parse(m[0]); } catch (_) { /* ignore */ } }
+    return {};
+  }
+}
+
+// v110: пакетное AI-извлечение сущностей по документам с raw_text (offset/limit — фронт крутит цикл)
+app.post('/api/links/ai-extract', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const offset = Math.max(0, parseInt((req.body && req.body.offset) || '0', 10) || 0);
+    const limit = Math.min(8, Math.max(1, parseInt((req.body && req.body.limit) || '6', 10) || 6));
+    const { data: docs, error } = await supabaseAdmin.from('receipts')
+      .select('id, store_name, receipt_date, raw_text')
+      .not('raw_text', 'is', null).order('id').range(offset, offset + limit - 1);
+    if (error) throw error;
+    const { count } = await supabaseAdmin.from('receipts').select('id', { count: 'exact', head: true }).not('raw_text', 'is', null);
+
+    const stats = { processed: 0, entitiesAdded: 0, linksAdded: 0, errors: [] };
+    const deRows = [];
+    const touchedEnts = new Map(); // entity_id -> type
+    for (const d of (docs || [])) {
+      try {
+        const ex = await aiExtractEntitiesFromText(d.raw_text);
+        const items = [];
+        const seenV = new Set();
+        const push = (type, v) => {
+          const nv = normEnt(v);
+          if (!nv || nv.length < 2 || nv.length > 120) return;
+          const k = type + '|' + nv;
+          if (seenV.has(k)) return; seenV.add(k);
+          items.push({ type, value: nv, label: String(v).slice(0, 200) });
+        };
+        (ex.persons || []).forEach(v => push('person', v));
+        (ex.companies || []).forEach(v => push('company', v));
+        (ex.tax_ids || []).forEach(v => push('tax_id', v));
+        (ex.ibans || []).forEach(v => push('iban', v));
+        (ex.invoice_numbers || []).forEach(v => push('invoice_no', v));
+        (ex.contracts || []).forEach(v => push('contract_no', v));
+        (ex.poa_numbers || []).forEach(v => push('poa', v));
+        (ex.cups || []).forEach(v => push('cups', v));
+        (ex.meters || []).forEach(v => push('meter', v));
+        if (items.length) {
+          const { data: ups, error: ue } = await supabaseAdmin.from('entities')
+            .upsert(items.map(e => ({ type: e.type, value: e.value, label: e.label })), { onConflict: 'type,value' })
+            .select('id, type');
+          if (ue) throw ue;
+          const seenRow = new Set();
+          for (const e of (ups || [])) {
+            const k = String(d.id) + '|' + e.id;
+            if (seenRow.has(k)) continue; seenRow.add(k);
+            deRows.push({ doc_id: String(d.id), entity_id: e.id, role: 'ai' });
+            touchedEnts.set(e.id, e.type);
+          }
+          stats.entitiesAdded += (ups || []).length;
+        }
+        stats.processed++;
+      } catch (de) { stats.errors.push('doc ' + d.id + ': ' + (de.message || 'AI error')); }
+    }
+    if (deRows.length) {
+      const { error: ie } = await supabaseAdmin.from('doc_entities').upsert(deRows, { onConflict: 'doc_id,entity_id,role' });
+      if (ie) stats.errors.push('doc_entities: ' + ie.message);
+    }
+    // AI-связи: документы, делящие AI-сущность, связываем (created_by='ai')
+    const linkRows = [];
+    for (const [entId, entType] of touchedEnts) {
+      const { data: de2 } = await supabaseAdmin.from('doc_entities').select('doc_id').eq('entity_id', entId).limit(60);
+      const arr = [...new Set((de2 || []).map(r => r.doc_id))];
+      if (arr.length < 2 || arr.length > 40) continue;
+      const lt = LINK_TYPE_BY_ENTITY[entType] || 'related';
+      for (let i = 0; i < arr.length; i++) {
+        for (let j = i + 1; j < arr.length; j++) {
+          linkRows.push({ doc_a: arr[i], doc_b: arr[j], link_type: lt, confidence: 0.75, evidence: 'AI-извлечение', created_by: 'ai' });
+        }
+      }
+    }
+    if (linkRows.length) {
+      const lm = new Map();
+      for (const l of linkRows) { const k = l.doc_a + '|' + l.doc_b + '|' + l.link_type; if (!lm.has(k)) lm.set(k, l); }
+      const dedup = [...lm.values()];
+      for (let i = 0; i < dedup.length; i += 500) {
+        const { error: le } = await supabaseAdmin.from('doc_links').upsert(dedup.slice(i, i + 500), { onConflict: 'doc_a,doc_b,link_type' });
+        if (le) stats.errors.push('doc_links: ' + le.message);
+      }
+      stats.linksAdded = dedup.length;
+    }
+    res.json({ ok: true, offset, processed: stats.processed, nextOffset: offset + (docs || []).length, total: count != null ? count : null, done: (docs || []).length < limit, stats });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Построение/перестроение графа по всем документам
 app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
   try {
@@ -4281,7 +4406,8 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
         if (id) deRows.push({ doc_id: docId, entity_id: id, role: e.role });
       }
     }
-    const { error: delErr } = await supabaseAdmin.from('doc_entities').delete().not('doc_id', 'is', null);
+    // v110: AI-привязки (role='ai') не трогаем — их перестраивает отдельный AI-проход
+    const { error: delErr } = await supabaseAdmin.from('doc_entities').delete().neq('role', 'ai');
     if (delErr) stats.errors.push('doc_entities-clear: ' + delErr.message);
     for (let i = 0; i < deRows.length; i += 500) {
       const { error: de } = await supabaseAdmin.from('doc_entities').insert(deRows.slice(i, i + 500));
@@ -4450,7 +4576,7 @@ app.get('/api/links/graph', requireAuth, tabGuard('list'), async (req, res) => {
     if (present.size) {
       const idList = [...present].join(',');
       const { data: ls } = await supabaseAdmin.from('doc_links')
-        .select('doc_a, doc_b, link_type, confidence, evidence')
+        .select('doc_a, doc_b, link_type, confidence, evidence, created_by')
         .or('doc_a.in.(' + idList + '),doc_b.in.(' + idList + ')');
       links = (ls || []).filter(l => present.has(String(l.doc_a)) && present.has(String(l.doc_b)));
     }
