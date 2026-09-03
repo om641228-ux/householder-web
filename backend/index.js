@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v108.2-2026-09-03', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v109-2026-09-03', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4106,7 +4106,11 @@ const LINK_TYPE_BY_ENTITY = {
   tax_id: 'same_tax_id', invoice_no: 'invoice_match', contract_no: 'contract_match',
   cups: 'same_supply', meter: 'same_meter', amount_date: 'same_amount_date'
 };
-const ENTITY_TYPE_LABELS = { company: 'Компания', person: 'Персона', iban: 'Счёт IBAN', tax_id: 'Налоговый №', invoice_no: '№ фактуры', contract_no: '№ договора', cups: 'CUPS', meter: 'Счётчик', amount_date: 'Сумма+дата' };
+const ENTITY_TYPE_LABELS = { company: 'Компания', person: 'Персона', iban: 'Счёт IBAN', tax_id: 'Налоговый №', invoice_no: '№ фактуры', contract_no: '№ договора', poa: 'Доверенность', cups: 'CUPS', meter: 'Счётчик', amount_date: 'Сумма+дата' };
+// v109: иерархия — типы-субъекты (владельцы) и типы-атрибуты (принадлежат субъекту)
+const SUBJECT_TYPES = new Set(['company', 'person']);
+const ATTRIBUTE_TYPES = new Set(['iban', 'tax_id', 'invoice_no', 'contract_no', 'poa', 'cups', 'meter']);
+const ENT_LINK_LABELS = { belongs_to: 'принадлежит', represents: 'представляет' };
 // v108: bank — банковское движение (узел графа), payment_of — прямая связь «движение оплатило фактуру»
 
 function normEnt(v) {
@@ -4138,6 +4142,15 @@ function extractDocEntities(r) {
     for (const c of new Set(cifs)) add('tax_id', c.toLowerCase(), c, 'tax_id');
     const nifs = text.match(/\b\d{8}[A-Z]\b/g) || [];
     for (const n of new Set(nifs)) add('tax_id', n.toLowerCase(), n, 'tax_id');
+    // v109: персоны — «D./Dña/Don/Doña/Sr./Sra. Имя Фамилия» (2–3 слова с заглавной)
+    const pers = text.match(/(?:\bD(?:ña|on)?\.?|\bDoña|\bDon|\bSr\.?|\bSra\.?)\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñü]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñü]+){1,2}/g) || [];
+    for (const p of new Set(pers.map(x => x.replace(/^(?:Dña|Don|Doña|D|Sr|Sra)\.?\s+/, '')))) add('person', p, p, 'person');
+    // v109: доверенность — «poder (notarial) núm. 1234/2023» / «доверенность № …»
+    const poas = text.match(/(?:poder(?:\s+notarial)?|доверенност\w*)\s*(?:n[úu]m\.?\s*(?:ero)?|n[ºo°]?|№)?\s*[:#]?\s*(\d{1,5}\s*\/\s*\d{2,4}|\d{3,8})/gi) || [];
+    for (const m of poas) {
+      const num = (m.match(/(\d{1,5}\s*\/\s*\d{2,4}|\d{3,8})/) || [])[1];
+      if (num) add('poa', num.replace(/\s/g, ''), num.replace(/\s/g, ''), 'subject');
+    }
   }
   if (r.total_amount != null && r.total_amount !== '' && r.receipt_date) {
     const amt = Number(r.total_amount);
@@ -4277,6 +4290,41 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
     stats.docEntities = deRows.length;
     stats.entitiesNew = entArr.length; // все сущности графа (пакетный upsert не считает «новые» отдельно)
 
+    // 2b) v109: иерархия сущностей — атрибут belongs_to субъекту; персона represents компанию
+    try {
+      const elMap = new Map();
+      const pushEl = (a, b, lt, conf, ev) => {
+        if (!a || !b || a === b) return;
+        const k = a + '|' + b + '|' + lt;
+        if (!elMap.has(k)) elMap.set(k, { entity_a: a, entity_b: b, link_type: lt, confidence: conf, evidence: String(ev || '').slice(0, 200), created_by: 'rule' });
+      };
+      for (const [, ents] of docEnts) {
+        const subjects = [], attrs = [], persons = [], companies = [];
+        for (const e of ents) {
+          const id = entId.get(e.type + '|' + e.value);
+          if (!id) continue;
+          if (SUBJECT_TYPES.has(e.type)) subjects.push({ id, e });
+          else if (ATTRIBUTE_TYPES.has(e.type)) attrs.push({ id, e });
+          if (e.type === 'person') persons.push({ id, e });
+          if (e.type === 'company') companies.push({ id, e });
+        }
+        for (const a of attrs) for (const sub of subjects.slice(0, 3)) pushEl(a.id, sub.id, 'belongs_to', 0.85, a.e.label);
+        for (const p of persons) for (const c of companies.slice(0, 3)) pushEl(p.id, c.id, 'represents', 0.6, p.e.label + ' ↔ ' + c.e.label);
+      }
+      const entLinkRows = [...elMap.values()];
+      const { error: elc } = await supabaseAdmin.from('entity_links').delete().eq('created_by', 'rule');
+      if (elc) {
+        if (/does not exist/i.test(elc.message || '')) stats.errors.push('entity_links: нет таблицы — выполните v109-иерархия.sql в Supabase');
+        else stats.errors.push('entity_links-clear: ' + elc.message);
+      } else {
+        for (let i = 0; i < entLinkRows.length; i += 500) {
+          const { error: eli } = await supabaseAdmin.from('entity_links').upsert(entLinkRows.slice(i, i + 500), { onConflict: 'entity_a,entity_b,link_type' });
+          if (eli) stats.errors.push('entity_links: ' + eli.message);
+        }
+      }
+      stats.entityLinks = entLinkRows.length;
+    } catch (ele) { stats.errors.push('entity_links: ' + ele.message); }
+
     // 3) перестраиваем автоматические связи (created_by='rule')
     await supabaseAdmin.from('doc_links').delete().eq('created_by', 'rule');
     const byEnt = new Map();
@@ -4406,7 +4454,26 @@ app.get('/api/links/graph', requireAuth, tabGuard('list'), async (req, res) => {
         .or('doc_a.in.(' + idList + '),doc_b.in.(' + idList + ')');
       links = (ls || []).filter(l => present.has(String(l.doc_a)) && present.has(String(l.doc_b)));
     }
-    res.json({ entity: { ...ent, typeLabel: ENTITY_TYPE_LABELS[ent.type] || ent.type }, docs, relEntities, links });
+    // v109: иерархия — связи сущности с другими сущностями (belongs_to / represents)
+    let entLinks = [];
+    try {
+      const { data: el } = await supabaseAdmin.from('entity_links')
+        .select('entity_a, entity_b, link_type, confidence, evidence')
+        .or('entity_a.eq.' + eid + ',entity_b.eq.' + eid);
+      const otherIds = new Set();
+      for (const l of (el || [])) { otherIds.add(l.entity_a); otherIds.add(l.entity_b); }
+      otherIds.delete(eid);
+      const omap = new Map();
+      const oids = [...otherIds];
+      for (let i = 0; i < oids.length; i += 200) {
+        const { data: oe } = await supabaseAdmin.from('entities').select('id, type, value, label').in('id', oids.slice(i, i + 200));
+        for (const e of (oe || [])) omap.set(e.id, { ...e, typeLabel: ENTITY_TYPE_LABELS[e.type] || e.type });
+      }
+      entLinks = (el || [])
+        .map(l => ({ ...l, typeLabel: ENT_LINK_LABELS[l.link_type] || l.link_type, a: omap.get(l.entity_a), b: omap.get(l.entity_b) }))
+        .filter(l => l.a && l.b);
+    } catch (_) { /* таблицы entity_links может ещё не быть — иерархия появится после v109 SQL */ }
+    res.json({ entity: { ...ent, typeLabel: ENTITY_TYPE_LABELS[ent.type] || ent.type }, docs, relEntities, links, entLinks });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
