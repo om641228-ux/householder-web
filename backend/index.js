@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v108.1-2026-09-03', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v108.2-2026-09-03', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4205,15 +4205,26 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
 
     // v108: банковские движения — узлы графа «bm:<id>»
     const paymentLinks = [];
+    stats.movements = 0;
     try {
-      const mvs = [];
-      for (let from = 0; ; from += 1000) {
-        const { data, error } = await supabaseAdmin.from('bank_movements')
-          .select('id, counterparty, concept, amount, operation_date, iban, matched_receipt_id')
-          .order('id').range(from, from + 999);
-        if (error) throw error;
-        mvs.push(...(data || []));
-        if (!data || data.length < 1000) break;
+      // v108.2: если в таблице нет какой-то колонки — откатываемся на select('*')
+      let mvCols = 'id, counterparty, concept, amount, operation_date, iban, matched_receipt_id';
+      let mvs = [];
+      for (let attempt = 0; attempt < 2; attempt++) {
+        mvs = [];
+        let failed = false;
+        for (let from = 0; ; from += 1000) {
+          const { data, error } = await supabaseAdmin.from('bank_movements')
+            .select(mvCols)
+            .order('id').range(from, from + 999);
+          if (error) {
+            if (attempt === 0 && /column|does not exist/i.test(error.message || '')) { failed = true; mvCols = '*'; break; }
+            throw error;
+          }
+          mvs.push(...(data || []));
+          if (!data || data.length < 1000) break;
+        }
+        if (!failed) break;
       }
       stats.movements = mvs.length;
       for (const mv of mvs) {

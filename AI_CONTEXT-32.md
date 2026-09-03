@@ -2275,3 +2275,7 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 ## v108.1 (2026-09-03) — fix TDZ «Cannot access docEnts before initialization»
 - В /api/links/build блок bank_movements (v108) стоял ВЫШЕ объявлений `const entKeys`/`const docEnts` — TDZ-ошибка, движения не попадали в граф. Объявления перенесены выше блока.
 - После деплоя: нажать «🔄 Построить связи» заново.
+
+## v108.2 (2026-09-03) — диагностика графа по выписке
+- /api/links/build: чтение bank_movements — при ошибке «column does not exist» откат на select('*'); stats.movements всегда присутствует (0 по умолчанию).
+- LinksTab: баннер теперь показывает «🏦 движений N» — сразу видно, попали ли движения в граф.
