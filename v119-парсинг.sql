@@ -48,3 +48,8 @@ create table if not exists parse_products (
   unique (site, url)
 );
 create index if not exists parse_products_name_idx on parse_products (name text_pattern_ops);
+
+-- v122: артикулы и источник цены
+alter table parse_products add column if not exists article text;
+alter table parse_products add column if not exists price_source text;
+create index if not exists parse_products_article_idx on parse_products (article);

@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v121 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v122 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2825,6 +2825,34 @@ function ParseTab({ token, isMobileView, canRun }) {
     ids.forEach(id => setPriceBusy(prev => ({ ...prev, [id]: false })));
   };
 
+  // v122: цены через AI (веб-поиск Kimi)
+  const fetchAiPrices = async (ids) => {
+    ids.forEach(id => setPriceBusy(prev => ({ ...prev, [id]: true })));
+    setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/parse/catalog/ai-prices?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      const byId = {};
+      for (const it of (j.results || [])) byId[it.id] = it;
+      setCatItems(prev => (prev || []).map(p => byId[p.id] && byId[p.id].ok ? { ...p, price: byId[p.id].price, currency: byId[p.id].currency, name: byId[p.id].title || p.name, price_source: 'ai-search' } : p));
+      const fails = (j.results || []).filter(x => !x.ok);
+      if (fails.length) setErr('AI не нашёл цены: ' + fails.length + ' шт. (' + fails[0].error + ')');
+    } catch (e) { setErr(e.message); }
+    ids.forEach(id => setPriceBusy(prev => ({ ...prev, [id]: false })));
+  };
+  const backfillArticles = async () => {
+    setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/parse/catalog/backfill-articles?token=${token}`, { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      alert('✅ Артикулы извлечены из URL: ' + j.updated + ' шт.');
+    } catch (e) { setErr(e.message); }
+  };
+
   const bookmarkletHref = () => {
     const api = `${API_URL}/api/parse/paste-url?token=${encodeURIComponent(token)}`;
     return "javascript:(()=>{fetch('" + api + "',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:location.href,html:document.documentElement.outerHTML})}).then(r=>r.json()).then(j=>{if(j.ok){var r=j.result||{};alert('✅ Сохранено: '+(r.title||'')+(r.price!=null?' — '+r.price+' '+(r.currency||'€'):''))}else{alert('❌ '+(j.error||'ошибка'))}}).catch(e=>alert('❌ '+e.message))})()";
@@ -2889,8 +2917,16 @@ function ParseTab({ token, isMobileView, canRun }) {
           <button onClick={catSearch} disabled={catBusy}
             style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#0071e3', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>{catBusy ? '⏳' : '🔍 Найти'}</button>
           {catItems && catItems.length > 0 && canRun && (
-            <button onClick={() => fetchPrices(catItems.slice(0, 10).map(p => p.id))} title="Цены первых 10 найденных (с паузами 2–3,5 с)"
-              style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #34c759', background: '#e8f8ef', color: '#1e7e34', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>💶 Цены ×10</button>
+            <button onClick={() => fetchPrices(catItems.slice(0, 10).map(p => p.id))} title="Прямые цены со страниц (403 без прокси, паузы 2–3,5 с)"
+              style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #34c759', background: '#e8f8ef', color: '#1e7e34', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>💶 ×10</button>
+          )}
+          {catItems && catItems.length > 0 && canRun && (
+            <button onClick={() => fetchAiPrices(catItems.slice(0, 10).map(p => p.id))} title="AI с веб-поиском находит цены по артикулу — без 403"
+              style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: '#7c3aed', color: '#fff', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>🤖 AI-цены ×10</button>
+          )}
+          {canRun && (
+            <button onClick={backfillArticles} title="Извлечь артикулы из URL для уже загруженного каталога"
+              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>🔢 Артикулы</button>
           )}
         </div>
         {catItems && (
@@ -2903,14 +2939,22 @@ function ParseTab({ token, isMobileView, canRun }) {
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <a href={p.url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#0071e3', textDecoration: 'none', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name || p.url}</a>
                     <div style={{ fontSize: 12, marginTop: 2 }}>
+                      {p.article && <span style={{ color: '#8e8e93', marginRight: 6 }}>арт. {p.article}</span>}
                       {p.price != null ? <b>{p.price} {p.currency || '€'}</b> : <span style={{ color: '#8e8e93' }}>цена не снята</span>}
+                      {p.price_source === 'ai-search' && <span title="Цена найдена AI через веб-поиск" style={{ fontSize: 10, color: '#7c3aed', marginLeft: 4 }}>🤖</span>}
                     </div>
                   </div>
                   {canRun && (
-                    <button onClick={() => fetchPrices([p.id])} disabled={!!priceBusy[p.id]} title="Снять цену со страницы товара"
-                      style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer', flexShrink: 0 }}>
-                      {priceBusy[p.id] ? '⏳' : '💶'}
-                    </button>
+                    <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 4, flexShrink: 0 }}>
+                      <button onClick={() => fetchPrices([p.id])} disabled={!!priceBusy[p.id]} title="Снять цену со страницы товара (403 без прокси)"
+                        style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>
+                        {priceBusy[p.id] ? '⏳' : '💶'}
+                      </button>
+                      <button onClick={() => fetchAiPrices([p.id])} disabled={!!priceBusy[p.id]} title="Цена через AI веб-поиск (без 403)"
+                        style={{ padding: '4px 10px', borderRadius: 8, border: 'none', background: '#7c3aed', color: '#fff', fontSize: 12, cursor: 'pointer' }}>
+                        {priceBusy[p.id] ? '⏳' : '🤖'}
+                      </button>
+                    </span>
                   )}
                 </div>
               ))}
@@ -9007,7 +9051,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-04 · v121 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-04 · v122 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9020,7 +9064,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v121</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v122</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">

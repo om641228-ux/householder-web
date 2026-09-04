@@ -2380,3 +2380,9 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Шаг 4 прокси: env PARSE_PROXY=http://user:pass@host:port + опциональный пакет https-proxy-agent (добавить в backend package.json при необходимости); без прокси цены LM всё равно 403 (DataDome банит датацентр-IP) — честное сообщение об ошибке.
 - POST /api/parse/catalog/prices {ids≤20} — последовательный обход с паузами, сохранение price/currency/price_at в parse_products.
 - Frontend ParseTab: блок «🗂 Каталог» — кнопки синка sitemap-productos1-4, поиск по каталогу, карточки товаров (фото/название/цена), 💶 цена одного / 💶×10 первых.
+
+## v122 (2026-09-04) — артикулы + AI-цены (Уровень 1 автоматизации)
+- Артикул = число перед .html в URL (регулярка /-(\d{5})\.html/); извлекается при синке sitemap; POST /api/parse/catalog/backfill-articles — дозаполнение для старого каталога; поиск по артикулу (одно слово из цифр → eq article). Колонки article, price_source — в v119-парсинг.sql (выполнить повторно).
+- POST /api/parse/catalog/ai-prices {ids≤10}: Kimi с builtin $web_search ищет цену по названию+артикулу+URL, возвращает строгий JSON {price,currency,source,title}; валидация 0<price<100000; price_source='ai-search'.
+- Прямые цены помечаются price_source='direct'/'direct-proxy'.
+- Frontend: артикул и 🤖-бейдж в карточке товара; кнопки 💶 (прямая) и 🤖 (AI) у каждого товара; «🤖 AI-цены ×10» и «💶 ×10» для выдачи; кнопка «🔢 Артикулы» (бэкфилл).

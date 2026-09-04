@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v121-2026-09-04', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v122-2026-09-04', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4449,7 +4449,10 @@ app.post('/api/parse/catalog/sync', requireAuth, requireRole('admin', 'manager')
     const items = parseSitemapXml(xml, '', 100000); // без фильтра — весь файл
     let upserted = 0, errs = 0;
     for (let i = 0; i < items.length; i += 500) {
-      const rows = items.slice(i, i + 500).map(it => ({ site, url: it.url, name: it.name.slice(0, 300), image: it.image, last_seen: new Date().toISOString() }));
+      const rows = items.slice(i, i + 500).map(it => {
+        const am = it.url.match(/-(\d{5,})\.html?/i); // v122: артикул = число перед .html
+        return { site, url: it.url, name: it.name.slice(0, 300), image: it.image, article: am ? am[1] : null, last_seen: new Date().toISOString() };
+      });
       const { error } = await supabaseAdmin.from('parse_products').upsert(rows, { onConflict: 'site,url' });
       if (error) {
         if (/does not exist/i.test(error.message || '')) return res.status(500).json({ error: 'Нет таблицы parse_products — выполните v119-парсинг.sql повторно' });
@@ -4470,7 +4473,8 @@ app.get('/api/parse/catalog', requireAuth, tabGuard('list'), async (req, res) =>
     if (site) query = query.eq('site', site);
     if (q) {
       const words = q.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6);
-      for (const w of words) query = query.ilike('name', '%' + w.replace(/[%_]/g, ' ') + '%');
+      if (words.length === 1 && /^\d{5,}$/.test(words[0])) query = query.eq('article', words[0]); // поиск по артикулу
+      else for (const w of words) query = query.ilike('name', '%' + w.replace(/[%_]/g, ' ') + '%');
     }
     const { data, error, count } = await query;
     if (error) {
@@ -4498,11 +4502,87 @@ app.post('/api/parse/catalog/prices', requireAuth, requireRole('admin', 'manager
         if (r.status >= 400) throw new Error('HTTP ' + r.status);
         const ex = extractFromHtml(r.data);
         item.title = ex.title; item.price = ex.price; item.currency = ex.currency; item.ok = true;
-        await supabaseAdmin.from('parse_products').update({ price: ex.price, currency: ex.currency, price_at: new Date().toISOString(), name: ex.title ? ex.title.slice(0, 300) : p.name, image: ex.image || p.image }).eq('id', p.id);
+        await supabaseAdmin.from('parse_products').update({ price: ex.price, currency: ex.currency, price_at: new Date().toISOString(), price_source: process.env.PARSE_PROXY ? 'direct-proxy' : 'direct', name: ex.title ? ex.title.slice(0, 300) : p.name, image: ex.image || p.image }).eq('id', p.id);
       } catch (e2) { item.ok = false; item.error = e2.message; }
       out.push(item);
     }
     res.json({ ok: true, results: out, proxy: !!process.env.PARSE_PROXY });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v122: разовое дозаполнение артикулов из URL (после alter table add article)
+app.post('/api/parse/catalog/backfill-articles', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    let updated = 0;
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin.from('parse_products').select('id, url').is('article', null).range(0, 999);
+      if (error) {
+        if (/column.*article/i.test(error.message || '')) return res.status(500).json({ error: 'Выполните v119-парсинг.sql повторно (alter table parse_products add column article …)' });
+        throw error;
+      }
+      if (!data || !data.length) break;
+      for (const p of data) {
+        const am = String(p.url || '').match(/-(\d{5,})\.html?/i);
+        if (am) {
+          const { error: ue } = await supabaseAdmin.from('parse_products').update({ article: am[1] }).eq('id', p.id);
+          if (!ue) updated++;
+        } else {
+          await supabaseAdmin.from('parse_products').update({ article: '' }).eq('id', p.id);
+        }
+      }
+      if (data.length < 1000) break;
+    }
+    res.json({ ok: true, updated });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v122: цена через AI (Kimi со встроенным веб-поиском) — обход DataDome без прокси
+async function aiFindPrice(product) {
+  const cfg = OPENAI_COMPAT_PROVIDERS.kimi;
+  if (!cfg || !cfg.apiKey) throw new Error('Kimi API key not configured');
+  const prompt = `Найди актуальную цену товара на leroymerlin.es.
+Товар: ${product.name || ''}
+Артикул: ${product.article || '—'}
+URL: ${product.url}
+Используй веб-поиск. Верни СТРОГО JSON: {"price": число или null, "currency": "EUR", "source": "откуда цена", "title": "точное название"}
+Если цену найти не удалось — {"price": null}. Никакого текста кроме JSON.`;
+  const body = {
+    model: cfg.defaultModel,
+    messages: [{ role: 'user', content: prompt }],
+    max_completion_tokens: 2048, reasoning_effort: 'low',
+    tools: [{ type: 'builtin_function', function: { name: '$web_search' } }]
+  };
+  const r = await axios.post(`${cfg.baseURL}/chat/completions`, body, {
+    headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', ...cfg.extraHeaders },
+    timeout: 120000
+  });
+  const content = r.data?.choices?.[0]?.message?.content || '{}';
+  let j = {};
+  try { j = JSON.parse(content); } catch (_) { const m = content.match(/\{[\s\S]*\}/); if (m) { try { j = JSON.parse(m[0]); } catch (_) { /* ignore */ } } }
+  let price = parseFloat(String(j.price == null ? '' : j.price).replace(',', '.'));
+  if (!isFinite(price) || price <= 0 || price > 100000) price = null;
+  return { price, currency: String(j.currency || 'EUR').slice(0, 5), title: String(j.title || '').slice(0, 300), source: String(j.source || 'ai-search').slice(0, 200) };
+}
+
+app.post('/api/parse/catalog/ai-prices', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids.slice(0, 10) : [];
+    if (!ids.length) return res.status(400).json({ error: 'Передайте ids (до 10 за раз)' });
+    const { data: products, error } = await supabaseAdmin.from('parse_products').select('*').in('id', ids);
+    if (error) throw error;
+    const out = [];
+    for (const p of (products || [])) {
+      const item = { id: p.id, url: p.url };
+      try {
+        const r = await aiFindPrice(p);
+        if (r.price == null) throw new Error('AI не нашёл цену');
+        item.ok = true; item.price = r.price; item.currency = r.currency; item.title = r.title || p.name; item.source = r.source;
+        await supabaseAdmin.from('parse_products').update({ price: r.price, currency: r.currency, price_at: new Date().toISOString(), price_source: 'ai-search', name: (r.title || p.name).slice(0, 300) }).eq('id', p.id);
+      } catch (e2) { item.ok = false; item.error = e2.message; }
+      out.push(item);
+    }
+    if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'AI-цены', `найдено ${out.filter(x => x.ok).length}/${out.length}`, req);
+    res.json({ ok: true, results: out });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
