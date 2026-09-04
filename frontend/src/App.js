@@ -913,7 +913,7 @@ const fmtDocDate = (iso) => iso ? iso.split('-').reverse().join('.') : '';
 // v74: вкладка «👥 Пользователи» (только admin) — управление доступом: роли, разделы документов, объекты
 function UsersTab({ token, objectsList }) {
   const SEC_LABELS = { home: '🏠 Дома', auto: '🚗 Авто', personal: '👤 Личное' };
-  const TAB_LABELS = { upload: '📤 Загрузка', list: '🧾 Чеки/документы', links: '🔗 Связи', analysis: '📊 Анализ', taxes: '🧾 Налоги', cash: '💵 Cash', crm: '🤝 CRM', docs: '📁 Документы', chat: '💬 Чат', log: '📋 Журнал' };
+  const TAB_LABELS = { upload: '📤 Загрузка', list: '🧾 Чеки/документы', links: '🔗 Связи', parse: '🌐 Парсинг', analysis: '📊 Анализ', taxes: '🧾 Налоги', cash: '💵 Cash', crm: '🤝 CRM', docs: '📁 Документы', chat: '💬 Чат', log: '📋 Журнал' };
   const [list, setList] = useState([]);
   const [err, setErr] = useState('');
   const [edit, setEdit] = useState(null); // {id,name,password,role,sections[],objects[],disabled,isNew}
@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v118 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v119 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2651,6 +2651,173 @@ const entColor = (type) => {
   return ENT_PALETTE[h % ENT_PALETTE.length]; // v114: AI-открытые типы — стабильный цвет по имени
 };
 const ENT_TYPE_FILTERS = [ ['', 'Все'], ['company', '🏢 Компании'], ['person', '👤 Персоны'], ['contract_no', '📄 Договоры'], ['poa', '📜 Доверенности'], ['invoice_no', '🧾 № фактур'], ['iban', '💳 Счета'], ['tax_id', '🔢 Налоговые №'], ['amount_date', '💶 Суммы'] ];
+
+// ========== v119: вкладка «🌐 Парсинг» — источники, проверка robots.txt, запуск парсера ==========
+function ParseTab({ token, isMobileView, canRun }) {
+  const [sources, setSources] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState('');
+  const [url, setUrl] = useState('');
+  const [name, setName] = useState('');
+  const [busyId, setBusyId] = useState(null);
+  const [hist, setHist] = useState({}); // source_id -> results[]
+  const [robotsInfo, setRobotsInfo] = useState(null); // {url, allowed, note, sitemaps}
+
+  const loadSources = async () => {
+    setLoading(true); setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/parse/sources?token=${token}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setSources(j.sources || []);
+    } catch (e) { setErr(e.message); }
+    setLoading(false);
+  };
+  useEffect(() => { if (token) loadSources(); }, [token]);
+
+  const checkRobots = async (u) => {
+    const r = await fetch(`${API_URL}/api/parse/robots?token=${token}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: u })
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    return j;
+  };
+
+  const addSource = async () => {
+    const u = url.trim();
+    if (!u) return;
+    setErr('');
+    try {
+      let robots_ok = true, robots_note = '';
+      try {
+        const rb = await checkRobots(u);
+        robots_ok = !!rb.allowed; robots_note = rb.note || '';
+        setRobotsInfo({ ...rb, url: u });
+        if (!rb.allowed && !window.confirm('⚠️ robots.txt ЗАПРЕЩАЕТ парсинг этого пути.\n\nВсё равно добавить источник? (ответственность за использование — на вас)')) return;
+      } catch (re) { robots_note = 'robots.txt не проверен: ' + re.message; }
+      const r = await fetch(`${API_URL}/api/parse/sources?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: u, name: name.trim(), robots_ok, robots_note })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setUrl(''); setName('');
+      await loadSources();
+    } catch (e) { setErr(e.message); }
+  };
+
+  const runSource = async (id) => {
+    setBusyId(id); setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/parse/run?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      await loadSources();
+      if (hist[id]) loadHistory(id);
+    } catch (e) { setErr(e.message); }
+    setBusyId(null);
+  };
+
+  const removeSource = async (id) => {
+    if (!window.confirm('Удалить источник и все его результаты?')) return;
+    try {
+      const r = await fetch(`${API_URL}/api/parse/sources?token=${token}&id=${id}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      await loadSources();
+    } catch (e) { setErr(e.message); }
+  };
+
+  const loadHistory = async (id) => {
+    try {
+      const r = await fetch(`${API_URL}/api/parse/results?token=${token}&source=${id}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setHist(prev => ({ ...prev, [id]: j.results || [] }));
+    } catch (e) { setErr(e.message); }
+  };
+
+  const fmtDate = (d) => d ? new Date(d).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+
+  return (
+    <div style={{ padding: isMobileView ? '6px 10px 20px' : '6px 15px 20px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '4px 0 10px' }}>
+        {!isMobileView && <h2 style={{ margin: 0 }}>🌐 Парсинг сайтов</h2>}
+      </div>
+
+      <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: 12, marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>➕ Новый источник</div>
+        <div style={{ display: 'grid', gap: 8, gridTemplateColumns: isMobileView ? '1fr' : '2fr 1fr auto' }}>
+          <input value={url} onChange={e => setUrl(e.target.value)} placeholder="URL страницы (напр. https://www.leroymerlin.es/productos/...)"
+            style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="Название (необязательно)"
+            style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
+          {canRun && <button onClick={addSource} disabled={!url.trim()}
+            style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#0071e3', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Добавить</button>}
+        </div>
+        <div style={{ fontSize: 11, color: '#8e8e93', marginTop: 6 }}>При добавлении автоматически проверяется robots.txt сайта. Для Leroy Merlin разрешены карточки товаров /productos/…; поиск и фильтры запрещены.</div>
+        {robotsInfo && (
+          <div style={{ marginTop: 8, fontSize: 12, padding: '6px 10px', borderRadius: 8, background: robotsInfo.allowed ? '#e8f8ef' : '#fdecea', border: '1px solid ' + (robotsInfo.allowed ? '#34c759' : '#e74c3c') }}>
+            {robotsInfo.allowed ? '✅' : '❌'} robots.txt: {robotsInfo.note}
+            {robotsInfo.sitemaps && robotsInfo.sitemaps.length > 0 && <div style={{ color: '#555', marginTop: 2 }}>Sitemaps: {robotsInfo.sitemaps.slice(0, 3).join(' · ')}{robotsInfo.sitemaps.length > 3 ? ` … (всего ${robotsInfo.sitemaps.length})` : ''}</div>}
+          </div>
+        )}
+      </div>
+
+      {err && <div style={{ background: '#fdecea', border: '1px solid #e74c3c', borderRadius: 10, padding: '10px 12px', fontSize: 13, marginBottom: 10, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>❌ {err}</div>}
+      {loading && <div style={{ color: '#8e8e93', fontSize: 13 }}>⏳ Загружаю источники…</div>}
+      {!loading && sources.length === 0 && !err && (
+        <div style={{ color: '#8e8e93', fontSize: 14, margin: '20px 0' }}>Источников пока нет. Добавьте первый URL выше — например, карточку товара Leroy Merlin для отслеживания цены.</div>
+      )}
+
+      <div style={{ display: 'grid', gap: 10 }}>
+        {sources.map(src => (
+          <div key={src.id} style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span title={src.robots_note || ''} style={{ fontSize: 14 }}>{src.robots_ok === false ? '❌' : '✅'}</span>
+              <b style={{ fontSize: 14 }}>{src.name || src.url}</b>
+              <span style={{ color: '#8e8e93', fontSize: 12 }}>{src.site}</span>
+              <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6 }}>
+                {canRun && <button onClick={() => runSource(src.id)} disabled={busyId === src.id}
+                  style={{ padding: '5px 12px', borderRadius: 8, border: 'none', background: '#34c759', color: '#fff', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>
+                  {busyId === src.id ? '⏳ Парсю…' : '▶ Спарсить'}
+                </button>}
+                <button onClick={() => hist[src.id] ? setHist(prev => { const h = { ...prev }; delete h[src.id]; return h; }) : loadHistory(src.id)}
+                  style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12.5, cursor: 'pointer' }}>
+                  {hist[src.id] ? '▴ Скрыть' : '🕘 История'}
+                </button>
+                {canRun && <button onClick={() => removeSource(src.id)}
+                  style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #f5c2c7', background: '#fff', color: '#e74c3c', fontSize: 12.5, cursor: 'pointer' }}>🗑</button>}
+              </span>
+            </div>
+            <div style={{ fontSize: 12, color: '#8e8e93', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{src.url}</div>
+            {src.last && (
+              <div style={{ fontSize: 13, marginTop: 6 }}>
+                📦 {src.last.title || '(без названия)'} {src.last.price != null && <b style={{ color: '#1d1d1f' }}>· {src.last.price} {src.last.currency || '€'}</b>} <span style={{ color: '#8e8e93', fontSize: 11 }}>· {fmtDate(src.last.fetched_at)}</span>
+              </div>
+            )}
+            {src.robots_note && <div style={{ fontSize: 11, color: src.robots_ok === false ? '#e74c3c' : '#8e8e93', marginTop: 4 }}>{src.robots_note}</div>}
+            {hist[src.id] && (
+              <div style={{ marginTop: 8, borderTop: '1px solid #f0f0f2', paddingTop: 6 }}>
+                {hist[src.id].length === 0 && <div style={{ fontSize: 12, color: '#8e8e93' }}>История пуста — нажмите «▶ Спарсить»</div>}
+                {hist[src.id].map(r => (
+                  <div key={r.id} style={{ fontSize: 12, padding: '3px 0', display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                    <span style={{ color: '#8e8e93', flexShrink: 0 }}>{fmtDate(r.fetched_at)}</span>
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title || '—'}</span>
+                    {r.price != null && <b>{r.price} {r.currency || '€'}</b>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
   const [entities, setEntities] = useState([]);
@@ -5155,6 +5322,7 @@ function App() {
   const mobileTabsOrder = [
     user?.role !== 'viewer' && tabAllowed('upload') && 'upload',
     tabAllowed('list') && 'list',
+    tabAllowed('parse') && 'parse',
     tabAllowed('cash') && 'cash',
     (user?.role === 'admin' || user?.role === 'manager' || user?.role === 'user') && tabAllowed('crm') && 'crm',
     tabAllowed('analysis') && 'analysis',
@@ -8595,7 +8763,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-04 · v118 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-04 · v119 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8608,7 +8776,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v118</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v119</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">
@@ -8654,6 +8822,12 @@ ${bodyHtml}
             {tabAllowed('list') && (
               <button className={activeTab === 'links' ? 'active' : ''} onClick={() => setActiveTab('links')}>
                 🔗 Связи
+              </button>
+            )}
+            {/* v119: вкладка «Парсинг» — свои парсеры сайтов */}
+            {tabAllowed('parse') && (
+              <button className={activeTab === 'parse' ? 'active' : ''} onClick={() => setActiveTab('parse')}>
+                🌐 Парсинг
               </button>
             )}
             {/* v83: чат с бейджем непрочитанных */}
@@ -8746,6 +8920,7 @@ ${bodyHtml}
             {tabAllowed('taxes') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('taxes'); loadReceipts(); loadBankMovements(); }}>🧾 Налоги</button>}
             {tabAllowed('docs') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('docs'); }}>📁 Документы</button>}
             {tabAllowed('list') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('links'); }}>🔗 Связи</button>}
+            {tabAllowed('parse') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('parse'); }}>🌐 Парсинг</button>}
             {tabAllowed('chat') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('chat'); }}>💬 Чат{chatUnreadTotal > 0 ? ` (${chatUnreadTotal})` : ''}</button>}
             {user?.role === 'admin' && <button onClick={() => { setMoreNavOpen(false); setActiveTab('users'); }}>👥 Доступ</button>}
             {user?.role === 'admin' && <button onClick={() => { setMoreNavOpen(false); setActiveTab('log'); }}>📋 Журнал</button>}
@@ -11404,6 +11579,9 @@ ${bodyHtml}
       {activeTab === 'links' && tabAllowed('list') && (
         <LinksTab token={token} isMobileView={isMobileView} canBuild={user?.role === 'admin' || user?.role === 'manager'}
           onOpenDoc={(id) => { const r = receipts.find(x => String(x.id) === String(id)); if (r) setViewModal(r); else { alert('Документ не загружен в список — откройте вкладку «Фактуры» и найдите его там.'); } }} />
+      )}
+      {activeTab === 'parse' && tabAllowed('parse') && (
+        <ParseTab token={token} isMobileView={isMobileView} canRun={user?.role === 'admin' || user?.role === 'manager'} />
       )}
       {/* ===================== v90: ВКЛАДКА CASH — ОТДЕЛЬНАЯ структура (cash_movements) =====================
           Своя таблица, НЕ связана с банковскими выписками и налогами. Строки: дата, контрагент, сумма со знаком

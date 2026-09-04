@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v118-2026-09-04', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v119-2026-09-04', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4191,6 +4191,175 @@ app.delete('/api/links/scopes', requireAuth, requireRole('admin', 'manager'), as
     const { error } = await supabaseAdmin.from('graph_scopes').delete().eq('id', id);
     if (error) throw error;
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ================== v119: ПАРСИНГ сайтов (источники, robots.txt, извлечение данных) ==================
+const PARSE_SQL = "create table if not exists parse_sources (id uuid primary key default gen_random_uuid(), name text, url text not null, site text, robots_ok boolean, robots_note text, created_at timestamptz default now()); "
+  + "create table if not exists parse_results (id uuid primary key default gen_random_uuid(), source_id uuid references parse_sources(id) on delete cascade, url text, title text, price numeric, currency text, image text, data jsonb, fetched_at timestamptz default now());";
+
+const PARSE_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+
+// разбор robots.txt: правила для User-agent * + sitemaps + заблокированные UA
+function parseRobots(txt) {
+  const lines = String(txt || '').split('\n');
+  const groups = []; // {agents:[], rules:[{allow:bool, path}]}
+  let cur = null;
+  const sitemaps = [];
+  const blockedAgents = [];
+  for (const raw of lines) {
+    const line = raw.replace(/#.*$/, '').trim();
+    if (!line) continue;
+    const m = line.match(/^([A-Za-z-]+):\s*(.*)$/);
+    if (!m) continue;
+    const key = m[1].toLowerCase(), val = m[2].trim();
+    if (key === 'user-agent') {
+      if (cur && cur.rules.length) groups.push(cur);
+      if (!cur || cur.rules.length || cur.agentStarted) { cur = { agents: [], rules: [], agentStarted: true }; }
+      cur.agents.push(val.toLowerCase());
+    } else if (key === 'sitemap') { sitemaps.push(val); }
+    else if (cur && (key === 'disallow' || key === 'allow')) {
+      if (val) cur.rules.push({ allow: key === 'allow', path: val });
+    }
+  }
+  if (cur && cur.rules.length) groups.push(cur);
+  // агенты с полным запретом Disallow: /
+  for (const g of groups) {
+    if (g.agents.includes('*')) continue;
+    if (g.rules.some(r => !r.allow && r.path === '/')) blockedAgents.push(...g.agents);
+  }
+  const star = groups.filter(g => g.agents.includes('*'));
+  const rules = star.flatMap(g => g.rules);
+  const isAllowed = (urlPath) => {
+    let best = null;
+    for (const r of rules) {
+      const pat = r.path.replace(/\*.*$/, '').replace(/\$$/, '');
+      if (!urlPath.startsWith(pat)) continue;
+      if (!best || r.path.length > best.path.length) best = r;
+    }
+    return best ? best.allow : true;
+  };
+  return { rules, sitemaps, blockedAgents, isAllowed, groupsCount: groups.length };
+}
+
+app.get('/api/parse/sources', requireAuth, tabGuard('list'), async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('parse_sources').select('*').order('created_at', { ascending: false });
+    if (error) {
+      if (/does not exist/i.test(error.message || '')) return res.status(500).json({ error: 'Нет таблиц парсинга. Выполните в Supabase SQL Editor: ' + PARSE_SQL });
+      throw error;
+    }
+    const out = [];
+    for (const src of (data || [])) {
+      const { data: last } = await supabaseAdmin.from('parse_results').select('title, price, currency, fetched_at').eq('source_id', src.id).order('fetched_at', { ascending: false }).limit(1);
+      out.push({ ...src, last: (last && last[0]) || null });
+    }
+    res.json({ sources: out });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/parse/sources', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const url = String((req.body && req.body.url) || '').trim();
+    if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'Нужен полный URL (https://…)' });
+    const u = new URL(url);
+    const name = String((req.body && req.body.name) || '').trim().slice(0, 120) || (u.hostname + u.pathname).slice(0, 120);
+    const { data, error } = await supabaseAdmin.from('parse_sources')
+      .insert({ name, url, site: u.hostname, robots_ok: req.body.robots_ok !== false, robots_note: String(req.body.robots_note || '').slice(0, 300) })
+      .select().single();
+    if (error) throw error;
+    if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Добавлен источник', name, req);
+    res.json({ ok: true, source: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/parse/sources', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const id = String(req.query.id || '');
+    const { error } = await supabaseAdmin.from('parse_sources').delete().eq('id', id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/parse/results', requireAuth, tabGuard('list'), async (req, res) => {
+  try {
+    const sid = String(req.query.source || '');
+    let q = supabaseAdmin.from('parse_results').select('*').order('fetched_at', { ascending: false }).limit(50);
+    if (sid) q = q.eq('source_id', sid);
+    const { data, error } = await q;
+    if (error) throw error;
+    res.json({ results: data || [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// проверка URL по robots.txt домена
+app.post('/api/parse/robots', requireAuth, tabGuard('list'), async (req, res) => {
+  try {
+    const url = String((req.body && req.body.url) || '').trim();
+    if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'Нужен полный URL' });
+    const u = new URL(url);
+    const r = await axios.get(u.origin + '/robots.txt', { headers: { 'User-Agent': PARSE_UA }, timeout: 20000, validateStatus: () => true });
+    if (r.status >= 400) return res.json({ ok: true, found: false, allowed: true, note: 'robots.txt не найден (HTTP ' + r.status + ') — формально запретов нет' });
+    const rb = parseRobots(r.data);
+    const allowed = rb.isAllowed(u.pathname + u.search);
+    const note = allowed
+      ? 'Разрешено правилами robots.txt' + (rb.sitemaps.length ? ` · sitemap: ${rb.sitemaps.length} шт.` : '')
+      : 'ЗАПРЕЩЕНО правилом robots.txt для этого пути';
+    res.json({ ok: true, found: true, allowed, note, sitemaps: rb.sitemaps.slice(0, 12), rulesCount: rb.rules.length, blockedAgents: rb.blockedAgents.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// запуск парсинга одного источника: HTML → JSON-LD (schema.org Product) → сохранение результата
+app.post('/api/parse/run', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const id = String((req.body && req.body.id) || '');
+    const { data: src, error: se } = await supabaseAdmin.from('parse_sources').select('*').eq('id', id).maybeSingle();
+    if (se) throw se;
+    if (!src) return res.status(404).json({ error: 'Источник не найден' });
+    const r = await axios.get(src.url, {
+      headers: { 'User-Agent': PARSE_UA, 'Accept': 'text/html,application/xhtml+xml', 'Accept-Language': 'es-ES,es;q=0.9,ru;q=0.8' },
+      timeout: 30000, maxContentLength: 8 * 1024 * 1024, validateStatus: () => true
+    });
+    if (r.status >= 400) throw new Error('HTTP ' + r.status + ' при загрузке страницы (возможна антибот-защита)');
+    const html = String(r.data || '');
+    // JSON-LD блоки
+    const jsonlds = [];
+    const re = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+      try {
+        const j = JSON.parse(m[1].trim());
+        jsonlds.push(...(Array.isArray(j) ? j : [j]));
+        for (const it of jsonlds) { if (it && Array.isArray(it['@graph'])) jsonlds.push(...it['@graph']); }
+      } catch (_) { /* битый JSON-LD пропускаем */ }
+    }
+    const product = jsonlds.find(j => j && /Product/i.test(String(j['@type'] || '')));
+    let title = '', price = null, currency = '', image = '', extra = {};
+    if (product) {
+      title = String(product.name || '').trim();
+      const offers = Array.isArray(product.offers) ? product.offers[0] : product.offers;
+      if (offers) {
+        price = parseFloat(String(offers.price || offers.lowPrice || '').replace(',', '.'));
+        if (!isFinite(price)) price = null;
+        currency = String(offers.priceCurrency || '').trim();
+      }
+      image = Array.isArray(product.image) ? product.image[0] : String(product.image || '');
+      extra = { brand: (product.brand && (product.brand.name || product.brand)) || '', sku: product.sku || product.mpn || '', availability: offers ? String(offers.availability || '') : '', rating: product.aggregateRating ? product.aggregateRating.ratingValue : null };
+    } else {
+      const mt = html.match(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i) || html.match(/<title[^>]*>([^<]+)<\/title>/i);
+      title = mt ? mt[1].trim() : '';
+      const mp = html.match(/<meta[^>]*(?:property|name)=["'](?:product:price:amount|og:price:amount)["'][^>]*content=["']([0-9.,]+)["']/i);
+      if (mp) price = parseFloat(mp[1].replace(',', '.'));
+      const mc = html.match(/<meta[^>]*(?:property|name)=["'](?:product:price:currency|og:price:currency)["'][^>]*content=["']([A-Z]{3})["']/i);
+      if (mc) currency = mc[1];
+    }
+    const { data: saved, error: ie } = await supabaseAdmin.from('parse_results')
+      .insert({ source_id: id, url: src.url, title: title.slice(0, 300), price, currency, image, data: extra })
+      .select().single();
+    if (ie) throw ie;
+    if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Запуск парсера', (src.name || src.url) + (price != null ? ' = ' + price + ' ' + currency : ''), req);
+    res.json({ ok: true, result: saved, jsonld: jsonlds.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

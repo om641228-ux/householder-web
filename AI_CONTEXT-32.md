@@ -2355,3 +2355,9 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Реестр типов getKnownFreeTypes(): базовые (BASE_TYPE_LABELS) + типы из БД entities + сессионный кэш aiFreeTypes — AI переиспользует известные типы, новые создаёт только при необходимости (консистентность между батчами).
 - ai-extract принимает freeMode; relations → entity_links (link_type=relation, confidence 0.7, created_by='ai', evidence 'AI свободный режим'); stats.newTypes/relsAdded.
 - Frontend: кнопка AI-извлечение стала сдвоенной — правый сегмент переключает 🧷 схема / 🧠 свободный; прогресс показывает новых типов и связей сущностей.
+
+## v119 (2026-09-04) — вкладка «🌐 Парсинг»
+- SQL: v119-парсинг.sql — таблицы parse_sources (name,url,site,robots_ok,robots_note) и parse_results (source_id,url,title,price,currency,image,data jsonb,fetched_at). Пользователь должен выполнить в Supabase.
+- Backend: parseRobots() (группы UA *, правила Allow/Disallow с longest-prefix-match, sitemaps, заблокированные UA); эндпоинты GET/POST/DELETE /api/parse/sources, GET /api/parse/results, POST /api/parse/robots (проверка URL по robots.txt домена), POST /api/parse/run (fetch с браузерным UA → JSON-LD schema.org Product → title/price/currency/image/brand/sku/rating; fallback og:meta) → запись в parse_results. Логирование logActivity('Парсинг', ...).
+- Frontend: ParseTab — добавление источника с автопроверкой robots.txt (при запрете — предупреждение), карточки источников (robots-бейдж, последний результат с ценой), ▶ Спарсить, 🕘 История (50 записей), удаление. Таб 'parse' добавлен в TAB_LABELS (доступ управляется в 👥 Доступ), десктопная шапка, мобильное меню и свайп-порядок.
+- Leroy Merlin robots.txt: карточки /productos/... разрешены; запрещены search/filters/cart/login; sitemap-productos1-4.xml доступны для массового импорта (следующий шаг).
