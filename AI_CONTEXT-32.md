@@ -2372,3 +2372,11 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Backend: runParseSource(src) — общая логика run; recordParseOutcome() — сравнение цены с предыдущей → parse_sources.last_price/last_change/last_run_at (📈/📉 бейдж); PATCH /api/parse/sources {id, auto_every_hours} (0/6/12/24/168); POST /api/parse/paste-url {url, html} — «умная» вставка: источник находится/создаётся по URL (для букмарклета и iOS Shortcut; CORS открыт, лимит 300MB достаточен); планировщик parseAutoTick каждые 30 мин обходит источники с auto_every_hours>0 (серверный автозапуск — для sitemap и сайтов без антибота).
 - Frontend: селектор ⏱ автозапуска в карточке источника; бейдж изменения цены (📈 рост оранжевый / 📉 падение зелёный); кнопка «🔗 Авто» — модалка с перетаскиваемым букмарклетом «📌 → В Парсинг» (fetch paste-url с токеном) и инструкцией для iOS Shortcut.
 - SQL: v119-парсинг.sql дополнен alter-колонками auto_every_hours, last_run_at, last_price, last_change — выполнить повторно.
+
+## v121 (2026-09-04) — парсинг по шагам: sitemap-каталог + rate limiting + прокси
+- Шаг 1 UA: PARSE_HEADERS — полный набор браузерных заголовков (Sec-Fetch-*, Accept-Language es-ES и т.д.).
+- Шаг 2 sitemap-first: POST /api/parse/catalog/sync {url} — скачивает sitemap XML (до 40MB), sitemapindex → список файлов, urlset → upsert в parse_products (site,url unique); GET /api/parse/catalog?q=&site= — поиск по словам (ilike). Таблица parse_products в v119-парсинг.sql (выполнить повторно).
+- Шаг 3 rate limiting: parseThrottle() — минимум 2–3,5 с между запросами к одному хосту (parseLastHit Map), используется в sync и prices.
+- Шаг 4 прокси: env PARSE_PROXY=http://user:pass@host:port + опциональный пакет https-proxy-agent (добавить в backend package.json при необходимости); без прокси цены LM всё равно 403 (DataDome банит датацентр-IP) — честное сообщение об ошибке.
+- POST /api/parse/catalog/prices {ids≤20} — последовательный обход с паузами, сохранение price/currency/price_at в parse_products.
+- Frontend ParseTab: блок «🗂 Каталог» — кнопки синка sitemap-productos1-4, поиск по каталогу, карточки товаров (фото/название/цена), 💶 цена одного / 💶×10 первых.

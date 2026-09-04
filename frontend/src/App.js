@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v120 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v121 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2668,6 +2668,14 @@ function ParseTab({ token, isMobileView, canRun }) {
   const [pasteHtml, setPasteHtml] = useState('');
   const [pasteBusy, setPasteBusy] = useState(false);
   const [autoHelpFor, setAutoHelpFor] = useState(null); // v120: модалка «🔗 Авто» с букмарклетом
+  // v121: каталог из sitemap
+  const LM_SITEMAPS = [1, 2, 3, 4].map(n => `https://www.leroymerlin.es/sitemap-productos${n}.xml`);
+  const [catSync, setCatSync] = useState({}); // url -> {status:'run'|'ok'|'err', msg}
+  const [catQ, setCatQ] = useState('');
+  const [catItems, setCatItems] = useState(null); // null = не искали
+  const [catTotal, setCatTotal] = useState(0);
+  const [catBusy, setCatBusy] = useState(false);
+  const [priceBusy, setPriceBusy] = useState({}); // id -> bool
 
   const loadSources = async () => {
     setLoading(true); setErr('');
@@ -2774,6 +2782,49 @@ function ParseTab({ token, isMobileView, canRun }) {
       await loadSources();
     } catch (e) { setErr(e.message); }
   };
+  // v121: синк одного sitemap → parse_products
+  const syncSitemap = async (smUrl) => {
+    if (catSync[smUrl] && catSync[smUrl].status === 'run') return;
+    setCatSync(prev => ({ ...prev, [smUrl]: { status: 'run', msg: 'скачиваю и разбираю XML (файл большой, до 1–2 мин)…' } }));
+    try {
+      const r = await fetch(`${API_URL}/api/parse/catalog/sync?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: smUrl })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      if (j.isIndex) setCatSync(prev => ({ ...prev, [smUrl]: { status: 'ok', msg: `это индекс: ${j.subs.length} файлов — синхронизируйте файлы по одному` } }));
+      else setCatSync(prev => ({ ...prev, [smUrl]: { status: 'ok', msg: `✅ ${j.upserted} товаров в каталоге` } }));
+    } catch (e) { setCatSync(prev => ({ ...prev, [smUrl]: { status: 'err', msg: '❌ ' + e.message } })); }
+  };
+  const catSearch = async () => {
+    setCatBusy(true); setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/parse/catalog?token=${token}&q=${encodeURIComponent(catQ)}&site=www.leroymerlin.es`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      if (j.missing) setErr('Нет таблицы parse_products — выполните v119-парсинг.sql повторно в Supabase');
+      setCatItems(j.products || []); setCatTotal(j.total || 0);
+    } catch (e) { setErr(e.message); }
+    setCatBusy(false);
+  };
+  const fetchPrices = async (ids) => {
+    ids.forEach(id => setPriceBusy(prev => ({ ...prev, [id]: true })));
+    setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/parse/catalog/prices?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      const byId = {};
+      for (const it of (j.results || [])) byId[it.id] = it;
+      setCatItems(prev => (prev || []).map(p => byId[p.id] && byId[p.id].ok ? { ...p, price: byId[p.id].price, currency: byId[p.id].currency, name: byId[p.id].title || p.name } : p));
+      const fails = (j.results || []).filter(x => !x.ok);
+      if (fails.length) setErr('Не удалось получить цены: ' + fails.length + ' шт. Первая ошибка: ' + fails[0].error);
+    } catch (e) { setErr(e.message); }
+    ids.forEach(id => setPriceBusy(prev => ({ ...prev, [id]: false })));
+  };
+
   const bookmarkletHref = () => {
     const api = `${API_URL}/api/parse/paste-url?token=${encodeURIComponent(token)}`;
     return "javascript:(()=>{fetch('" + api + "',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:location.href,html:document.documentElement.outerHTML})}).then(r=>r.json()).then(j=>{if(j.ok){var r=j.result||{};alert('✅ Сохранено: '+(r.title||'')+(r.price!=null?' — '+r.price+' '+(r.currency||'€'):''))}else{alert('❌ '+(j.error||'ошибка'))}}).catch(e=>alert('❌ '+e.message))})()";
@@ -2813,6 +2864,57 @@ function ParseTab({ token, isMobileView, canRun }) {
           <div style={{ marginTop: 8, fontSize: 12, padding: '6px 10px', borderRadius: 8, background: robotsInfo.allowed ? '#e8f8ef' : '#fdecea', border: '1px solid ' + (robotsInfo.allowed ? '#34c759' : '#e74c3c') }}>
             {robotsInfo.allowed ? '✅' : '❌'} robots.txt: {robotsInfo.note}
             {robotsInfo.sitemaps && robotsInfo.sitemaps.length > 0 && <div style={{ color: '#555', marginTop: 2 }}>Sitemaps: {robotsInfo.sitemaps.slice(0, 3).join(' · ')}{robotsInfo.sitemaps.length > 3 ? ` … (всего ${robotsInfo.sitemaps.length})` : ''}</div>}
+          </div>
+        )}
+      </div>
+
+      <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: 12, marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>🗂 Каталог товаров из sitemap (Leroy Merlin)</div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          {LM_SITEMAPS.map(u => (
+            <button key={u} onClick={() => syncSitemap(u)} disabled={catSync[u] && catSync[u].status === 'run'}
+              style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: catSync[u] && catSync[u].status === 'ok' ? '#e8f8ef' : '#fff', fontSize: 12, cursor: 'pointer' }}>
+              {catSync[u] && catSync[u].status === 'run' ? '⏳' : '⬇'} sitemap {u.match(/productos(\d)/) ? u.match(/productos(\d)/)[1] : ''}
+            </button>
+          ))}
+          <span style={{ fontSize: 11, color: '#8e8e93' }}>каждый файл — тысячи товаров, синк 1–2 мин</span>
+        </div>
+        {Object.entries(catSync).map(([u, st]) => (
+          <div key={u} style={{ fontSize: 12, marginTop: 4, color: st.status === 'err' ? '#e74c3c' : st.status === 'ok' ? '#1e7e34' : '#8e8e93' }}>{u.split('/').pop()}: {st.msg}</div>
+        ))}
+        <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+          <input value={catQ} onChange={e => setCatQ(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') catSearch(); }}
+            placeholder="Поиск по каталогу: напр. taladro black decker"
+            style={{ flex: 1, padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
+          <button onClick={catSearch} disabled={catBusy}
+            style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#0071e3', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>{catBusy ? '⏳' : '🔍 Найти'}</button>
+          {catItems && catItems.length > 0 && canRun && (
+            <button onClick={() => fetchPrices(catItems.slice(0, 10).map(p => p.id))} title="Цены первых 10 найденных (с паузами 2–3,5 с)"
+              style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #34c759', background: '#e8f8ef', color: '#1e7e34', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>💶 Цены ×10</button>
+          )}
+        </div>
+        {catItems && (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 6 }}>Найдено: {catTotal} (показано {catItems.length})</div>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobileView ? '1fr' : 'repeat(auto-fill, minmax(320px, 1fr))', gap: 8 }}>
+              {catItems.map(p => (
+                <div key={p.id} style={{ display: 'flex', gap: 8, border: '1px solid #f0f0f2', borderRadius: 10, padding: 8, alignItems: 'center' }}>
+                  {p.image && <img src={p.image} alt="" style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 6, flexShrink: 0 }} />}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <a href={p.url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#0071e3', textDecoration: 'none', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name || p.url}</a>
+                    <div style={{ fontSize: 12, marginTop: 2 }}>
+                      {p.price != null ? <b>{p.price} {p.currency || '€'}</b> : <span style={{ color: '#8e8e93' }}>цена не снята</span>}
+                    </div>
+                  </div>
+                  {canRun && (
+                    <button onClick={() => fetchPrices([p.id])} disabled={!!priceBusy[p.id]} title="Снять цену со страницы товара"
+                      style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer', flexShrink: 0 }}>
+                      {priceBusy[p.id] ? '⏳' : '💶'}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -8905,7 +9007,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-04 · v120 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-04 · v121 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8918,7 +9020,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v120</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v121</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">

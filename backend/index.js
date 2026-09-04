@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v120-2026-09-04', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v121-2026-09-04', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4200,6 +4200,42 @@ const PARSE_SQL = "create table if not exists parse_sources (id uuid primary key
 
 const PARSE_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
+// v121: полный набор браузерных заголовков (шаг 1 — не выглядеть ботом)
+const PARSE_HEADERS = {
+  'User-Agent': PARSE_UA,
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'es-ES,es;q=0.9,en;q=0.7',
+  'Accept-Encoding': 'gzip, deflate, br',
+  'Cache-Control': 'no-cache',
+  'Pragma': 'no-cache',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none',
+  'Sec-Fetch-User': '?1',
+  'Upgrade-Insecure-Requests': '1'
+};
+// v121: шаг 3 — rate limiting: пауза 2–3,5 с между запросами к одному сайту
+const parseSleep = (ms) => new Promise(r => setTimeout(r, ms));
+const parseDelay = () => parseSleep(1500 + Math.random() * 2000);
+const parseLastHit = new Map(); // host -> ts последнего запроса
+async function parseThrottle(url) {
+  let host = '';
+  try { host = new URL(url).hostname; } catch (_) { /* ignore */ }
+  const last = parseLastHit.get(host) || 0;
+  const wait = 2000 + Math.random() * 1500 - (Date.now() - last);
+  if (wait > 0) await parseSleep(wait);
+  parseLastHit.set(host, Date.now());
+}
+// v121: шаг 4 — прокси (env PARSE_PROXY=http://user:pass@host:port); https-proxy-agent опционален
+let HttpsProxyAgent = null;
+try { HttpsProxyAgent = require('https-proxy-agent').HttpsProxyAgent; } catch (_) { /* пакет не установлен */ }
+function parseAxiosOpts(url) {
+  const opts = { headers: PARSE_HEADERS, timeout: 45000, maxContentLength: 12 * 1024 * 1024, validateStatus: () => true };
+  const proxy = process.env.PARSE_PROXY || '';
+  if (proxy && HttpsProxyAgent) { opts.httpsAgent = new HttpsProxyAgent(proxy); opts.proxy = false; }
+  return opts;
+}
+
 // разбор robots.txt: правила для User-agent * + sitemaps + заблокированные UA
 function parseRobots(txt) {
   const lines = String(txt || '').split('\n');
@@ -4392,6 +4428,81 @@ app.post('/api/parse/paste', requireAuth, requireRole('admin', 'manager'), async
     if (ie) throw ie;
     if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Вставка HTML', (src.name || src.url) + (ex.price != null ? ' = ' + ex.price + ' ' + ex.currency : ''), req);
     res.json({ ok: true, result: saved });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ================== v121: каталог товаров из sitemap (шаг 2) + цены с rate limiting ==================
+// Синк ОДНОГО sitemap XML → parse_products (url, name, image). Фронт вызывает для каждого файла по очереди.
+app.post('/api/parse/catalog/sync', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const url = String((req.body && req.body.url) || '').trim();
+    if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'Нужен URL sitemap XML' });
+    const site = new URL(url).hostname;
+    await parseThrottle(url);
+    const r = await axios.get(url, { ...parseAxiosOpts(url), maxContentLength: 40 * 1024 * 1024, responseType: 'text' });
+    if (r.status >= 400) throw new Error('HTTP ' + r.status + ' при загрузке sitemap');
+    const xml = String(r.data || '');
+    if (/<sitemapindex/i.test(xml)) {
+      const subs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/gi)].map(m => m[1].trim());
+      return res.json({ ok: true, isIndex: true, subs });
+    }
+    const items = parseSitemapXml(xml, '', 100000); // без фильтра — весь файл
+    let upserted = 0, errs = 0;
+    for (let i = 0; i < items.length; i += 500) {
+      const rows = items.slice(i, i + 500).map(it => ({ site, url: it.url, name: it.name.slice(0, 300), image: it.image, last_seen: new Date().toISOString() }));
+      const { error } = await supabaseAdmin.from('parse_products').upsert(rows, { onConflict: 'site,url' });
+      if (error) {
+        if (/does not exist/i.test(error.message || '')) return res.status(500).json({ error: 'Нет таблицы parse_products — выполните v119-парсинг.sql повторно' });
+        errs++;
+      } else upserted += rows.length;
+    }
+    if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Синк каталога', `${site}: ${upserted} товаров`, req);
+    res.json({ ok: true, site, total: items.length, upserted, errs });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Поиск по каталогу
+app.get('/api/parse/catalog', requireAuth, tabGuard('list'), async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const site = String(req.query.site || '').trim();
+    let query = supabaseAdmin.from('parse_products').select('*', { count: 'exact' }).order('last_seen', { ascending: false }).limit(Math.min(200, parseInt(req.query.limit || '60', 10) || 60));
+    if (site) query = query.eq('site', site);
+    if (q) {
+      const words = q.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6);
+      for (const w of words) query = query.ilike('name', '%' + w.replace(/[%_]/g, ' ') + '%');
+    }
+    const { data, error, count } = await query;
+    if (error) {
+      if (/does not exist/i.test(error.message || '')) return res.json({ products: [], total: 0, missing: true });
+      throw error;
+    }
+    res.json({ products: data || [], total: count || 0 });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Обновление цен выбранных товаров: последовательно, с паузами 2–3,5 с (шаг 3), через прокси если задан (шаг 4)
+app.post('/api/parse/catalog/prices', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids.slice(0, 20) : [];
+    if (!ids.length) return res.status(400).json({ error: 'Передайте ids (до 20 за раз)' });
+    const { data: products, error } = await supabaseAdmin.from('parse_products').select('*').in('id', ids);
+    if (error) throw error;
+    const out = [];
+    for (const p of (products || [])) {
+      const item = { id: p.id, url: p.url };
+      try {
+        await parseThrottle(p.url);
+        const r = await axios.get(p.url, parseAxiosOpts(p.url));
+        if (r.status === 403) throw new Error(process.env.PARSE_PROXY ? 'HTTP 403 даже через прокси' : 'HTTP 403 (DataDome) — нужен резидентский прокси: задайте PARSE_PROXY на сервере');
+        if (r.status >= 400) throw new Error('HTTP ' + r.status);
+        const ex = extractFromHtml(r.data);
+        item.title = ex.title; item.price = ex.price; item.currency = ex.currency; item.ok = true;
+        await supabaseAdmin.from('parse_products').update({ price: ex.price, currency: ex.currency, price_at: new Date().toISOString(), name: ex.title ? ex.title.slice(0, 300) : p.name, image: ex.image || p.image }).eq('id', p.id);
+      } catch (e2) { item.ok = false; item.error = e2.message; }
+      out.push(item);
+    }
+    res.json({ ok: true, results: out, proxy: !!process.env.PARSE_PROXY });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
