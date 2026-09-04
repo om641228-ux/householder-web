@@ -2333,3 +2333,9 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 
 ## v115.1 (2026-09-04) — fix «Converting circular structure to JSON»
 - onClick кнопок AI-извлечения передавал объект события как startOffset → JSON.stringify падал. aiExtract теперь принимает только число; кнопки вызывают () => aiExtract().
+
+## v116 (2026-09-04)
+- Мультивыбор файлов: новая кнопка «📝 Распознать» в панели действий (рядом с «Переместить в папку…» / «Ссылка» / «Удалить»).
+- recognizeSelectedDocs(): распознаёт выбранные фото/PDF пачкой — оригинал + перевод на русский (recognizeFilePages → /api/docs/recognize-text), результат сохраняется в карточке файла (saveDocOcr + docDate v59). Уже распознанные (m.ocr.pages) пропускаются.
+- Прогресс-модалка docsOcrBatch {total, done, skipped, errors[], current, status}: прогресс-бар, имя текущего файла, в конце список ошибок и кнопка «Готово» (снимает выбор).
+- Бэкенд не менялся (build v115.1-2026-09-04).

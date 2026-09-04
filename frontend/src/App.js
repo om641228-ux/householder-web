@@ -1176,6 +1176,7 @@ function DocsTab({ user, token }) {
   const [docsBusy, setDocsBusy] = useState(false);
   const [docsUpload, setDocsUpload] = useState(null); // v68.4: {phase:'prepare'|'upload'|'ocr', percent, done, total, currentFile}
   const [docsMove, setDocsMove] = useState(null); // v68.8.1: {total, target, status:'run'|'ok'|'err', msg}
+  const [docsOcrBatch, setDocsOcrBatch] = useState(null); // v116: пакетное распознавание {total, done, skipped, errors[], current, status}
   const docsXhrRef = useRef(null);   // v68.4: активный XHR — для кнопки «Остановить»
   const docsStopRef = useRef(false); // v68.4: флаг остановки цикла распознавания
   const [docsViewer, setDocsViewer] = useState(null); // {url, kind, name}
@@ -1710,6 +1711,38 @@ function DocsTab({ user, token }) {
     } catch (e) { alert('Не удалилось: ' + e.message); }
   };
 
+  // v116: распознать ВЫБРАННЫЕ файлы (оригинал + перевод на русский), текст сохраняется в карточке файла
+  const recognizeSelectedDocs = async () => {
+    if (docsOcrBatch && docsOcrBatch.status === 'run') return;
+    const map = {};
+    Object.values(sections).forEach(list => (list || []).forEach(e => { const m = docMediaOf(e); if (m && m.url) map[m.url] = m; }));
+    const items = selectedUrls.map(u => map[u]).filter(Boolean)
+      .filter(m => m.kind === 'photo' || m.kind === 'doc');
+    if (!items.length) return alert('Среди выбранных нет фото/PDF для распознавания');
+    const todo = items.filter(m => !(m.ocr && Array.isArray(m.ocr.pages) && m.ocr.pages.length));
+    const skipped = items.length - todo.length;
+    if (!todo.length) {
+      setDocsOcrBatch({ total: items.length, done: 0, skipped, errors: [], current: '', status: 'ok' });
+      return;
+    }
+    if (!window.confirm(`Распознать выбранные файлы: ${todo.length} шт.\n(оригинал + перевод на русский; уже распознанные пропускаются: ${skipped})\n\nЭто может занять несколько минут. Продолжить?`)) return;
+    setDocsOcrBatch({ total: todo.length, done: 0, skipped, errors: [], current: '', status: 'run' });
+    let done = 0; const errors = [];
+    for (const m of todo) {
+      setDocsOcrBatch(prev => prev ? { ...prev, current: m.name || 'Файл' } : prev);
+      try {
+        const { pages } = await recognizeFilePages(m);
+        const docDate = parseDocDateFromText((pages || []).map(p => p.original || '').join('\n'));
+        await saveDocOcr(docSection, m.url, pages, docDate);
+        done++;
+      } catch (e) {
+        errors.push(`${m.name || 'Файл'}: ${e.message}`);
+      }
+      setDocsOcrBatch(prev => prev ? { ...prev, done, errors: [...errors] } : prev);
+    }
+    setDocsOcrBatch(prev => prev ? { ...prev, status: 'ok', current: '' } : prev);
+  };
+
   // v57.6/v57.7: карточка «фото + текст по страницам». Если текст уже распознан и сохранён —
   // открываем мгновенно; иначе распознаём и СОХРАНЯЕМ в карточке файла (оригинал + перевод)
   const recognizeDoc = async (entry) => {
@@ -2076,6 +2109,8 @@ function DocsTab({ user, token }) {
                 </React.Fragment>
               ))}
             </select>
+            <button onClick={recognizeSelectedDocs} disabled={!selectedUrls.length || (docsOcrBatch && docsOcrBatch.status === 'run')} title="Распознать текст выбранных файлов (оригинал + перевод на русский, сохраняется в карточке)"
+              style={{ padding: '5px 14px', borderRadius: 980, border: 'none', background: selectedUrls.length ? '#34c759' : '#f0f0f2', color: selectedUrls.length ? '#fff' : '#8e8e93', fontWeight: 600, fontSize: 12.5, cursor: selectedUrls.length ? 'pointer' : 'not-allowed' }}>📝 Распознать</button>
             <button onClick={shareSelectedDocs} disabled={!selectedUrls.length} title="Публичная ссылка на выбранные файлы"
               style={{ padding: '5px 14px', borderRadius: 980, border: 'none', background: selectedUrls.length ? '#0071e3' : '#f0f0f2', color: selectedUrls.length ? '#fff' : '#8e8e93', fontWeight: 600, fontSize: 12.5, cursor: selectedUrls.length ? 'pointer' : 'not-allowed' }}>🔗 Ссылка</button>
             <button onClick={removeSelectedDocs} disabled={!selectedUrls.length}
@@ -2128,6 +2163,33 @@ function DocsTab({ user, token }) {
         </div>
       </div>
 
+      {docsOcrBatch && (
+        <div onClick={() => { if (docsOcrBatch.status !== 'run') setDocsOcrBatch(null); }} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 205, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: '18px 20px', width: 380, maxWidth: '92vw', boxShadow: '0 12px 40px rgba(0,0,0,0.25)' }}>
+            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>
+              {docsOcrBatch.status === 'run' && '📝 Распознавание файлов…'}
+              {docsOcrBatch.status === 'ok' && '✅ Распознавание завершено'}
+            </div>
+            <div style={{ fontSize: 13, color: '#555', marginBottom: 4 }}>Готово: {docsOcrBatch.done} из {docsOcrBatch.total}{docsOcrBatch.skipped ? ` · пропущено (уже распознаны): ${docsOcrBatch.skipped}` : ''}</div>
+            {docsOcrBatch.status === 'run' && (
+              <>
+                <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{docsOcrBatch.current}</div>
+                <div style={{ height: 6, borderRadius: 3, background: '#f0f0f2', overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${docsOcrBatch.total ? Math.round(docsOcrBatch.done / docsOcrBatch.total * 100) : 0}%`, background: '#34c759', transition: 'width .3s' }} />
+                </div>
+              </>
+            )}
+            {docsOcrBatch.status === 'ok' && docsOcrBatch.errors.length > 0 && (
+              <div style={{ marginTop: 8, maxHeight: 120, overflowY: 'auto', fontSize: 12, color: '#e74c3c' }}>
+                {docsOcrBatch.errors.map((er, i) => <div key={i}>❌ {er}</div>)}
+              </div>
+            )}
+            {docsOcrBatch.status === 'ok' && (
+              <button onClick={() => { setDocsOcrBatch(null); setDocsSelected({}); setDocsSelectMode(false); }} style={{ marginTop: 12, width: '100%', padding: '8px', borderRadius: 980, border: 'none', background: '#0071e3', color: '#fff', fontWeight: 600, cursor: 'pointer' }}>Готово</button>
+            )}
+          </div>
+        </div>
+      )}
       {docsMove && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 410, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div style={{ background: '#fff', borderRadius: 16, padding: '24px 28px', width: 'min(420px, 92vw)', boxShadow: '0 20px 60px rgba(0,0,0,0.35)', textAlign: 'center' }}>
@@ -2164,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v115.1 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v116 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -8461,7 +8523,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-04 · v115.1 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-04 · v116 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8474,7 +8536,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v115.1</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v116</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">
