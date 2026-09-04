@@ -2,10 +2,11 @@
 <html lang="ru">
 <head><meta charset="utf-8"><style>
   body { font: 13px -apple-system, sans-serif; width: 300px; padding: 12px; }
-  input { width: 100%; box-sizing: border-box; padding: 7px; margin: 3px 0 8px; border: 1px solid #d0d0d5; border-radius: 7px; }
+  input, select { width: 100%; box-sizing: border-box; padding: 7px; margin: 3px 0 8px; border: 1px solid #d0d0d5; border-radius: 7px; }
   button { width: 100%; padding: 9px; border: none; border-radius: 8px; background: #0071e3; color: #fff; font-weight: 700; cursor: pointer; margin-top: 4px; }
+  button.all { background: #7c3aed; }
   button.stop { background: #e74c3c; }
-  #st { margin-top: 8px; font-size: 12px; color: #555; white-space: pre-wrap; }
+  #st { margin-top: 8px; font-size: 12px; color: #555; white-space: pre-wrap; max-height: 130px; overflow-y: auto; }
 </style></head>
 <body>
   <b>⚙️ Подключение</b>
@@ -13,9 +14,25 @@
   <input id="token" placeholder="Токен (из адресной строки ?token=…)">
   <button id="save">💾 Сохранить</button>
   <hr>
-  <b>💶 Сбор цен (товары без цены)</b>
-  <button id="go">▶ Собрать 20 цен</button>
+  <b>💶 Сбор цен</b>
+  <select id="mode">
+    <option value="pending">🆕 Товары без цены</option>
+    <option value="stale">🔄 Обновить старые цены</option>
+  </select>
+  <input id="days" type="number" min="1" max="90" value="7" placeholder="Старше N дней (для режима обновления)">
+  <input id="batch" type="number" min="1" max="100" value="20" placeholder="Размер пачки (1–100)">
+  <button id="go">▶ Собрать пачку</button>
+  <button id="goall" class="all">▶▶ Собрать ВСЁ (до конца очереди)</button>
   <button id="stop" class="stop">⏹ Остановить</button>
+  <hr>
+  <b>⏰ Автозапуск</b>
+  <select id="sched">
+    <option value="0">выключен</option>
+    <option value="6">каждые 6 часов</option>
+    <option value="12">каждые 12 часов</option>
+    <option value="24">каждые 24 часа</option>
+  </select>
+  <button id="schedSave">💾 Применить расписание</button>
   <div id="st"></div>
   <script src="popup.js"></script>
 </body>

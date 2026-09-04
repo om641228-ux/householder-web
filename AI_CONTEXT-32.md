@@ -2402,3 +2402,10 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 ## v123.1 (2026-09-05) — каталог: автозагрузка из базы + фильтр «с ценой»
 - Бэкенд GET /api/parse/catalog: параметр priced=1 (price not null, сортировка по price_at desc); ответ теперь включает pricedTotal (всего товаров с ценой по сайту). build v123.1-2026-09-05.
 - Фронт ParseTab: catPriced/catPricedTotal state; catSearch(over={q,priced}) с переопределениями; useEffect автозагрузки каталога из parse_products при открытии вкладки (sitemap-синк нужен только для пополнения); кнопка-переключатель «💶 С ценой: N» рядом с «Найти»; строка «Найдено» показывает счётчик цен.
+
+## v124 (2026-09-05) — автоматизация сбора цен: непрерывный режим, планировщик, история цен
+- Бэкенд: ext-price теперь фиксирует изменение цены — при расхождении пишет price_prev/price_changed_at и возвращает changed {from,to}; новый GET /api/parse/catalog/stale-prices?days&limit (цена старше N дней, по price_at asc, до 100). build v124-2026-09-05.
+- SQL (дописано, ПЕРЕЗАПУСТИТЬ): alter parse_products add price_prev numeric, price_changed_at timestamptz.
+- Расширение v1.1: режимы «🆕 без цены» / «🔄 обновить старые (>N дней)»; «▶ Собрать пачку» и «▶▶ Собрать ВСЁ» (continuous: пачки до конца очереди, пауза 3–5 с между пачками); планировщик chrome.alarms каждые 6/12/24 ч (permission alarms, onStartup восстановление); прогресс со счётчиками ок/изм, 📈/📉 строки при изменении цены.
+- Фронт: бейдж в карточке «📈/📉 было X» при price_prev != price.
+- ВАЖНО: MV3 service worker может засыпать — continuous-режим держится на активности вкладок; планировщик работает только пока открыт Chrome.

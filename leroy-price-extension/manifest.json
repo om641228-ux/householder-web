@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Householder — сборщик цен",
-  "version": "1.0",
+  "version": "1.1",
   "description": "Открывает товары из каталога Householder в фоновых вкладках и отправляет точные цены в систему.",
-  "permissions": ["tabs", "scripting", "storage"],
+  "permissions": ["tabs", "scripting", "storage", "alarms"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },
   "action": { "default_popup": "popup.html", "default_title": "Сбор цен" }

@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v123.1-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v124-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4632,6 +4632,22 @@ app.get('/api/parse/catalog/pending-prices', requireAuth, async (req, res) => {
 });
 
 // v123 (Уровень 3): приём цены из расширения браузера (JSON-LD уже извлечён на странице)
+// v124: товары с устаревшей ценой (для переснятия расширением, режим «обновление»)
+app.get('/api/parse/catalog/stale-prices', requireAuth, async (req, res) => {
+  try {
+    const days = Math.min(90, Math.max(1, parseInt(req.query.days || '7', 10) || 7));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '30', 10) || 30));
+    const site = String(req.query.site || '').trim();
+    const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+    let q = supabaseAdmin.from('parse_products').select('id, url, name, article, price', { count: 'exact' })
+      .not('price', 'is', null).lt('price_at', cutoff).order('price_at', { ascending: true }).limit(limit);
+    if (site) q = q.eq('site', site);
+    const { data, error, count } = await q;
+    if (error) throw error;
+    res.json({ products: data || [], total: count || 0, days });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/parse/ext-price', requireAuth, async (req, res) => {
   try {
     const url = String((req.body && req.body.url) || '').trim();
@@ -4652,9 +4668,20 @@ app.post('/api/parse/ext-price', requireAuth, async (req, res) => {
       upd.price_at = new Date().toISOString(); upd.price_source = 'extension';
     }
     Object.keys(upd).forEach(k => upd[k] === undefined && delete upd[k]);
+    // v124: отслеживание изменения цены — запоминаем предыдущую
+    let changed = null;
+    if (price != null) {
+      try {
+        const { data: old0 } = await supabaseAdmin.from('parse_products').select('price').eq('site', u.hostname).eq('url', url).maybeSingle();
+        if (old0 && old0.price != null && Math.abs(Number(old0.price) - price) > 0.001) {
+          upd.price_prev = Number(old0.price); upd.price_changed_at = new Date().toISOString();
+          changed = { from: Number(old0.price), to: price };
+        }
+      } catch (e) { /* колонок ещё нет — работаем без истории */ }
+    }
     const { data, error } = await supabaseAdmin.from('parse_products').upsert(upd, { onConflict: 'site,url' }).select().single();
     if (error) throw error;
-    res.json({ ok: true, product: data });
+    res.json({ ok: true, product: data, changed });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
