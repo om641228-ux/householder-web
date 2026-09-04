@@ -2164,7 +2164,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v115 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v115.1 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2669,7 +2669,9 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
   const aiPauseRef = useRef(false);
   const aiAbortRef = useRef(false);
   const [aiPaused, setAiPaused] = useState(false);
-  const aiExtract = async (startOffset) => {
+  const aiExtract = async (startOffsetArg) => {
+    // v115.1: из onClick сюда попадает объект события — отсекаем всё, кроме числа
+    const startOffset = (typeof startOffsetArg === 'number' && isFinite(startOffsetArg)) ? startOffsetArg : null;
     setAiBusy(true); setAiPaused(false); aiPauseRef.current = false; aiAbortRef.current = false;
     setErr('');
     if (startOffset == null) setAiProg({ done: 0, total: null, added: 0, links: 0 });
@@ -2844,7 +2846,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
           </button>
         )}
         {canBuild && (
-          <button onClick={aiExtract} disabled={aiBusy || building}
+          <button onClick={() => aiExtract()} disabled={aiBusy || building}
             title="AI (Kimi) читает тексты всех документов — чеков, PDF, выписок, деклараций — извлекает сущности и достраивает связи"
             style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: aiBusy ? '#d9ccee' : '#7c3aed', color: '#fff', fontWeight: 700, fontSize: 14, cursor: aiBusy ? 'wait' : 'pointer' }}>
             {aiBusy ? `🤖 AI читает… ${aiProg ? aiProg.done + (aiProg.total ? '/' + aiProg.total : '') : ''}` : '🤖 AI-извлечение'}
@@ -2970,7 +2972,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
                 </span>
               ))}
               <div style={{ marginTop: 4 }}>
-                <button onClick={aiExtract} disabled={aiBusy}
+                <button onClick={() => aiExtract()} disabled={aiBusy}
                   style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: '#7c3aed', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
                   ▶ Извлечь эти типы из всех документов
                 </button>
@@ -8459,7 +8461,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-04 · v115 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-04 · v115.1 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8472,7 +8474,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v115</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v115.1</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">
