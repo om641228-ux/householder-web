@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v117-2026-09-04', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v117.1-2026-09-04', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4628,6 +4628,10 @@ app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async
     // v111: область графа (?scope=<uuid>); без параметра — «Все документы» (ZERO_SCOPE, старое поведение)
     const scopeId = String(req.query.scope || '').trim() || ZERO_SCOPE;
     const scoped = await hasScopeSupport();
+    // v117.1: область запрошена, а graph_scopes недоступна — ошибка, а не молчаливая запись в «Все документы»
+    if (scopeId !== ZERO_SCOPE && !scoped) {
+      return res.status(500).json({ error: 'Области графа недоступны (нет таблицы graph_scopes). Граф НЕ построен, чтобы не смешать области. Выполните v111-области.sql и повторите.' });
+    }
     const scopeFilter = scoped ? await getScopeFilter(scopeId) : null;
     stats.scope = scopeId;
     const ocEnt = scoped ? 'type,value,scope_id' : 'type,value';
@@ -4846,7 +4850,14 @@ app.get('/api/links/entities', requireAuth, tabGuard('list'), async (req, res) =
       const { data: de } = await supabaseAdmin.from('doc_entities').select('entity_id').in('entity_id', ids.slice(i, i + 200));
       for (const r of (de || [])) counts[r.entity_id] = (counts[r.entity_id] || 0) + 1;
     }
-    res.json({ entities: (data || []).map(e => ({ ...e, typeLabel: ENTITY_TYPE_LABELS[e.type] || e.type, docs: counts[e.id] || 0 })) });
+    const out = (data || []).map(e => ({ ...e, typeLabel: ENTITY_TYPE_LABELS[e.type] || e.type, docs: counts[e.id] || 0 }));
+    // v117.1: если в запрошенной области пусто — подскажем, есть ли сущности в других областях
+    let elsewhere = null;
+    if (!out.length && scopeId && (await hasScopeSupport())) {
+      const { count } = await supabaseAdmin.from('entities').select('id', { count: 'exact', head: true }).neq('scope_id', scopeId === 'all' ? ZERO_SCOPE : scopeId);
+      elsewhere = count || 0;
+    }
+    res.json({ entities: out, elsewhere });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

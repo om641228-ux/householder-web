@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v117 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v117.1 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2673,6 +2673,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
   const [nsExclude, setNsExclude] = useState('');
   // v112: дерево источников — визуальный выбор ✅ включить / ❌ игнорировать
   const [scopeTree, setScopeTree] = useState(null);
+  const [entElsewhere, setEntElsewhere] = useState(null); // v117.1: сущности в других областях
   const [treeSel, setTreeSel] = useState({ objects: {}, docTypes: {}, ibans: {}, cps: {} });
   const loadTree = async () => {
     try {
@@ -2706,6 +2707,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
       setEntities(j.entities || []);
+      setEntElsewhere(typeof j.elsewhere === 'number' ? j.elsewhere : null); // v117.1
     } catch (e) { setErr(e.message); }
     setLoading(false);
   };
@@ -2719,7 +2721,8 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
       setReport(j.stats);
-      await loadEntities(q);
+      setQ(''); // v117.1: старый текст поиска мог скрывать свежие сущности
+      await loadEntities('');
     } catch (e) { setErr(e.message); }
     setBuilding(false);
   };
@@ -2923,7 +2926,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
         {!isMobileView && <h2 style={{ margin: 0 }}>🔗 Связи документов</h2>}
         <input type="text" value={q} onChange={e => setQ(e.target.value)} placeholder="Поиск сущности: компания, IBAN, № фактуры…"
           style={{ flex: '1 1 220px', minWidth: 0, padding: '8px 12px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 14 }} />
-        <select value={scopeId} onChange={e => { setScopeId(e.target.value); setGraph(null); setReport(null); setAiProg(null); }}
+        <select value={scopeId} onChange={e => { setScopeId(e.target.value); setGraph(null); setReport(null); setAiProg(null); setEntElsewhere(null); }}
           title="Область графа: изолированный граф по выбранным документам"
           style={{ padding: '8px 10px', borderRadius: 8, border: scopeId ? '2px solid #7c3aed' : '1px solid #d0d0d5', fontSize: 13, background: '#fff', maxWidth: 200 }}>
           <option value="">🌐 Все документы</option>
@@ -3149,7 +3152,9 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
       {loading && <div style={{ color: '#8e8e93', fontSize: 13, marginBottom: 8 }}>⏳ Загружаю сущности…</div>}
       {!loading && entities.length === 0 && !err && !graph && (
         <div style={{ color: '#8e8e93', fontSize: 14, margin: '20px 0' }}>
-          Сущностей пока нет. Нажмите «🔄 Построить связи» — граф соберётся из всех распознанных документов (без расхода AI-квоты).
+          {entElsewhere
+            ? <>В этой области сущностей нет, но в других областях есть <b>{entElsewhere}</b>.<br />Переключите область в селекторе выше (🌐 Все документы) или нажмите «🔄 Построить связи» для ТЕКУЩЕЙ области — граф строится отдельно в каждой области.</>
+            : <>Сущностей пока нет. Нажмите «🔄 Построить связи» — граф соберётся из всех распознанных документов (без расхода AI-квоты).</>}
         </div>
       )}
       <div style={{ margin: '0 0 8px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -8578,7 +8583,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-04 · v117 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-04 · v117.1 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8591,7 +8596,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v117</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v117.1</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">
