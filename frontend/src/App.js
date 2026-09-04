@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v117.1 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v118 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2734,15 +2734,18 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
   const aiPauseRef = useRef(false);
   const aiAbortRef = useRef(false);
   const [aiPaused, setAiPaused] = useState(false);
+  const [aiFreeMode, setAiFreeMode] = useState(false); // v118: AI сам придумывает типы сущностей
   const aiExtract = async (startOffsetArg) => {
     // v115.1: из onClick сюда попадает объект события — отсекаем всё, кроме числа
     const startOffset = (typeof startOffsetArg === 'number' && isFinite(startOffsetArg)) ? startOffsetArg : null;
     setAiBusy(true); setAiPaused(false); aiPauseRef.current = false; aiAbortRef.current = false;
     setErr('');
-    if (startOffset == null) setAiProg({ done: 0, total: null, added: 0, links: 0 });
+    if (startOffset == null) setAiProg({ done: 0, total: null, added: 0, links: 0, newTypes: 0, rels: 0 });
     let offset = startOffset || 0, done = false;
     let added = (aiProg && startOffset) ? aiProg.added : 0;
     let links = (aiProg && startOffset) ? aiProg.links : 0;
+    let newTypes = (aiProg && startOffset) ? (aiProg.newTypes || 0) : 0;
+    let rels = (aiProg && startOffset) ? (aiProg.rels || 0) : 0;
     let aborted = false;
     try {
       while (!done) {
@@ -2751,14 +2754,16 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
         if (aiAbortRef.current) { aborted = true; break; }
         const r = await fetch(`${API_URL}/api/links/ai-extract?token=${token}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ offset, limit: 6, scope: scopeId || undefined, extraTypes: (aiTypes && aiTypes.length) ? aiTypes : undefined })
+          body: JSON.stringify({ offset, limit: 6, scope: scopeId || undefined, freeMode: aiFreeMode || undefined, extraTypes: (aiTypes && aiTypes.length) ? aiTypes : undefined })
         });
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
         offset = j.nextOffset; done = j.done;
         added += (j.stats && j.stats.entitiesAdded) || 0;
         links += (j.stats && j.stats.linksAdded) || 0;
-        setAiProg({ done: offset, total: j.total, added, links });
+        newTypes += (j.stats && j.stats.newTypes) || 0;
+        rels += (j.stats && j.stats.relsAdded) || 0;
+        setAiProg({ done: offset, total: j.total, added, links, newTypes, rels });
       }
       if (!aborted) await loadEntities(q);
     } catch (e) { setErr(e.message); }
@@ -2947,11 +2952,18 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
           </button>
         )}
         {canBuild && (
-          <button onClick={() => aiExtract()} disabled={aiBusy || building}
-            title="AI (Kimi) читает тексты всех документов — чеков, PDF, выписок, деклараций — извлекает сущности и достраивает связи"
-            style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: aiBusy ? '#d9ccee' : '#7c3aed', color: '#fff', fontWeight: 700, fontSize: 14, cursor: aiBusy ? 'wait' : 'pointer' }}>
-            {aiBusy ? `🤖 AI читает… ${aiProg ? aiProg.done + (aiProg.total ? '/' + aiProg.total : '') : ''}` : '🤖 AI-извлечение'}
-          </button>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 0 }}>
+            <button onClick={() => aiExtract()} disabled={aiBusy || building}
+              title={aiFreeMode ? 'СВОБОДНЫЙ режим: AI сам придумывает типы сущностей и связи между ними' : 'Режим схемы: AI извлекает сущности по заданному списку типов'}
+              style={{ padding: '8px 16px', borderRadius: '8px 0 0 8px', border: 'none', background: aiBusy ? '#d9ccee' : '#7c3aed', color: '#fff', fontWeight: 700, fontSize: 14, cursor: aiBusy ? 'wait' : 'pointer' }}>
+              {aiBusy ? `🤖 AI читает… ${aiProg ? aiProg.done + (aiProg.total ? '/' + aiProg.total : '') : ''}` : (aiFreeMode ? '🤖 AI-извлечение · свободный' : '🤖 AI-извлечение')}
+            </button>
+            <button onClick={() => !aiBusy && setAiFreeMode(v => !v)} disabled={aiBusy}
+              title={aiFreeMode ? 'Свободный режим ВКЛ: AI сам генерирует типы (клик — перейти к схеме)' : 'Режим схемы: типы заданы (клик — свободный режим, AI сам придумывает типы)'}
+              style={{ padding: '8px 10px', borderRadius: '0 8px 8px 0', border: 'none', borderLeft: '1px solid rgba(255,255,255,0.35)', background: aiBusy ? '#d9ccee' : (aiFreeMode ? '#5b21b6' : '#8b6cc9'), color: '#fff', fontWeight: 700, fontSize: 12, cursor: aiBusy ? 'not-allowed' : 'pointer' }}>
+              {aiFreeMode ? '🧠 свободный' : '🧷 схема'}
+            </button>
+          </span>
         )}
         {canBuild && (
           <button onClick={aiDiscover} disabled={aiDiscovering || aiBusy || building}
@@ -3113,7 +3125,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
       )}
       {aiProg && (aiBusy || aiProg.done > 0) && (
         <div style={{ background: '#f5f0fa', border: '1px solid #7c3aed', borderRadius: 10, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>
-          🤖 AI-извлечение: обработано {aiProg.done}{aiProg.total ? ' из ' + aiProg.total : ''} документов · сущностей добавлено {aiProg.added} · AI-связей {aiProg.links}
+          🤖 AI-извлечение: обработано {aiProg.done}{aiProg.total ? ' из ' + aiProg.total : ''} документов · сущностей добавлено {aiProg.added} · AI-связей {aiProg.links}{aiProg.newTypes ? ` · 🧠 новых типов: ${aiProg.newTypes}` : ''}{aiProg.rels ? ` · связей сущностей: ${aiProg.rels}` : ''}
           {aiBusy && (
             <span style={{ marginLeft: 10 }}>
               <button onClick={aiPauseResume}
@@ -8583,7 +8595,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-04 · v117.1 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-04 · v118 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8596,7 +8608,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v117.1</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v118</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">

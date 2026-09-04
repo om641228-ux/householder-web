@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v117.1-2026-09-04', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v118-2026-09-04', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4399,6 +4399,64 @@ ${schemaJson}
   }
 }
 
+// v118: свободный режим — AI САМ придумывает типы сущностей и связей.
+// Реестр известных типов (память между батчами): базовые + из БД + накопленные за сессию.
+const aiFreeTypes = new Map(); // type -> label (сессионный кэш)
+const BASE_TYPE_LABELS = { person: 'Персона', company: 'Компания', tax_id: 'Налоговый №', iban: 'Счёт IBAN', invoice_no: '№ фактуры', contract_no: '№ договора', poa: 'Доверенность', cups: 'CUPS', meter: 'Счётчик' };
+async function getKnownFreeTypes() {
+  const known = new Map(Object.entries(BASE_TYPE_LABELS));
+  try {
+    const { data } = await supabaseAdmin.from('entities').select('type, label').limit(2000);
+    for (const r of (data || [])) {
+      const t = String(r.type || '');
+      if (t && !known.has(t)) known.set(t, ENTITY_TYPE_LABELS[t] || t);
+    }
+  } catch (_) { /* ignore */ }
+  for (const [t, l] of aiFreeTypes) known.set(t, l);
+  return known;
+}
+async function aiExtractEntitiesFree(text, knownTypes) {
+  const cfg = OPENAI_COMPAT_PROVIDERS.kimi;
+  if (!cfg || !cfg.apiKey) throw new Error('Kimi API key not configured');
+  const knownStr = [...knownTypes.entries()].map(([t, l]) => `${t} (${l})`).join(', ');
+  const prompt = `Ты — аналитик документов (Испания: чеки, фактуры, договоры, доверенности, банковские выписки, налоговые декларации). Твоя задача — САМОСТОЯТЕЛЬНО найти в тексте все значимые сущности и связи между ними.
+Верни СТРОГО JSON без markdown:
+{"entities":[{"type":"latin_snake_case","type_label":"Русское название типа","value":"нормализованное значение","label":"как в тексте"}],"relations":[{"from":"value сущности","to":"value сущности","relation":"краткое название связи по-русски"}]}
+Правила:
+- Только значения, ЯВНО присутствующие в тексте. Ничего не выдумывай.
+- Уже известные типы (используй их в первую очередь): ${knownStr}.
+- Новый тип создавай ТОЛЬКО если ни один известный не подходит; type — короткий snake_case на латинице.
+- relations — только между сущностями из твоего же списка entities (from/to = их value).
+- Не более 20 сущностей и 15 связей на документ.
+
+Текст документа:
+` + String(text || '').slice(0, 12000);
+  const body = {
+    model: cfg.defaultModel,
+    messages: [{ role: 'user', content: prompt }],
+    max_completion_tokens: 4096,
+    reasoning_effort: 'low',
+    response_format: { type: 'json_object' }
+  };
+  const res = await axios.post(`${cfg.baseURL}/chat/completions`, body, {
+    headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', ...cfg.extraHeaders },
+    timeout: 120000
+  });
+  const content = res.data?.choices?.[0]?.message?.content || '{}';
+  let j = {};
+  try { j = JSON.parse(content); } catch (_) { const m = content.match(/\{[\s\S]*\}/); if (m) { try { j = JSON.parse(m[0]); } catch (_) { /* ignore */ } } }
+  const cleanType = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
+  const entities = (Array.isArray(j.entities) ? j.entities : [])
+    .map(e => ({ type: cleanType(e && e.type), typeLabel: String((e && e.type_label) || '').slice(0, 60), value: String((e && e.value) || '').trim(), label: String((e && e.label) || (e && e.value) || '').slice(0, 200) }))
+    .filter(e => e.type.length >= 2 && e.value.length >= 2 && e.value.length <= 120)
+    .slice(0, 20);
+  const relations = (Array.isArray(j.relations) ? j.relations : [])
+    .map(r => ({ from: String((r && r.from) || '').trim(), to: String((r && r.to) || '').trim(), relation: String((r && r.relation) || 'связано').slice(0, 60) }))
+    .filter(r => r.from && r.to && r.from !== r.to)
+    .slice(0, 15);
+  return { entities, relations };
+}
+
 // v114 Фаза 1: AI-разведка — какие типы сущностей вообще есть в ЭТОЙ базе документов
 let aiDiscoveredTypes = []; // кэш процесса (переоткрывается кнопкой «AI-архитектор»)
 app.post('/api/links/ai-discover', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
@@ -4534,6 +4592,8 @@ app.post('/api/links/ai-extract', requireAuth, requireRole('admin', 'manager'), 
     // v114: типы из тела запроса (клиент после разведки) или из кэша разведки
     const bodyTypes = (req.body && Array.isArray(req.body.extraTypes)) ? req.body.extraTypes : null;
     const customTypes = (bodyTypes || aiDiscoveredTypes || []).filter(t => t && /^[a-z0-9_]{2,40}$/i.test(t.type || '')).slice(0, 8);
+    const freeMode = !!(req.body && req.body.freeMode); // v118: AI сам придумывает типы
+    const knownFree = freeMode ? await getKnownFreeTypes() : null;
     const withScope = (row) => scoped ? { ...row, scope_id: scopeId } : row;
     const ocEnt = scoped ? 'type,value,scope_id' : 'type,value';
     const ocDocLink = scoped ? 'doc_a,doc_b,link_type,scope_id' : 'doc_a,doc_b,link_type';
@@ -4544,12 +4604,14 @@ app.post('/api/links/ai-extract', requireAuth, requireRole('admin', 'manager'), 
     const docs = scopeFilter ? (docsRaw || []).filter(r => receiptInScope(r, scopeFilter)) : docsRaw;
     const { count } = await supabaseAdmin.from('receipts').select('id', { count: 'exact', head: true }).not('raw_text', 'is', null);
 
-    const stats = { processed: 0, entitiesAdded: 0, linksAdded: 0, errors: [] };
+    const stats = { processed: 0, entitiesAdded: 0, linksAdded: 0, newTypes: 0, relsAdded: 0, errors: [] };
     const deRows = [];
     const touchedEnts = new Map(); // entity_id -> type
+    const entLinkRows = []; // v118: свободные связи сущностей от AI
+    const ocEntLink = scoped ? 'entity_a,entity_b,link_type,scope_id' : 'entity_a,entity_b,link_type';
     for (const d of (docs || [])) {
       try {
-        const ex = await aiExtractEntitiesFromText(d.raw_text, customTypes);
+        let exRelations = [];
         const items = [];
         const seenV = new Set();
         const push = (type, v) => {
@@ -4559,20 +4621,47 @@ app.post('/api/links/ai-extract', requireAuth, requireRole('admin', 'manager'), 
           if (seenV.has(k)) return; seenV.add(k);
           items.push({ type, value: nv, label: String(v).slice(0, 200) });
         };
-        (ex.persons || []).forEach(v => push('person', v));
-        (ex.companies || []).forEach(v => push('company', v));
-        (ex.tax_ids || []).forEach(v => push('tax_id', v));
-        (ex.ibans || []).forEach(v => push('iban', v));
-        (ex.invoice_numbers || []).forEach(v => push('invoice_no', v));
-        (ex.contracts || []).forEach(v => push('contract_no', v));
-        (ex.poa_numbers || []).forEach(v => push('poa', v));
-        (ex.cups || []).forEach(v => push('cups', v));
-        (ex.meters || []).forEach(v => push('meter', v));
-        for (const t of customTypes) (ex[t.type] || []).forEach(v => push(t.type, v)); // v114: AI-открытые типы
+        if (freeMode) {
+          // v118: свободный режим — AI сам определяет типы
+          const fr = await aiExtractEntitiesFree(d.raw_text, knownFree);
+          exRelations = fr.relations || [];
+          for (const e of (fr.entities || [])) {
+            if (!knownFree.has(e.type)) {
+              knownFree.set(e.type, e.typeLabel || e.type);
+              aiFreeTypes.set(e.type, e.typeLabel || e.type);
+              stats.newTypes++;
+            }
+            push(e.type, e.value);
+          }
+        } else {
+          const ex = await aiExtractEntitiesFromText(d.raw_text, customTypes);
+          (ex.persons || []).forEach(v => push('person', v));
+          (ex.companies || []).forEach(v => push('company', v));
+          (ex.tax_ids || []).forEach(v => push('tax_id', v));
+          (ex.ibans || []).forEach(v => push('iban', v));
+          (ex.invoice_numbers || []).forEach(v => push('invoice_no', v));
+          (ex.contracts || []).forEach(v => push('contract_no', v));
+          (ex.poa_numbers || []).forEach(v => push('poa', v));
+          (ex.cups || []).forEach(v => push('cups', v));
+          (ex.meters || []).forEach(v => push('meter', v));
+          for (const t of customTypes) (ex[t.type] || []).forEach(v => push(t.type, v)); // v114: AI-открытые типы
+        }
         if (items.length) {
           const { data: ups, error: ue } = await supabaseAdmin.from('entities')
             .upsert(items.map(e => withScope({ type: e.type, value: e.value, label: e.label })), { onConflict: ocEnt })
-            .select('id, type');
+            .select('id, type, value');
+          // v118: свободные связи — по value сущностей этого документа
+          if (freeMode && exRelations.length && ups && ups.length) {
+            const byVal = new Map();
+            for (const e of ups) byVal.set(String(e.value || '').toLowerCase(), e.id);
+            for (const rel of exRelations) {
+              const a = byVal.get(rel.from.toLowerCase());
+              const b = byVal.get(rel.to.toLowerCase());
+              if (a && b && a !== b) {
+                entLinkRows.push(withScope({ entity_a: a, entity_b: b, link_type: rel.relation, confidence: 0.7, evidence: 'AI свободный режим', created_by: 'ai' }));
+              }
+            }
+          }
           if (ue) throw ue;
           const seenRow = new Set();
           for (const e of (ups || [])) {
@@ -4589,6 +4678,16 @@ app.post('/api/links/ai-extract', requireAuth, requireRole('admin', 'manager'), 
     if (deRows.length) {
       const { error: ie } = await supabaseAdmin.from('doc_entities').upsert(deRows, { onConflict: 'doc_id,entity_id,role' });
       if (ie) stats.errors.push('doc_entities: ' + ie.message);
+    }
+    if (entLinkRows.length) { // v118
+      const lm = new Map();
+      for (const l of entLinkRows) { const k = [l.entity_a, l.entity_b].sort().join('|') + '|' + l.link_type; if (!lm.has(k)) lm.set(k, l); }
+      const dedup = [...lm.values()];
+      for (let i = 0; i < dedup.length; i += 500) {
+        const { error: le } = await supabaseAdmin.from('entity_links').upsert(dedup.slice(i, i + 500), { onConflict: ocEntLink });
+        if (le) { stats.errors.push('entity_links: ' + le.message); break; }
+      }
+      stats.relsAdded = dedup.length;
     }
     // AI-связи: документы, делящие AI-сущность, связываем (created_by='ai')
     const linkRows = [];

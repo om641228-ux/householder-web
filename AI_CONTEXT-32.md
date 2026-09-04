@@ -2349,3 +2349,9 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Backend build: если запрошена область (?scope=uuid), а graph_scopes недоступна — ошибка 500 вместо молчаливой записи графа в «Все документы» (ZERO_SCOPE). Раньше из-за transient-сбоя hasScopeSupport граф области мог уйти в нулевую область → список пуст.
 - Backend entities: при пустом ответе с областью возвращает elsewhere — сколько сущностей в ДРУГИХ областях.
 - Frontend: после «🔄 Построить связи» сбрасывается текст поиска (старый q скрывал свежие сущности); пустое состояние с elsewhere>0 показывает подсказку «в других областях N сущностей — переключите область»; сброс elsewhere при смене области.
+
+## v118 (2026-09-04) — свободный режим AI-извлечения
+- Backend: aiExtractEntitiesFree(text, knownTypes) — AI САМ возвращает {entities:[{type,type_label,value,label}], relations:[{from,to,relation}]} без фиксированной схемы; type санитизируется (snake_case, ≤40).
+- Реестр типов getKnownFreeTypes(): базовые (BASE_TYPE_LABELS) + типы из БД entities + сессионный кэш aiFreeTypes — AI переиспользует известные типы, новые создаёт только при необходимости (консистентность между батчами).
+- ai-extract принимает freeMode; relations → entity_links (link_type=relation, confidence 0.7, created_by='ai', evidence 'AI свободный режим'); stats.newTypes/relsAdded.
+- Frontend: кнопка AI-извлечение стала сдвоенной — правый сегмент переключает 🧷 схема / 🧠 свободный; прогресс показывает новых типов и связей сущностей.
