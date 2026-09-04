@@ -2386,3 +2386,15 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - POST /api/parse/catalog/ai-prices {ids≤10}: Kimi с builtin $web_search ищет цену по названию+артикулу+URL, возвращает строгий JSON {price,currency,source,title}; валидация 0<price<100000; price_source='ai-search'.
 - Прямые цены помечаются price_source='direct'/'direct-proxy'.
 - Frontend: артикул и 🤖-бейдж в карточке товара; кнопки 💶 (прямая) и 🤖 (AI) у каждого товара; «🤖 AI-цены ×10» и «💶 ×10» для выдачи; кнопка «🔢 Артикулы» (бэкфилл).
+
+## v122.1 (2026-09-04) — фикс «AI не нашёл цену»
+- aiFindPrice: 2 попытки (веб-поиск с запросами по артикулу/названию/Google Shopping → усиленный запрос с допуском приблизительной цены "approx":true); запасной парсинг цены из произвольного текста («12.99 €»); при полном провале ошибка содержит первые 180 символов ответа AI для диагностики.
+- price_source: 'ai-search' (точная) / 'ai-estimate' (приблизительная, бейдж 🤖≈ оранжевый).
+
+## v123 (2026-09-04) — «Сделай все уровни»: цены-факт vs AI-оценка, расширение Chrome
+- Бэкенд: AI-цена теперь проходит самопроверку — в обоих промптах aiFindPrice добавлено поле `"match": true/false` (источник точно про ЭТОТ артикул?); `approx = !!j.approx || j.match === false`.
+- Разделение данных: если approx → обновляются ТОЛЬКО `price_estimate`/`price_estimate_at` (факт-цена не трогается); если точное совпадение → price + price_source='ai-search' + price_estimate тоже заполняется.
+- Новые эндпоинты: GET /api/parse/catalog/pending-prices?limit&site (товары без цены); POST /api/parse/ext-price {url,price,currency,title,image} — upsert в parse_products с price_source='extension', артикул из URL.
+- SQL (дописано в v119-парсинг.sql, ПЕРЕЗАПУСТИТЬ): alter parse_products add price_estimate numeric, price_estimate_at timestamptz.
+- Фронт: в карточке товара факт-цена жирным; если факта нет, но есть оценка → оранжевым «≈ X € (оценка AI)»; бейджи 🤖 (ai-search), 🧩 (extension), 🤖≈ (есть оценка). fetchAiPrices маппит approx → price_estimate, не затирая price.
+- Расширение Chrome MV3 leroy-price-extension/ (+ zip): popup (API URL + токен, «▶ Собрать 20 цен»), background.js открывает фоновые вкладки из pending-prices, извлекает JSON-LD Product (extractOnPage), шлёт POST /ext-price, пауза 2–3.5 с. Обходит DataDome IP пользователя.

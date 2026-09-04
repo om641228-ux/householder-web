@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v122.1-2026-09-04', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v123-2026-09-04', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4563,18 +4563,20 @@ async function aiFindPrice(product) {
       if (m2) { price = parseFloat(m2[1].replace(',', '.')); if (!isFinite(price) || price <= 0) price = null; }
       else price = null;
     }
-    return { price, currency: String(j.currency || 'EUR').slice(0, 5), title: String(j.title || '').slice(0, 300), source: String(j.source || 'ai-search').slice(0, 200), approx: !!j.approx, raw: String(content).slice(0, 300) };
+    // v123: сверка — если AI сам НЕ подтвердил, что источник про этот артикул, цена считается оценкой
+    const approx = !!j.approx || j.match === false;
+    return { price, currency: String(j.currency || 'EUR').slice(0, 5), title: String(j.title || '').slice(0, 300), source: String(j.source || 'ai-search').slice(0, 200), approx, raw: String(content).slice(0, 300) };
   };
   const base = `Товар: ${product.name || ''}\nАртикул: ${product.article || '—'}\nURL: ${product.url}`;
   // попытка 1: с веб-поиском
   try {
-    const c1 = await ask(`Найди актуальную цену товара на leroymerlin.es.\n${base}\nИспользуй веб-поиск (запросы: артикул, название, site:leroymerlin.es, Google Shopping). Верни СТРОГО JSON: {"price": число или null, "currency": "EUR", "source": "откуда цена", "title": "точное название"}. Никакого текста кроме JSON.`, true);
+    const c1 = await ask(`Найди актуальную цену товара на leroymerlin.es.\n${base}\nИспользуй веб-поиск (запросы: артикул, название, site:leroymerlin.es, Google Shopping). Верни СТРОГО JSON: {"price": число или null, "currency": "EUR", "source": "откуда цена", "title": "точное название", "match": true/false — источник точно про ЭТОТ артикул?}. Никакого текста кроме JSON.`, true);
     const p1 = parsePrice(c1);
     if (p1.price != null) return { ...p1, approx: false };
     var lastRaw = p1.raw;
   } catch (e) { var lastRaw = 'attempt1: ' + e.message; }
   // попытка 2: усиленная — допускаем приблизительную цену из любого источника
-  const c2 = await ask(`Найди цену товара Leroy Merlin.\n${base}\nИщи по артикулу и названию: leroymerlin.es, Google Shopping, кэши, агрегаторы. Если точной цены нет — верни ПРИБЛИЗИТЕЛЬНУЮ по похожим предложениям и укажи "approx": true. Верни СТРОГО JSON: {"price": число, "currency": "EUR", "approx": true/false, "source": "откуда", "title": "название"}. Только JSON.`, true);
+  const c2 = await ask(`Найди цену товара Leroy Merlin.\n${base}\nИщи по артикулу и названию: leroymerlin.es, Google Shopping, кэши, агрегаторы. Если точной цены нет — верни ПРИБЛИЗИТЕЛЬНУЮ по похожим предложениям и укажи "approx": true. Верни СТРОГО JSON: {"price": число, "currency": "EUR", "approx": true/false, "match": true/false — источник точно про этот артикул?, "source": "откуда", "title": "название"}. Только JSON.`, true);
   const p2 = parsePrice(c2);
   if (p2.price == null) throw new Error('AI не нашёл цену. Ответ AI: ' + (p2.raw || lastRaw || '(пусто)').slice(0, 180));
   return p2;
@@ -4593,12 +4595,57 @@ app.post('/api/parse/catalog/ai-prices', requireAuth, requireRole('admin', 'mana
         const r = await aiFindPrice(p);
         if (r.price == null) throw new Error('AI не нашёл цену');
         item.ok = true; item.price = r.price; item.currency = r.currency; item.title = r.title || p.name; item.source = r.source; item.approx = !!r.approx;
-        await supabaseAdmin.from('parse_products').update({ price: r.price, currency: r.currency, price_at: new Date().toISOString(), price_source: r.approx ? 'ai-estimate' : 'ai-search', name: (r.title || p.name).slice(0, 300) }).eq('id', p.id);
+        // v123: оценка НЕ пишется в фактическую цену — только в price_estimate
+        if (r.approx) {
+          await supabaseAdmin.from('parse_products').update({ price_estimate: r.price, price_estimate_at: new Date().toISOString(), name: (r.title || p.name).slice(0, 300) }).eq('id', p.id);
+        } else {
+          await supabaseAdmin.from('parse_products').update({ price: r.price, currency: r.currency, price_at: new Date().toISOString(), price_source: 'ai-search', price_estimate: r.price, price_estimate_at: new Date().toISOString(), name: (r.title || p.name).slice(0, 300) }).eq('id', p.id);
+        }
       } catch (e2) { item.ok = false; item.error = e2.message; }
       out.push(item);
     }
     if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'AI-цены', `найдено ${out.filter(x => x.ok).length}/${out.length}`, req);
     res.json({ ok: true, results: out });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v123 (Уровень 3): список товаров без фактической цены — для расширения браузера
+app.get('/api/parse/catalog/pending-prices', requireAuth, async (req, res) => {
+  try {
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '30', 10) || 30));
+    const site = String(req.query.site || '').trim();
+    let q = supabaseAdmin.from('parse_products').select('id, url, name, article').is('price', null).order('last_seen', { ascending: false }).limit(limit);
+    if (site) q = q.eq('site', site);
+    const { data, error } = await q;
+    if (error) throw error;
+    res.json({ products: data || [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v123 (Уровень 3): приём цены из расширения браузера (JSON-LD уже извлечён на странице)
+app.post('/api/parse/ext-price', requireAuth, async (req, res) => {
+  try {
+    const url = String((req.body && req.body.url) || '').trim();
+    if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'Нужен полный URL' });
+    let price = req.body.price != null ? parseFloat(String(req.body.price).replace(',', '.')) : null;
+    if (price != null && (!isFinite(price) || price <= 0 || price > 100000)) price = null;
+    const u = new URL(url);
+    const am = url.match(/-(\d{5,})\.html?/i);
+    const upd = {
+      site: u.hostname, url,
+      name: String(req.body.title || '').slice(0, 300) || undefined,
+      image: String(req.body.image || '').slice(0, 500) || undefined,
+      article: am ? am[1] : undefined,
+      last_seen: new Date().toISOString()
+    };
+    if (price != null) {
+      upd.price = price; upd.currency = String(req.body.currency || 'EUR').slice(0, 5);
+      upd.price_at = new Date().toISOString(); upd.price_source = 'extension';
+    }
+    Object.keys(upd).forEach(k => upd[k] === undefined && delete upd[k]);
+    const { data, error } = await supabaseAdmin.from('parse_products').upsert(upd, { onConflict: 'site,url' }).select().single();
+    if (error) throw error;
+    res.json({ ok: true, product: data });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
