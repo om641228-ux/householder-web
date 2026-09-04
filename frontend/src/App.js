@@ -2164,7 +2164,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v114 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v115 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2665,11 +2665,23 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
   // v110: AI сам читает все тексты документов → извлекает сущности → достраивает связи
   const [aiBusy, setAiBusy] = useState(false);
   const [aiProg, setAiProg] = useState(null);
-  const aiExtract = async () => {
-    setAiBusy(true); setErr(''); setAiProg({ done: 0, total: null, added: 0, links: 0 });
-    let offset = 0, done = false, added = 0, links = 0;
+  // v115: пауза / продолжить / прервать
+  const aiPauseRef = useRef(false);
+  const aiAbortRef = useRef(false);
+  const [aiPaused, setAiPaused] = useState(false);
+  const aiExtract = async (startOffset) => {
+    setAiBusy(true); setAiPaused(false); aiPauseRef.current = false; aiAbortRef.current = false;
+    setErr('');
+    if (startOffset == null) setAiProg({ done: 0, total: null, added: 0, links: 0 });
+    let offset = startOffset || 0, done = false;
+    let added = (aiProg && startOffset) ? aiProg.added : 0;
+    let links = (aiProg && startOffset) ? aiProg.links : 0;
+    let aborted = false;
     try {
       while (!done) {
+        if (aiAbortRef.current) { aborted = true; break; }
+        while (aiPauseRef.current && !aiAbortRef.current) await new Promise(r => setTimeout(r, 400));
+        if (aiAbortRef.current) { aborted = true; break; }
         const r = await fetch(`${API_URL}/api/links/ai-extract?token=${token}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ offset, limit: 6, scope: scopeId || undefined, extraTypes: (aiTypes && aiTypes.length) ? aiTypes : undefined })
@@ -2681,9 +2693,16 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
         links += (j.stats && j.stats.linksAdded) || 0;
         setAiProg({ done: offset, total: j.total, added, links });
       }
-      await loadEntities(q);
+      if (!aborted) await loadEntities(q);
     } catch (e) { setErr(e.message); }
-    setAiBusy(false);
+    setAiBusy(false); setAiPaused(false);
+  };
+  const aiPauseResume = () => {
+    const next = !aiPauseRef.current;
+    aiPauseRef.current = next; setAiPaused(next);
+  };
+  const aiAbort = () => {
+    aiAbortRef.current = true; aiPauseRef.current = false; setAiPaused(false);
   };
 
   const createScope = async () => {
@@ -2878,19 +2897,30 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
               <input value={nsName} onChange={e => setNsName(e.target.value)} placeholder="Название (напр. Личное без Alcojora)"
                 style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
               <div style={{ border: '1px solid #e3e6ea', borderRadius: 10, padding: 10, background: '#fafafa' }}>
-                <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 6 }}>Источники графа — клик по строке: ⚪ не выбрано → ✅ включить → ❌ игнорировать</div>
+                <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 6 }}>Источники графа — клик по строке: ⚪ не выбрано → ✅ включить → ❌ игнорировать. Если есть хоть одно ✅ — в граф попадёт только отмеченное.</div>
                 {!scopeTree && <div style={{ fontSize: 12, color: '#8e8e93' }}>⏳ Загружаю структуру…</div>}
                 {scopeTree && [
-                  ['🧾 Объекты (Фактуры/Доки)', 'objects', scopeTree.objects],
-                  ['📄 Типы документов', 'docTypes', scopeTree.docTypes],
-                  ['🏦 Счета выписок (IBAN)', 'ibans', scopeTree.ibans],
+                  ['🧾 Фактуры и Доки — объекты', 'objects', scopeTree.objects],
+                  ['📄 Фактуры и Доки — типы документов', 'docTypes', scopeTree.docTypes],
+                  ['🏦 Выписки банка — счета (IBAN)', 'ibans', scopeTree.ibans],
                   ['🏢 Контрагенты (топ-100)', 'cps', scopeTree.counterparties]
                 ].map(([title, group, items]) => {
                   const selCount = Object.keys(treeSel[group]).length;
+                  const bulkSet = (mode) => setTreeSel(prev => {
+                    const g = {};
+                    if (mode) (items || []).forEach(it => { g[it.name] = mode; });
+                    return { ...prev, [group]: g };
+                  });
                   return (
                     <details key={group} style={{ marginBottom: 6 }} open={selCount > 0}>
-                      <summary style={{ fontSize: 13, fontWeight: 600, cursor: 'pointer', padding: '4px 0' }}>
-                        {title} {selCount > 0 && <span style={{ color: '#7c3aed' }}>({selCount} выбрано)</span>}
+                      <summary style={{ fontSize: 13, fontWeight: 600, cursor: 'pointer', padding: '4px 0', listStyle: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span>▸ {title}</span>
+                        {selCount > 0 && <span style={{ color: '#7c3aed' }}>({selCount})</span>}
+                        <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 4 }} onClick={e => e.preventDefault()}>
+                          <button onClick={() => bulkSet('inc')} title="Включить все" style={{ border: '1px solid #34c759', background: '#e8f8ef', borderRadius: 5, fontSize: 11, cursor: 'pointer', padding: '1px 6px' }}>✅ все</button>
+                          <button onClick={() => bulkSet('exc')} title="Игнорировать все" style={{ border: '1px solid #e74c3c', background: '#fdecea', borderRadius: 5, fontSize: 11, cursor: 'pointer', padding: '1px 6px' }}>❌ все</button>
+                          <button onClick={() => bulkSet('')} title="Сбросить выбор" style={{ border: '1px solid #d0d0d5', background: '#fff', borderRadius: 5, fontSize: 11, cursor: 'pointer', padding: '1px 6px' }}>⚪</button>
+                        </span>
                       </summary>
                       <div style={{ maxHeight: 130, overflowY: 'auto', margin: '4px 0 4px 8px' }}>
                         {(items || []).map(it => {
@@ -2962,7 +2992,28 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
       {aiProg && (aiBusy || aiProg.done > 0) && (
         <div style={{ background: '#f5f0fa', border: '1px solid #7c3aed', borderRadius: 10, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>
           🤖 AI-извлечение: обработано {aiProg.done}{aiProg.total ? ' из ' + aiProg.total : ''} документов · сущностей добавлено {aiProg.added} · AI-связей {aiProg.links}
-          {aiBusy && <span style={{ color: '#7c3aed' }}> — идёт обработка, не закрывайте вкладку…</span>}
+          {aiBusy && (
+            <span style={{ marginLeft: 10 }}>
+              <button onClick={aiPauseResume}
+                style={{ padding: '3px 10px', borderRadius: 6, border: '1px solid #7c3aed', background: '#fff', color: '#7c3aed', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                {aiPaused ? '▶ Продолжить' : '⏸ Пауза'}
+              </button>
+              <button onClick={aiAbort}
+                style={{ padding: '3px 10px', borderRadius: 6, border: '1px solid #e74c3c', background: '#fff', color: '#e74c3c', fontSize: 12, fontWeight: 700, cursor: 'pointer', marginLeft: 6 }}>
+                ⏹ Прервать
+              </button>
+              <span style={{ color: '#7c3aed', marginLeft: 8 }}>{aiPaused ? '— на паузе' : '— идёт обработка…'}</span>
+            </span>
+          )}
+          {!aiBusy && aiProg.done > 0 && aiProg.total != null && aiProg.done < aiProg.total && (
+            <span style={{ marginLeft: 10 }}>
+              <button onClick={() => aiExtract(aiProg.done)}
+                style={{ padding: '3px 10px', borderRadius: 6, border: '1px solid #7c3aed', background: '#7c3aed', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                ▶ Продолжить с {aiProg.done}
+              </button>
+              <span style={{ color: '#8e8e93', marginLeft: 8 }}>— прервано, можно продолжить с места остановки</span>
+            </span>
+          )}
         </div>
       )}
       {report && (
@@ -8408,7 +8459,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-04 · v114 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-04 · v115 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8421,7 +8472,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v114</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v115</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">
