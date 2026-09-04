@@ -2367,3 +2367,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Backend: extractFromHtml() вынесена в общую функцию; parseSitemapXml(xml, filter, limit) — разбор <url>/<loc>/<image:loc>/<image:title> с фильтром по словам; POST /api/parse/paste {id, html} — извлечение из HTML, вставленного пользователем из своего браузера (обход DataDome); /api/parse/run: kind==='sitemap' → XML (sitemapindex → список файлов, urlset → товары), page → 403 теперь с понятной подсказкой про 📋 HTML.
 - parse_sources + колонки kind ('page'|'sitemap') и filter — обновлён v119-парсинг.sql (alter table … add column if not exists). Запустить повторно!
 - Frontend: выбор типа источника (📄 Страница / 🗺 Sitemap) + поле фильтра; кнопка «📋 HTML» с модалкой вставки; превью товаров (картинки media.adeo.com) в карточке и истории.
+
+## v120 (2026-09-04) — автоматизация парсинга (A+B+C)
+- Backend: runParseSource(src) — общая логика run; recordParseOutcome() — сравнение цены с предыдущей → parse_sources.last_price/last_change/last_run_at (📈/📉 бейдж); PATCH /api/parse/sources {id, auto_every_hours} (0/6/12/24/168); POST /api/parse/paste-url {url, html} — «умная» вставка: источник находится/создаётся по URL (для букмарклета и iOS Shortcut; CORS открыт, лимит 300MB достаточен); планировщик parseAutoTick каждые 30 мин обходит источники с auto_every_hours>0 (серверный автозапуск — для sitemap и сайтов без антибота).
+- Frontend: селектор ⏱ автозапуска в карточке источника; бейдж изменения цены (📈 рост оранжевый / 📉 падение зелёный); кнопка «🔗 Авто» — модалка с перетаскиваемым букмарклетом «📌 → В Парсинг» (fetch paste-url с токеном) и инструкцией для iOS Shortcut.
+- SQL: v119-парсинг.sql дополнен alter-колонками auto_every_hours, last_run_at, last_price, last_change — выполнить повторно.

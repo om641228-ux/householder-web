@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v119.1-2026-09-04', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v120-2026-09-04', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4395,59 +4395,145 @@ app.post('/api/parse/paste', requireAuth, requireRole('admin', 'manager'), async
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// запуск парсинга одного источника: kind=page — HTML → JSON-LD; kind=sitemap — XML → список товаров
+// v120: общая логика запуска парсера (используется кнопкой, автозапуском и paste-url)
+async function runParseSource(src) {
+  const kind = src.kind === 'sitemap' ? 'sitemap' : 'page';
+  if (kind === 'sitemap') {
+    const r = await axios.get(src.url, {
+      headers: { 'User-Agent': PARSE_UA, 'Accept': 'application/xml,text/xml,text/html;q=0.8' },
+      timeout: 60000, maxContentLength: 30 * 1024 * 1024, responseType: 'text', validateStatus: () => true
+    });
+    if (r.status >= 400) throw new Error('HTTP ' + r.status + ' при загрузке sitemap');
+    const xml = String(r.data || '');
+    if (/<sitemapindex/i.test(xml)) {
+      const subs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/gi)].map(m => m[1].trim()).slice(0, 50);
+      const { data: saved, error: ie } = await supabaseAdmin.from('parse_results')
+        .insert({ source_id: src.id, url: src.url, title: 'Sitemap-индекс: ' + subs.length + ' файлов', price: null, currency: '', image: '', data: { kind: 'sitemap-index', items: subs.map(u => ({ url: u, name: u.split('/').pop(), image: '' })) } })
+        .select().single();
+      if (ie) throw ie;
+      return saved;
+    }
+    const items = parseSitemapXml(xml, src.filter || '', 100);
+    const totalUrls = (xml.match(/<url>/gi) || []).length;
+    const { data: saved, error: ie } = await supabaseAdmin.from('parse_results')
+      .insert({ source_id: src.id, url: src.url, title: `Найдено ${items.length} из ${totalUrls} URL`, price: null, currency: '', image: '', data: { kind: 'sitemap', filter: src.filter || '', totalUrls, items } })
+      .select().single();
+    if (ie) throw ie;
+    return saved;
+  }
+  const r = await axios.get(src.url, {
+    headers: { 'User-Agent': PARSE_UA, 'Accept': 'text/html,application/xhtml+xml', 'Accept-Language': 'es-ES,es;q=0.9,ru;q=0.8' },
+    timeout: 30000, maxContentLength: 8 * 1024 * 1024, validateStatus: () => true
+  });
+  if (r.status === 403) throw new Error('HTTP 403 — сайт защищён антиботом (DataDome). Обход: кнопка «📋 HTML», букмарклет или Shortcut из «🔗 Авто».');
+  if (r.status >= 400) throw new Error('HTTP ' + r.status + ' при загрузке страницы');
+  const ex = extractFromHtml(r.data);
+  const { data: saved, error: ie } = await supabaseAdmin.from('parse_results')
+    .insert({ source_id: src.id, url: src.url, title: ex.title.slice(0, 300), price: ex.price, currency: ex.currency, image: ex.image, data: ex.extra })
+    .select().single();
+  if (ie) throw ie;
+  return saved;
+}
+
+// v120(C): сравнение цены с предыдущим снятием + отметка last_run_at/last_price/last_change
+async function recordParseOutcome(src, saved, via) {
+  try {
+    const upd = { last_run_at: new Date().toISOString() };
+    if (saved && saved.price != null) {
+      const { data: prevRows } = await supabaseAdmin.from('parse_results')
+        .select('price, currency').eq('source_id', src.id).not('price', 'is', null)
+        .order('fetched_at', { ascending: false }).range(1, 1); // предыдущая цена (0 — только что сохранённая)
+      const prev = prevRows && prevRows[0];
+      upd.last_price = saved.price;
+      if (prev && prev.price != null && Number(prev.price) !== Number(saved.price)) {
+        const diff = Number(saved.price) - Number(prev.price);
+        const pct = prev.price ? Math.round(diff / Number(prev.price) * 100) : 0;
+        upd.last_change = `${Number(prev.price)} → ${Number(saved.price)} ${saved.currency || prev.currency || '€'} (${diff > 0 ? '+' : ''}${pct}%) · ${via || ''}`;
+      } else if (!prev) {
+        upd.last_change = `первая цена: ${Number(saved.price)} ${saved.currency || '€'}`;
+      }
+    }
+    await supabaseAdmin.from('parse_sources').update(upd).eq('id', src.id);
+  } catch (_) { /* колонки появятся после alter — молча пропускаем */ }
+}
+
+// запуск парсинга одного источника (кнопка)
 app.post('/api/parse/run', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
   try {
     const id = String((req.body && req.body.id) || '');
     const { data: src, error: se } = await supabaseAdmin.from('parse_sources').select('*').eq('id', id).maybeSingle();
     if (se) throw se;
     if (!src) return res.status(404).json({ error: 'Источник не найден' });
-    const kind = src.kind === 'sitemap' ? 'sitemap' : 'page';
-
-    if (kind === 'sitemap') {
-      // sitemap XML обычно на CDN и НЕ защищён антиботом
-      const r = await axios.get(src.url, {
-        headers: { 'User-Agent': PARSE_UA, 'Accept': 'application/xml,text/xml,text/html;q=0.8' },
-        timeout: 60000, maxContentLength: 30 * 1024 * 1024, responseType: 'text', validateStatus: () => true
-      });
-      if (r.status >= 400) throw new Error('HTTP ' + r.status + ' при загрузке sitemap');
-      const xml = String(r.data || '');
-      // если это sitemap-index (список сайтмапов) — вернём их списком
-      const isIndex = /<sitemapindex/i.test(xml);
-      if (isIndex) {
-        const subs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/gi)].map(m => m[1].trim()).slice(0, 50);
-        const { data: saved, error: ie } = await supabaseAdmin.from('parse_results')
-          .insert({ source_id: id, url: src.url, title: 'Sitemap-индекс: ' + subs.length + ' файлов', price: null, currency: '', image: '', data: { kind: 'sitemap-index', items: subs.map(u => ({ url: u, name: u.split('/').pop(), image: '' })) } })
-          .select().single();
-        if (ie) throw ie;
-        return res.json({ ok: true, result: saved, items: subs.length });
-      }
-      const items = parseSitemapXml(xml, src.filter || '', 100);
-      const totalUrls = (xml.match(/<url>/gi) || []).length;
-      const { data: saved, error: ie } = await supabaseAdmin.from('parse_results')
-        .insert({ source_id: id, url: src.url, title: `Найдено ${items.length} из ${totalUrls} URL`, price: null, currency: '', image: '', data: { kind: 'sitemap', filter: src.filter || '', totalUrls, items } })
-        .select().single();
-      if (ie) throw ie;
-      if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Sitemap', (src.name || src.url) + ' → ' + items.length + ' товаров', req);
-      return res.json({ ok: true, result: saved, items: items.length });
-    }
-
-    // обычная HTML-страница
-    const r = await axios.get(src.url, {
-      headers: { 'User-Agent': PARSE_UA, 'Accept': 'text/html,application/xhtml+xml', 'Accept-Language': 'es-ES,es;q=0.9,ru;q=0.8' },
-      timeout: 30000, maxContentLength: 8 * 1024 * 1024, validateStatus: () => true
-    });
-    if (r.status === 403) throw new Error('HTTP 403 — сайт защищён антиботом (DataDome) и блокирует серверные запросы. Обход: откройте страницу в своём браузере, сохраните/скопируйте исходник и используйте кнопку «📋 Вставить HTML» — данные извлекутся так же.');
-    if (r.status >= 400) throw new Error('HTTP ' + r.status + ' при загрузке страницы');
-    const ex = extractFromHtml(r.data);
-    const { data: saved, error: ie } = await supabaseAdmin.from('parse_results')
-      .insert({ source_id: id, url: src.url, title: ex.title.slice(0, 300), price: ex.price, currency: ex.currency, image: ex.image, data: ex.extra })
-      .select().single();
-    if (ie) throw ie;
-    if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Запуск парсера', (src.name || src.url) + (ex.price != null ? ' = ' + ex.price + ' ' + ex.currency : ''), req);
-    res.json({ ok: true, result: saved, jsonld: ex.jsonldCount });
+    const saved = await runParseSource(src);
+    await recordParseOutcome(src, saved, 'вручную');
+    if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Запуск парсера', (src.name || src.url) + (saved && saved.price != null ? ' = ' + saved.price + ' ' + saved.currency : ''), req);
+    res.json({ ok: true, result: saved });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// v120(B): «умная» вставка по URL — для букмарклета и iOS Shortcut: источник находится/создаётся по URL страницы
+app.post('/api/parse/paste-url', requireAuth, async (req, res) => {
+  try {
+    const url = String((req.body && req.body.url) || '').trim();
+    const html = String((req.body && req.body.html) || '');
+    if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'Нужен полный URL' });
+    if (html.length < 200) return res.status(400).json({ error: 'HTML слишком короткий' });
+    const u = new URL(url);
+    let { data: src } = await supabaseAdmin.from('parse_sources').select('*').eq('url', url).maybeSingle();
+    if (!src) {
+      const nm = decodeURIComponent(u.pathname.split('/').filter(Boolean).pop() || u.hostname).replace(/\.html?$/i, '').replace(/-/g, ' ').slice(0, 120);
+      const { data: created, error: ce } = await supabaseAdmin.from('parse_sources')
+        .insert({ name: nm, url, site: u.hostname, kind: 'page' }).select().single();
+      if (ce) throw ce;
+      src = created;
+    }
+    const ex = extractFromHtml(html);
+    const { data: saved, error: ie } = await supabaseAdmin.from('parse_results')
+      .insert({ source_id: src.id, url: src.url, title: ex.title.slice(0, 300), price: ex.price, currency: ex.currency, image: ex.image, data: { ...ex.extra, via: 'auto-send' } })
+      .select().single();
+    if (ie) throw ie;
+    await recordParseOutcome(src, saved, 'автоотправка');
+    if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Автоотправка HTML', (src.name || url) + (ex.price != null ? ' = ' + ex.price + ' ' + ex.currency : ''), req);
+    res.json({ ok: true, result: saved, source: { id: src.id, name: src.name }, created: !src.created_at || undefined });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v120(A): настройка автозапуска источника (каждые N часов; 0 = выкл)
+app.patch('/api/parse/sources', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const id = String((req.body && req.body.id) || '');
+    const hours = Math.max(0, Math.min(168, parseInt((req.body && req.body.auto_every_hours) || '0', 10) || 0));
+    const { data, error } = await supabaseAdmin.from('parse_sources').update({ auto_every_hours: hours }).eq('id', id).select().single();
+    if (error) {
+      if (/column.*auto_every_hours/i.test(error.message || '')) return res.status(500).json({ error: 'Обновите таблицу парсинга — выполните v119-парсинг.sql повторно (alter table … auto_every_hours …)' });
+      throw error;
+    }
+    res.json({ ok: true, source: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v120(A): планировщик — каждые 30 минут обходит источники с автозапуском
+async function parseAutoTick() {
+  try {
+    const { data, error } = await supabaseAdmin.from('parse_sources').select('*').gt('auto_every_hours', 0);
+    if (error) { if (!/does not exist|column/i.test(error.message || '')) console.error('[parse-auto]', error.message); return; }
+    const now = Date.now();
+    for (const src of (data || [])) {
+      const due = !src.last_run_at || (now - new Date(src.last_run_at).getTime()) >= src.auto_every_hours * 3600 * 1000;
+      if (!due) continue;
+      try {
+        const saved = await runParseSource(src);
+        await recordParseOutcome(src, saved, 'авто');
+        console.log('[parse-auto]', src.name || src.url, '→', saved && saved.price != null ? saved.price + ' ' + saved.currency : (saved && saved.title) || 'ok');
+      } catch (e) {
+        console.error('[parse-auto]', src.name || src.url, '—', e.message);
+        await supabaseAdmin.from('parse_sources').update({ last_run_at: new Date().toISOString() }).eq('id', src.id).catch(() => {});
+      }
+    }
+  } catch (e) { console.error('[parse-auto]', e.message); }
+}
+setInterval(parseAutoTick, 30 * 60 * 1000);
+setTimeout(parseAutoTick, 90 * 1000); // первый прогон через 1,5 минуты после старта
 
 // v112: дерево источников для визуального редактора области (объекты/типы/счета/контрагенты с количеством)
 app.get('/api/links/tree', requireAuth, tabGuard('list'), async (req, res) => {

@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v119.1 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v120 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2667,6 +2667,7 @@ function ParseTab({ token, isMobileView, canRun }) {
   const [pasteFor, setPasteFor] = useState(null); // source id, для которого вставляем HTML
   const [pasteHtml, setPasteHtml] = useState('');
   const [pasteBusy, setPasteBusy] = useState(false);
+  const [autoHelpFor, setAutoHelpFor] = useState(null); // v120: модалка «🔗 Авто» с букмарклетом
 
   const loadSources = async () => {
     setLoading(true); setErr('');
@@ -2762,6 +2763,22 @@ function ParseTab({ token, isMobileView, canRun }) {
     setPasteBusy(false);
   };
 
+  const setAuto = async (id, hours) => {
+    try {
+      const r = await fetch(`${API_URL}/api/parse/sources?token=${token}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, auto_every_hours: hours })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      await loadSources();
+    } catch (e) { setErr(e.message); }
+  };
+  const bookmarkletHref = () => {
+    const api = `${API_URL}/api/parse/paste-url?token=${encodeURIComponent(token)}`;
+    return "javascript:(()=>{fetch('" + api + "',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:location.href,html:document.documentElement.outerHTML})}).then(r=>r.json()).then(j=>{if(j.ok){var r=j.result||{};alert('✅ Сохранено: '+(r.title||'')+(r.price!=null?' — '+r.price+' '+(r.currency||'€'):''))}else{alert('❌ '+(j.error||'ошибка'))}}).catch(e=>alert('❌ '+e.message))})()";
+  };
+
   const fmtDate = (d) => d ? new Date(d).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
 
   return (
@@ -2824,6 +2841,21 @@ function ParseTab({ token, isMobileView, canRun }) {
                   <button onClick={() => { setPasteFor(src.id); setPasteHtml(''); }} title="Вставить исходник страницы из браузера (обход антибота)"
                     style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12.5, cursor: 'pointer' }}>📋 HTML</button>
                 )}
+                {canRun && src.kind !== 'sitemap' && (
+                  <button onClick={() => setAutoHelpFor(src.id)} title="Букмарклет и iOS Shortcut — отправка страницы в один клик"
+                    style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12.5, cursor: 'pointer' }}>🔗 Авто</button>
+                )}
+                {canRun && (
+                  <select value={src.auto_every_hours || 0} onChange={e => setAuto(src.id, parseInt(e.target.value, 10))}
+                    title="Автозапуск с сервера (для sitemap и сайтов без антибота)"
+                    style={{ padding: '5px 8px', borderRadius: 8, border: '1px solid #d0d0d5', background: (src.auto_every_hours || 0) > 0 ? '#e8f8ef' : '#fff', fontSize: 12, cursor: 'pointer' }}>
+                    <option value={0}>⏱ выкл</option>
+                    <option value={6}>⏱ 6ч</option>
+                    <option value={12}>⏱ 12ч</option>
+                    <option value={24}>⏱ 24ч</option>
+                    <option value={168}>⏱ 7д</option>
+                  </select>
+                )}
                 <button onClick={() => hist[src.id] ? setHist(prev => { const h = { ...prev }; delete h[src.id]; return h; }) : loadHistory(src.id)}
                   style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12.5, cursor: 'pointer' }}>
                   {hist[src.id] ? '▴ Скрыть' : '🕘 История'}
@@ -2836,6 +2868,11 @@ function ParseTab({ token, isMobileView, canRun }) {
             {src.last && (
               <div style={{ fontSize: 13, marginTop: 6 }}>
                 📦 {src.last.title || '(без названия)'} {src.last.price != null && <b style={{ color: '#1d1d1f' }}>· {src.last.price} {src.last.currency || '€'}</b>} <span style={{ color: '#8e8e93', fontSize: 11 }}>· {fmtDate(src.last.fetched_at)}</span>
+                {src.last_change && (
+                  <div style={{ marginTop: 2, fontSize: 12, fontWeight: 700, color: /→/.test(src.last_change) ? (/\(\+/.test(src.last_change) ? '#e67e22' : '#1e7e34') : '#8e8e93' }}>
+                    {/→/.test(src.last_change) ? (/\(\+/.test(src.last_change) ? '📈' : '📉') : 'ℹ️'} {src.last_change}
+                  </div>
+                )}
               </div>
             )}
             {src.last && src.last.data && Array.isArray(src.last.data.items) && src.last.data.items.length > 0 && (
@@ -2878,6 +2915,30 @@ function ParseTab({ token, isMobileView, canRun }) {
         ))}
       </div>
 
+      {autoHelpFor && (
+        <div onClick={() => setAutoHelpFor(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 220, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 16, width: 620, maxWidth: '94vw', maxHeight: '88vh', overflowY: 'auto' }}>
+            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 8 }}>🔗 Автоотправка страницы в один клик</div>
+            <div style={{ fontSize: 13, marginBottom: 6 }}><b>Вариант 1 — букмарклет (Mac/ПК):</b> перетащи кнопку ниже на панель закладок браузера. На любой странице товара — один клик по закладке → название и цена сохранятся в истории источника (создаётся автоматически по URL).</div>
+            <div style={{ margin: '8px 0 12px' }}>
+              <a href={bookmarkletHref()} onClick={e => e.preventDefault()} title="Перетащи на панель закладок"
+                style={{ display: 'inline-block', padding: '8px 16px', borderRadius: 8, background: '#7c3aed', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'grab', textDecoration: 'none' }}>📌 → В Парсинг</a>
+              <span style={{ fontSize: 11, color: '#8e8e93', marginLeft: 8 }}>перетащи на панель закладок (клик здесь не сработает)</span>
+            </div>
+            <div style={{ fontSize: 13, marginBottom: 4 }}><b>Вариант 2 — iOS/Mac Shortcut (Команды):</b></div>
+            <ol style={{ fontSize: 12, color: '#3a3a3c', margin: '4px 0 10px', paddingLeft: 18 }}>
+              <li>«Команды» → новая команда → «Получить содержимое веб-страницы» (Safari: вход — «Страница из Быстрой команды»).</li>
+              <li>Добавь «Получить содержимое URL» (POST) с адресом:</li>
+            </ol>
+            <div style={{ fontSize: 11, fontFamily: 'monospace', background: '#f5f5f7', borderRadius: 6, padding: 8, wordBreak: 'break-all', userSelect: 'all' }}>{`${API_URL}/api/parse/paste-url?token=…`} (полная ссылка с токеном — в коде букмарклета выше)</div>
+            <ol start="3" style={{ fontSize: 12, color: '#3a3a3c', margin: '8px 0', paddingLeft: 18 }}>
+              <li>Тело JSON: url = URL страницы, html = содержимое страницы. Включи «Показывать в меню экспорта» → команда появится в «Поделиться» Safari.</li>
+            </ol>
+            <div style={{ fontSize: 12, color: '#8e8e93' }}>⏱ Автозапуск по расписанию (селектор в карточке) работает с сервера — для sitemap и сайтов без антибота. Для Leroy Merlin цены автоматом собираются через вариант 1/2.</div>
+            <button onClick={() => setAutoHelpFor(null)} style={{ marginTop: 12, width: '100%', padding: '9px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', cursor: 'pointer' }}>Закрыть</button>
+          </div>
+        </div>
+      )}
       {pasteFor && (
         <div onClick={() => !pasteBusy && setPasteFor(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 220, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 16, width: 640, maxWidth: '94vw' }}>
@@ -8844,7 +8905,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-04 · v119.1 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-04 · v120 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8857,7 +8918,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v119.1</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v120</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">
