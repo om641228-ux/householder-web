@@ -2271,3 +2271,122 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Backend: extractMovementEntities (контрагент, IBAN, CIF, № фактуры «25/135» из концепта, сумма+дата без валюты); движения — узлы «bm:<id>»; прямые связи payment_of по matched_receipt_id (confidence 1). Граф: /api/links/graph возвращает движения как docs с document_type='bank'.
 - Frontend: цвет bank #16a085, иконка 🏦, клик по движению — alert с деталями (не карточка чека); LINK_TYPE_RU payment_of «💸 оплата фактуры».
 - SQL менять не нужно (doc_id text).
+
+## v108.1 (2026-09-03) — fix TDZ «Cannot access docEnts before initialization»
+- В /api/links/build блок bank_movements (v108) стоял ВЫШЕ объявлений `const entKeys`/`const docEnts` — TDZ-ошибка, движения не попадали в граф. Объявления перенесены выше блока.
+- После деплоя: нажать «🔄 Построить связи» заново.
+
+## v108.2 (2026-09-03) — диагностика графа по выписке
+- /api/links/build: чтение bank_movements — при ошибке «column does not exist» откат на select('*'); stats.movements всегда присутствует (0 по умолчанию).
+- LinksTab: баннер теперь показывает «🏦 движений N» — сразу видно, попали ли движения в граф.
+
+## v109 (2026-09-03) — иерархия сущностей: компании/персоны/договоры/доверенности
+- Новые типы сущностей: person («D./Dña/Don/Doña/Sr./Sra. Имя Фамилия» из raw_text), poa (poder notarial / доверенность № …).
+- НОВАЯ ТАБЛИЦА entity_links (v109-иерархия.sql — выполнить в Supabase!): belongs_to (IBAN/налоговый №/№ фактуры/договор/доверенность/CUPS/счётчик → компания/персона), represents (персона → компания). Строится в /api/links/build, stats.entityLinks.
+- /api/links/graph возвращает entLinks (иерархия выбранной сущности).
+- LinksTab: фильтры по типам сущностей (Все/Компании/Персоны/Договоры/Доверенности/№ фактур/Счета/Налоговые №/Суммы), блок «🌳 Иерархия» в графе, цвет poa #ff9500.
+
+## v109.1 (2026-09-03) — fix шапки в Chrome/Opera
+- Убран overflow:hidden у .mini-header (обрезал «Выйти» и вкладки); CSS-страховка: .tabs-inline/.mini-header/.header-right flex-wrap + кнопки вкладок flex:0 0 auto, перенос на вторую строку вместо клипа.
+
+## v109.2 (2026-09-03) — плашка меню: прямоугольник со скруглёнными углами
+- .tabs-inline: border-radius 14px (было 999px-пилюля, при переносе на 2 строки выглядело плохо), padding 5px 8px.
+
+## v110 (2026-09-03) — AI-извлечение сущностей (Kimi читает все документы)
+- Новый эндпоинт POST /api/links/ai-extract {offset, limit≤6-8}: Kimi (kimi-k3, JSON mode) читает raw_text документов порциями, извлекает persons/companies/tax_ids/ibans/invoice_numbers/contracts/poa_numbers/cups/meters → upsert entities + doc_entities role='ai' + doc_links created_by='ai' (confidence 0.75).
+- Rule-build (/api/links/build) больше НЕ стирает AI-привязки (delete .neq('role','ai')).
+- /api/links/graph отдаёт created_by у связей.
+- LinksTab: кнопка «🤖 AI-извлечение» (фиолетовая) с живым прогрессом «обработано X из Y · сущностей · связей»; AI-связи на графе — фиолетовый пунктир.
+
+## v111 (2026-09-03) — изолированные области графа + «Мосты» (v111+v112+v113)
+- НОВАЯ ТАБЛИЦА graph_scopes (v111-области.sql — выполнить в Supabase!): filter jsonb {objects, docTypes, excludeNames, ibans}. scope_id во entities/doc_entities/doc_links/entity_links (default ZERO_SCOPE = «Все документы»). Старые unique-констрейнты заменены составными с scope_id.
+- Эндпоинты: GET/POST/DELETE /api/links/scopes; GET /api/links/bridges (сущности в ≥2 областях). build/ai-extract/entities/graph принимают scope. Без таблицы graph_scopes — полный откат на старое поведение (hasScopeSupport probe).
+- LinksTab: селектор области (🌐 Все документы / 🗂 области), кнопка 🗂 — менеджер областей (создание: название, объекты, исключения, IBAN; удаление), кнопка 🌉 Мосты — пересечения областей.
+
+## v111.1 fix (2026-09-03) — SQL: FK entities_scope_id_fkey падал
+- Причина: существующие entities получили scope_id=00000000-…, а такой строки в graph_scopes не было. FIX: системная область «Все документы» с нулевым id вставляется ДО FK; FK пересоздаётся (drop if exists + add). Файл v111-области.sql обновлён, идемпотентен.
+
+## v111.2 (2026-09-03) — fix «Нет таблицы graph_scopes» после выполнения SQL
+- hasScopeSupport кэшировал отрицательный результат навсегда → после выполнения SQL бэкенд всё равно не видел таблицу до рестарта. Теперь кэшируется только успех.
+
+## v111.3 (2026-09-03) — includeNames + очистка графа
+- Фильтр области: includeNames («включить по названию») для receipts и bank_movements; CRUD принимает includeNames.
+- POST /api/links/clear {scope} — чистит entities/doc_entities/doc_links/entity_links области ('all' = ZERO_SCOPE, 'everything' = все области). Документы не трогает.
+- LinksTab: поле «Включить по названию» в менеджере областей, кнопка 🧹 очистки графа текущей области.
+
+## v112 (2026-09-04) — визуальное дерево источников в редакторе области
+- GET /api/links/tree: объекты/типы документов/IBAN/топ-100 контрагентов с количеством.
+- Фильтр области: + excludeObjects, excludeDocTypes, excludeIbans (❌ игнорировать); контрагенты из дерева мапятся в includeNames/excludeNames.
+- Менеджер областей: дерево-чеклист с циклом ⚪→✅→❌ (include/ignore), счётчики документов, секции details. Старые поля «объекты/IBAN текстом» убраны.
+
+## v114 (2026-09-04) — AI-архитектор (Фазы 1+2)
+- POST /api/links/ai-discover: равномерная выборка ~30 документов → Kimi определяет ДОПОЛНИТЕЛЬНЫЕ типы сущностей (нотариус, адрес, modelo…) + кластеры документов. Кэш в aiDiscoveredTypes (процесс).
+- aiExtractEntitiesFromText(text, customTypes): динамическая JSON-схема = 9 базовых + AI-открытые типы.
+- POST /api/links/ai-extract принимает extraTypes (или берёт кэш разведки); кастомные типы пишутся как entities.type = snake_case.
+- LinksTab: кнопка «🧠 AI-архитектор», панель найденных типов + кластеров, кнопка «▶ Извлечь эти типы из всех документов»; entColor() — хеш-цвет для неизвестных типов.
+
+## v115 (2026-09-04) — управление AI-извлечением + дерево источников v2
+- AI-извлечение: ⏸ Пауза / ▶ Продолжить (с места остановки, offset сохраняется) / ⏹ Прервать; aiExtract(startOffset) — resume.
+- Дерево источников: секции названы как вкладки («🧾 Фактуры и Доки — объекты», «🏦 Выписки банка — счета»…), в заголовке секции групповые кнопки «✅ все / ❌ все / ⚪ сброс».
+
+## v115 hotfix — метка /api/health build застряла на v110 ещё с v111 (замены не совпадали молча). Восстановлена: v115-2026-09-04.
+
+## v115.1 (2026-09-04) — fix «Converting circular structure to JSON»
+- onClick кнопок AI-извлечения передавал объект события как startOffset → JSON.stringify падал. aiExtract теперь принимает только число; кнопки вызывают () => aiExtract().
+
+## v116 (2026-09-04)
+- Мультивыбор файлов: новая кнопка «📝 Распознать» в панели действий (рядом с «Переместить в папку…» / «Ссылка» / «Удалить»).
+- recognizeSelectedDocs(): распознаёт выбранные фото/PDF пачкой — оригинал + перевод на русский (recognizeFilePages → /api/docs/recognize-text), результат сохраняется в карточке файла (saveDocOcr + docDate v59). Уже распознанные (m.ocr.pages) пропускаются.
+- Прогресс-модалка docsOcrBatch {total, done, skipped, errors[], current, status}: прогресс-бар, имя текущего файла, в конце список ошибок и кнопка «Готово» (снимает выбор).
+- Бэкенд не менялся (build v115.1-2026-09-04).
+
+## v117 (2026-09-04)
+- Автосоздание областей из AI-кластеров в один клик (закрыт долг v114).
+- Backend: POST /api/links/ai-scope-filter {name, what} — собирает реальные значения дерева (объекты, типы документов, IBAN, контрагенты из receipts+bank_movements), Kimi выбирает относящиеся к кластеру, ответ валидируется строго по существующим значениям; возвращает {filter, picked}.
+- Frontend: панель кластеров — кнопка «⚡ Создать области из всех кластеров» + кнопка «⚡ область» у каждого кластера; статус по каждой области (⚪⏳✅❌); после создания — loadScopes(). Области правятся вручную через 🗂.
+
+## v117.1 (2026-09-04) — фикс «сущности не видны после построения графа»
+- Backend build: если запрошена область (?scope=uuid), а graph_scopes недоступна — ошибка 500 вместо молчаливой записи графа в «Все документы» (ZERO_SCOPE). Раньше из-за transient-сбоя hasScopeSupport граф области мог уйти в нулевую область → список пуст.
+- Backend entities: при пустом ответе с областью возвращает elsewhere — сколько сущностей в ДРУГИХ областях.
+- Frontend: после «🔄 Построить связи» сбрасывается текст поиска (старый q скрывал свежие сущности); пустое состояние с elsewhere>0 показывает подсказку «в других областях N сущностей — переключите область»; сброс elsewhere при смене области.
+
+## v118 (2026-09-04) — свободный режим AI-извлечения
+- Backend: aiExtractEntitiesFree(text, knownTypes) — AI САМ возвращает {entities:[{type,type_label,value,label}], relations:[{from,to,relation}]} без фиксированной схемы; type санитизируется (snake_case, ≤40).
+- Реестр типов getKnownFreeTypes(): базовые (BASE_TYPE_LABELS) + типы из БД entities + сессионный кэш aiFreeTypes — AI переиспользует известные типы, новые создаёт только при необходимости (консистентность между батчами).
+- ai-extract принимает freeMode; relations → entity_links (link_type=relation, confidence 0.7, created_by='ai', evidence 'AI свободный режим'); stats.newTypes/relsAdded.
+- Frontend: кнопка AI-извлечение стала сдвоенной — правый сегмент переключает 🧷 схема / 🧠 свободный; прогресс показывает новых типов и связей сущностей.
+
+## v119 (2026-09-04) — вкладка «🌐 Парсинг»
+- SQL: v119-парсинг.sql — таблицы parse_sources (name,url,site,robots_ok,robots_note) и parse_results (source_id,url,title,price,currency,image,data jsonb,fetched_at). Пользователь должен выполнить в Supabase.
+- Backend: parseRobots() (группы UA *, правила Allow/Disallow с longest-prefix-match, sitemaps, заблокированные UA); эндпоинты GET/POST/DELETE /api/parse/sources, GET /api/parse/results, POST /api/parse/robots (проверка URL по robots.txt домена), POST /api/parse/run (fetch с браузерным UA → JSON-LD schema.org Product → title/price/currency/image/brand/sku/rating; fallback og:meta) → запись в parse_results. Логирование logActivity('Парсинг', ...).
+- Frontend: ParseTab — добавление источника с автопроверкой robots.txt (при запрете — предупреждение), карточки источников (robots-бейдж, последний результат с ценой), ▶ Спарсить, 🕘 История (50 записей), удаление. Таб 'parse' добавлен в TAB_LABELS (доступ управляется в 👥 Доступ), десктопная шапка, мобильное меню и свайп-порядок.
+- Leroy Merlin robots.txt: карточки /productos/... разрешены; запрещены search/filters/cart/login; sitemap-productos1-4.xml доступны для массового импорта (следующий шаг).
+
+## v119.1 (2026-09-04) — обход антибота Leroy Merlin (403 DataDome)
+- Проверено: ВСЕ HTML-страницы leroymerlin.es отдают 403 с датацентровых IP (DataDome), но sitemap XML (статика на CDN) доступен (sitemap-productos1.xml = 21MB, 200 OK).
+- Backend: extractFromHtml() вынесена в общую функцию; parseSitemapXml(xml, filter, limit) — разбор <url>/<loc>/<image:loc>/<image:title> с фильтром по словам; POST /api/parse/paste {id, html} — извлечение из HTML, вставленного пользователем из своего браузера (обход DataDome); /api/parse/run: kind==='sitemap' → XML (sitemapindex → список файлов, urlset → товары), page → 403 теперь с понятной подсказкой про 📋 HTML.
+- parse_sources + колонки kind ('page'|'sitemap') и filter — обновлён v119-парсинг.sql (alter table … add column if not exists). Запустить повторно!
+- Frontend: выбор типа источника (📄 Страница / 🗺 Sitemap) + поле фильтра; кнопка «📋 HTML» с модалкой вставки; превью товаров (картинки media.adeo.com) в карточке и истории.
+
+## v120 (2026-09-04) — автоматизация парсинга (A+B+C)
+- Backend: runParseSource(src) — общая логика run; recordParseOutcome() — сравнение цены с предыдущей → parse_sources.last_price/last_change/last_run_at (📈/📉 бейдж); PATCH /api/parse/sources {id, auto_every_hours} (0/6/12/24/168); POST /api/parse/paste-url {url, html} — «умная» вставка: источник находится/создаётся по URL (для букмарклета и iOS Shortcut; CORS открыт, лимит 300MB достаточен); планировщик parseAutoTick каждые 30 мин обходит источники с auto_every_hours>0 (серверный автозапуск — для sitemap и сайтов без антибота).
+- Frontend: селектор ⏱ автозапуска в карточке источника; бейдж изменения цены (📈 рост оранжевый / 📉 падение зелёный); кнопка «🔗 Авто» — модалка с перетаскиваемым букмарклетом «📌 → В Парсинг» (fetch paste-url с токеном) и инструкцией для iOS Shortcut.
+- SQL: v119-парсинг.sql дополнен alter-колонками auto_every_hours, last_run_at, last_price, last_change — выполнить повторно.
+
+## v121 (2026-09-04) — парсинг по шагам: sitemap-каталог + rate limiting + прокси
+- Шаг 1 UA: PARSE_HEADERS — полный набор браузерных заголовков (Sec-Fetch-*, Accept-Language es-ES и т.д.).
+- Шаг 2 sitemap-first: POST /api/parse/catalog/sync {url} — скачивает sitemap XML (до 40MB), sitemapindex → список файлов, urlset → upsert в parse_products (site,url unique); GET /api/parse/catalog?q=&site= — поиск по словам (ilike). Таблица parse_products в v119-парсинг.sql (выполнить повторно).
+- Шаг 3 rate limiting: parseThrottle() — минимум 2–3,5 с между запросами к одному хосту (parseLastHit Map), используется в sync и prices.
+- Шаг 4 прокси: env PARSE_PROXY=http://user:pass@host:port + опциональный пакет https-proxy-agent (добавить в backend package.json при необходимости); без прокси цены LM всё равно 403 (DataDome банит датацентр-IP) — честное сообщение об ошибке.
+- POST /api/parse/catalog/prices {ids≤20} — последовательный обход с паузами, сохранение price/currency/price_at в parse_products.
+- Frontend ParseTab: блок «🗂 Каталог» — кнопки синка sitemap-productos1-4, поиск по каталогу, карточки товаров (фото/название/цена), 💶 цена одного / 💶×10 первых.
+
+## v122 (2026-09-04) — артикулы + AI-цены (Уровень 1 автоматизации)
+- Артикул = число перед .html в URL (регулярка /-(\d{5})\.html/); извлекается при синке sitemap; POST /api/parse/catalog/backfill-articles — дозаполнение для старого каталога; поиск по артикулу (одно слово из цифр → eq article). Колонки article, price_source — в v119-парсинг.sql (выполнить повторно).
+- POST /api/parse/catalog/ai-prices {ids≤10}: Kimi с builtin $web_search ищет цену по названию+артикулу+URL, возвращает строгий JSON {price,currency,source,title}; валидация 0<price<100000; price_source='ai-search'.
+- Прямые цены помечаются price_source='direct'/'direct-proxy'.
+- Frontend: артикул и 🤖-бейдж в карточке товара; кнопки 💶 (прямая) и 🤖 (AI) у каждого товара; «🤖 AI-цены ×10» и «💶 ×10» для выдачи; кнопка «🔢 Артикулы» (бэкфилл).
+
+## v122.1 (2026-09-04) — фикс «AI не нашёл цену»
+- aiFindPrice: 2 попытки (веб-поиск с запросами по артикулу/названию/Google Shopping → усиленный запрос с допуском приблизительной цены "approx":true); запасной парсинг цены из произвольного текста («12.99 €»); при полном провале ошибка содержит первые 180 символов ответа AI для диагностики.
+- price_source: 'ai-search' (точная) / 'ai-estimate' (приблизительная, бейдж 🤖≈ оранжевый).
