@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v123-2026-09-04', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v123.1-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4469,8 +4469,10 @@ app.get('/api/parse/catalog', requireAuth, tabGuard('list'), async (req, res) =>
   try {
     const q = String(req.query.q || '').trim();
     const site = String(req.query.site || '').trim();
-    let query = supabaseAdmin.from('parse_products').select('*', { count: 'exact' }).order('last_seen', { ascending: false }).limit(Math.min(200, parseInt(req.query.limit || '60', 10) || 60));
+    const priced = String(req.query.priced || '') === '1'; // v123.1: только товары с ценой
+    let query = supabaseAdmin.from('parse_products').select('*', { count: 'exact' }).order(priced ? 'price_at' : 'last_seen', { ascending: false, nullsFirst: false }).limit(Math.min(200, parseInt(req.query.limit || '60', 10) || 60));
     if (site) query = query.eq('site', site);
+    if (priced) query = query.not('price', 'is', null);
     if (q) {
       const words = q.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6);
       if (words.length === 1 && /^\d{5,}$/.test(words[0])) query = query.eq('article', words[0]); // поиск по артикулу
@@ -4481,7 +4483,14 @@ app.get('/api/parse/catalog', requireAuth, tabGuard('list'), async (req, res) =>
       if (/does not exist/i.test(error.message || '')) return res.json({ products: [], total: 0, missing: true });
       throw error;
     }
-    res.json({ products: data || [], total: count || 0 });
+    // v123.1: сколько всего товаров уже с ценой (для бейджа «💶 С ценой: N»)
+    let pricedTotal = null;
+    try {
+      let pq = supabaseAdmin.from('parse_products').select('*', { count: 'exact', head: true }).not('price', 'is', null);
+      if (site) pq = pq.eq('site', site);
+      pricedTotal = (await pq).count || 0;
+    } catch (e) { /* колонок ещё нет — не критично */ }
+    res.json({ products: data || [], total: count || 0, pricedTotal });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

@@ -53,3 +53,7 @@ create index if not exists parse_products_name_idx on parse_products (name text_
 alter table parse_products add column if not exists article text;
 alter table parse_products add column if not exists price_source text;
 create index if not exists parse_products_article_idx on parse_products (article);
+
+-- v123: AI-оценка цены хранится ОТДЕЛЬНО от факта
+alter table parse_products add column if not exists price_estimate numeric;
+alter table parse_products add column if not exists price_estimate_at timestamptz;

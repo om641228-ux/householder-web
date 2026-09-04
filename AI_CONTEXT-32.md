@@ -2398,3 +2398,7 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - SQL (дописано в v119-парсинг.sql, ПЕРЕЗАПУСТИТЬ): alter parse_products add price_estimate numeric, price_estimate_at timestamptz.
 - Фронт: в карточке товара факт-цена жирным; если факта нет, но есть оценка → оранжевым «≈ X € (оценка AI)»; бейджи 🤖 (ai-search), 🧩 (extension), 🤖≈ (есть оценка). fetchAiPrices маппит approx → price_estimate, не затирая price.
 - Расширение Chrome MV3 leroy-price-extension/ (+ zip): popup (API URL + токен, «▶ Собрать 20 цен»), background.js открывает фоновые вкладки из pending-prices, извлекает JSON-LD Product (extractOnPage), шлёт POST /ext-price, пауза 2–3.5 с. Обходит DataDome IP пользователя.
+
+## v123.1 (2026-09-05) — каталог: автозагрузка из базы + фильтр «с ценой»
+- Бэкенд GET /api/parse/catalog: параметр priced=1 (price not null, сортировка по price_at desc); ответ теперь включает pricedTotal (всего товаров с ценой по сайту). build v123.1-2026-09-05.
+- Фронт ParseTab: catPriced/catPricedTotal state; catSearch(over={q,priced}) с переопределениями; useEffect автозагрузки каталога из parse_products при открытии вкладки (sitemap-синк нужен только для пополнения); кнопка-переключатель «💶 С ценой: N» рядом с «Найти»; строка «Найдено» показывает счётчик цен.
