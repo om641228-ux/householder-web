@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v119-2026-09-04', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v119.1-2026-09-04', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4264,9 +4264,15 @@ app.post('/api/parse/sources', requireAuth, requireRole('admin', 'manager'), asy
     if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'Нужен полный URL (https://…)' });
     const u = new URL(url);
     const name = String((req.body && req.body.name) || '').trim().slice(0, 120) || (u.hostname + u.pathname).slice(0, 120);
+    const kind = (req.body && req.body.kind) === 'sitemap' ? 'sitemap' : 'page';
+    const filter = String((req.body && req.body.filter) || '').trim().slice(0, 200);
     const { data, error } = await supabaseAdmin.from('parse_sources')
-      .insert({ name, url, site: u.hostname, robots_ok: req.body.robots_ok !== false, robots_note: String(req.body.robots_note || '').slice(0, 300) })
+      .insert({ name, url, site: u.hostname, kind, filter, robots_ok: req.body.robots_ok !== false, robots_note: String(req.body.robots_note || '').slice(0, 300) })
       .select().single();
+    if (error && /column.*(kind|filter)/i.test(error.message || '')) {
+      // колонок ещё нет — подсказать SQL
+      return res.status(500).json({ error: 'Обновите таблицу парсинга (выполните v119-парсинг.sql заново): alter table parse_sources add column if not exists kind text default \'page\', add column if not exists filter text;' });
+    }
     if (error) throw error;
     if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Добавлен источник', name, req);
     res.json({ ok: true, source: data });
@@ -4310,56 +4316,136 @@ app.post('/api/parse/robots', requireAuth, tabGuard('list'), async (req, res) =>
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// запуск парсинга одного источника: HTML → JSON-LD (schema.org Product) → сохранение результата
+// v119.1: извлечение данных из HTML (JSON-LD Product + og:meta fallback) — общая функция
+function extractFromHtml(html) {
+  html = String(html || '');
+  const jsonlds = [];
+  const re = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    try {
+      const j = JSON.parse(m[1].trim());
+      const flat = Array.isArray(j) ? j : [j];
+      for (const it of flat) {
+        jsonlds.push(it);
+        if (it && Array.isArray(it['@graph'])) jsonlds.push(...it['@graph']);
+      }
+    } catch (_) { /* битый JSON-LD пропускаем */ }
+  }
+  const product = jsonlds.find(j => j && /Product/i.test(String(j['@type'] || '')));
+  let title = '', price = null, currency = '', image = '', extra = {};
+  if (product) {
+    title = String(product.name || '').trim();
+    const offers = Array.isArray(product.offers) ? product.offers[0] : product.offers;
+    if (offers) {
+      price = parseFloat(String(offers.price || offers.lowPrice || '').replace(',', '.'));
+      if (!isFinite(price)) price = null;
+      currency = String(offers.priceCurrency || '').trim();
+    }
+    image = Array.isArray(product.image) ? product.image[0] : String(product.image || '');
+    extra = { brand: (product.brand && (product.brand.name || product.brand)) || '', sku: product.sku || product.mpn || '', availability: offers ? String(offers.availability || '') : '', rating: product.aggregateRating ? product.aggregateRating.ratingValue : null };
+  } else {
+    const mt = html.match(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i) || html.match(/<title[^>]*>([^<]+)<\/title>/i);
+    title = mt ? mt[1].trim() : '';
+    const mp = html.match(/<meta[^>]*(?:property|name)=["'](?:product:price:amount|og:price:amount)["'][^>]*content=["']([0-9.,]+)["']/i);
+    if (mp) { price = parseFloat(mp[1].replace(',', '.')); if (!isFinite(price)) price = null; }
+    const mc = html.match(/<meta[^>]*(?:property|name)=["'](?:product:price:currency|og:price:currency)["'][^>]*content=["']([A-Z]{3})["']/i);
+    if (mc) currency = mc[1];
+  }
+  return { title, price, currency, image, extra, jsonldCount: jsonlds.length };
+}
+
+// v119.1: разбор XML-сайтмапа (DataDome не защищает статические XML) — список товаров по фильтру
+function parseSitemapXml(xml, filter, limit) {
+  const items = [];
+  const words = String(filter || '').toLowerCase().split(/\s+/).filter(Boolean);
+  const re = /<url>([\s\S]*?)<\/url>/gi;
+  let m;
+  while ((m = re.exec(xml)) !== null && items.length < limit) {
+    const block = m[1];
+    const lm = block.match(/<loc>([^<]+)<\/loc>/i);
+    if (!lm) continue;
+    const loc = lm[1].trim();
+    const slug = decodeURIComponent(loc.split('/').filter(Boolean).pop() || '').replace(/\.html?$/i, '').replace(/-/g, ' ');
+    const hay = (loc + ' ' + slug).toLowerCase();
+    if (words.length && !words.every(w => hay.includes(w))) continue;
+    const im = block.match(/<image:loc>([^<]*)<\/image:loc>/i);
+    const nameM = block.match(/<image:title>([^<]*)<\/image:title>/i);
+    items.push({ url: loc, name: (nameM ? nameM[1].trim() : slug) || loc, image: im ? im[1].trim() : '' });
+  }
+  return items;
+}
+
+// v119.1: вставка HTML вручную — обход DataDome: страницу сохраняет браузер пользователя, парсим мы
+app.post('/api/parse/paste', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const id = String((req.body && req.body.id) || '');
+    const html = String((req.body && req.body.html) || '');
+    if (html.length < 200) return res.status(400).json({ error: 'HTML слишком короткий — скопируйте исходник страницы целиком' });
+    const { data: src, error: se } = await supabaseAdmin.from('parse_sources').select('*').eq('id', id).maybeSingle();
+    if (se) throw se;
+    if (!src) return res.status(404).json({ error: 'Источник не найден' });
+    const ex = extractFromHtml(html);
+    const { data: saved, error: ie } = await supabaseAdmin.from('parse_results')
+      .insert({ source_id: id, url: src.url, title: ex.title.slice(0, 300), price: ex.price, currency: ex.currency, image: ex.image, data: { ...ex.extra, via: 'paste' } })
+      .select().single();
+    if (ie) throw ie;
+    if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Вставка HTML', (src.name || src.url) + (ex.price != null ? ' = ' + ex.price + ' ' + ex.currency : ''), req);
+    res.json({ ok: true, result: saved });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// запуск парсинга одного источника: kind=page — HTML → JSON-LD; kind=sitemap — XML → список товаров
 app.post('/api/parse/run', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
   try {
     const id = String((req.body && req.body.id) || '');
     const { data: src, error: se } = await supabaseAdmin.from('parse_sources').select('*').eq('id', id).maybeSingle();
     if (se) throw se;
     if (!src) return res.status(404).json({ error: 'Источник не найден' });
+    const kind = src.kind === 'sitemap' ? 'sitemap' : 'page';
+
+    if (kind === 'sitemap') {
+      // sitemap XML обычно на CDN и НЕ защищён антиботом
+      const r = await axios.get(src.url, {
+        headers: { 'User-Agent': PARSE_UA, 'Accept': 'application/xml,text/xml,text/html;q=0.8' },
+        timeout: 60000, maxContentLength: 30 * 1024 * 1024, responseType: 'text', validateStatus: () => true
+      });
+      if (r.status >= 400) throw new Error('HTTP ' + r.status + ' при загрузке sitemap');
+      const xml = String(r.data || '');
+      // если это sitemap-index (список сайтмапов) — вернём их списком
+      const isIndex = /<sitemapindex/i.test(xml);
+      if (isIndex) {
+        const subs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/gi)].map(m => m[1].trim()).slice(0, 50);
+        const { data: saved, error: ie } = await supabaseAdmin.from('parse_results')
+          .insert({ source_id: id, url: src.url, title: 'Sitemap-индекс: ' + subs.length + ' файлов', price: null, currency: '', image: '', data: { kind: 'sitemap-index', items: subs.map(u => ({ url: u, name: u.split('/').pop(), image: '' })) } })
+          .select().single();
+        if (ie) throw ie;
+        return res.json({ ok: true, result: saved, items: subs.length });
+      }
+      const items = parseSitemapXml(xml, src.filter || '', 100);
+      const totalUrls = (xml.match(/<url>/gi) || []).length;
+      const { data: saved, error: ie } = await supabaseAdmin.from('parse_results')
+        .insert({ source_id: id, url: src.url, title: `Найдено ${items.length} из ${totalUrls} URL`, price: null, currency: '', image: '', data: { kind: 'sitemap', filter: src.filter || '', totalUrls, items } })
+        .select().single();
+      if (ie) throw ie;
+      if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Sitemap', (src.name || src.url) + ' → ' + items.length + ' товаров', req);
+      return res.json({ ok: true, result: saved, items: items.length });
+    }
+
+    // обычная HTML-страница
     const r = await axios.get(src.url, {
       headers: { 'User-Agent': PARSE_UA, 'Accept': 'text/html,application/xhtml+xml', 'Accept-Language': 'es-ES,es;q=0.9,ru;q=0.8' },
       timeout: 30000, maxContentLength: 8 * 1024 * 1024, validateStatus: () => true
     });
-    if (r.status >= 400) throw new Error('HTTP ' + r.status + ' при загрузке страницы (возможна антибот-защита)');
-    const html = String(r.data || '');
-    // JSON-LD блоки
-    const jsonlds = [];
-    const re = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
-    let m;
-    while ((m = re.exec(html)) !== null) {
-      try {
-        const j = JSON.parse(m[1].trim());
-        jsonlds.push(...(Array.isArray(j) ? j : [j]));
-        for (const it of jsonlds) { if (it && Array.isArray(it['@graph'])) jsonlds.push(...it['@graph']); }
-      } catch (_) { /* битый JSON-LD пропускаем */ }
-    }
-    const product = jsonlds.find(j => j && /Product/i.test(String(j['@type'] || '')));
-    let title = '', price = null, currency = '', image = '', extra = {};
-    if (product) {
-      title = String(product.name || '').trim();
-      const offers = Array.isArray(product.offers) ? product.offers[0] : product.offers;
-      if (offers) {
-        price = parseFloat(String(offers.price || offers.lowPrice || '').replace(',', '.'));
-        if (!isFinite(price)) price = null;
-        currency = String(offers.priceCurrency || '').trim();
-      }
-      image = Array.isArray(product.image) ? product.image[0] : String(product.image || '');
-      extra = { brand: (product.brand && (product.brand.name || product.brand)) || '', sku: product.sku || product.mpn || '', availability: offers ? String(offers.availability || '') : '', rating: product.aggregateRating ? product.aggregateRating.ratingValue : null };
-    } else {
-      const mt = html.match(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i) || html.match(/<title[^>]*>([^<]+)<\/title>/i);
-      title = mt ? mt[1].trim() : '';
-      const mp = html.match(/<meta[^>]*(?:property|name)=["'](?:product:price:amount|og:price:amount)["'][^>]*content=["']([0-9.,]+)["']/i);
-      if (mp) price = parseFloat(mp[1].replace(',', '.'));
-      const mc = html.match(/<meta[^>]*(?:property|name)=["'](?:product:price:currency|og:price:currency)["'][^>]*content=["']([A-Z]{3})["']/i);
-      if (mc) currency = mc[1];
-    }
+    if (r.status === 403) throw new Error('HTTP 403 — сайт защищён антиботом (DataDome) и блокирует серверные запросы. Обход: откройте страницу в своём браузере, сохраните/скопируйте исходник и используйте кнопку «📋 Вставить HTML» — данные извлекутся так же.');
+    if (r.status >= 400) throw new Error('HTTP ' + r.status + ' при загрузке страницы');
+    const ex = extractFromHtml(r.data);
     const { data: saved, error: ie } = await supabaseAdmin.from('parse_results')
-      .insert({ source_id: id, url: src.url, title: title.slice(0, 300), price, currency, image, data: extra })
+      .insert({ source_id: id, url: src.url, title: ex.title.slice(0, 300), price: ex.price, currency: ex.currency, image: ex.image, data: ex.extra })
       .select().single();
     if (ie) throw ie;
-    if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Запуск парсера', (src.name || src.url) + (price != null ? ' = ' + price + ' ' + currency : ''), req);
-    res.json({ ok: true, result: saved, jsonld: jsonlds.length });
+    if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Запуск парсера', (src.name || src.url) + (ex.price != null ? ' = ' + ex.price + ' ' + ex.currency : ''), req);
+    res.json({ ok: true, result: saved, jsonld: ex.jsonldCount });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

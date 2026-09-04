@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v119 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v119.1 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2662,6 +2662,11 @@ function ParseTab({ token, isMobileView, canRun }) {
   const [busyId, setBusyId] = useState(null);
   const [hist, setHist] = useState({}); // source_id -> results[]
   const [robotsInfo, setRobotsInfo] = useState(null); // {url, allowed, note, sitemaps}
+  const [kind, setKind] = useState('page'); // v119.1: page | sitemap
+  const [filter, setFilter] = useState('');
+  const [pasteFor, setPasteFor] = useState(null); // source id, для которого вставляем HTML
+  const [pasteHtml, setPasteHtml] = useState('');
+  const [pasteBusy, setPasteBusy] = useState(false);
 
   const loadSources = async () => {
     setLoading(true); setErr('');
@@ -2698,11 +2703,11 @@ function ParseTab({ token, isMobileView, canRun }) {
       } catch (re) { robots_note = 'robots.txt не проверен: ' + re.message; }
       const r = await fetch(`${API_URL}/api/parse/sources?token=${token}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: u, name: name.trim(), robots_ok, robots_note })
+        body: JSON.stringify({ url: u, name: name.trim(), robots_ok, robots_note, kind, filter: filter.trim() })
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
-      setUrl(''); setName('');
+      setUrl(''); setName(''); setFilter('');
       await loadSources();
     } catch (e) { setErr(e.message); }
   };
@@ -2740,6 +2745,23 @@ function ParseTab({ token, isMobileView, canRun }) {
     } catch (e) { setErr(e.message); }
   };
 
+  const submitPaste = async () => {
+    if (!pasteFor || pasteHtml.length < 200) return;
+    setPasteBusy(true); setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/parse/paste?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: pasteFor, html: pasteHtml })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setPasteFor(null); setPasteHtml('');
+      await loadSources();
+      if (hist[pasteFor]) loadHistory(pasteFor);
+    } catch (e) { setErr(e.message); }
+    setPasteBusy(false);
+  };
+
   const fmtDate = (d) => d ? new Date(d).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
 
   return (
@@ -2750,15 +2772,26 @@ function ParseTab({ token, isMobileView, canRun }) {
 
       <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: 12, marginBottom: 12 }}>
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>➕ Новый источник</div>
-        <div style={{ display: 'grid', gap: 8, gridTemplateColumns: isMobileView ? '1fr' : '2fr 1fr auto' }}>
-          <input value={url} onChange={e => setUrl(e.target.value)} placeholder="URL страницы (напр. https://www.leroymerlin.es/productos/...)"
+        <div style={{ display: 'grid', gap: 8, gridTemplateColumns: isMobileView ? '1fr' : 'auto 2fr 1fr auto' }}>
+          <select value={kind} onChange={e => setKind(e.target.value)} title="Тип источника"
+            style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13, background: '#fff' }}>
+            <option value="page">📄 Страница HTML</option>
+            <option value="sitemap">🗺 Sitemap XML</option>
+          </select>
+          <input value={url} onChange={e => setUrl(e.target.value)} placeholder={kind === 'sitemap' ? 'URL сайтмапа (https://www.leroymerlin.es/sitemap-productos1.xml)' : 'URL страницы (напр. https://www.leroymerlin.es/productos/...)'}
             style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
           <input value={name} onChange={e => setName(e.target.value)} placeholder="Название (необязательно)"
             style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
           {canRun && <button onClick={addSource} disabled={!url.trim()}
             style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#0071e3', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Добавить</button>}
         </div>
-        <div style={{ fontSize: 11, color: '#8e8e93', marginTop: 6 }}>При добавлении автоматически проверяется robots.txt сайта. Для Leroy Merlin разрешены карточки товаров /productos/…; поиск и фильтры запрещены.</div>
+        {kind === 'sitemap' && (
+          <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Фильтр: слова из названия/URL через пробел (напр. plato ducha) — пусто = первые 100"
+            style={{ marginTop: 8, width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
+        )}
+        <div style={{ fontSize: 11, color: '#8e8e93', marginTop: 6 }}>
+          При добавлении проверяется robots.txt. ⚠️ Leroy Merlin защищает HTML-страницы антиботом DataDome (сервер получает 403) — для цен используйте «📋 HTML» (вставка страницы из вашего браузера), а <b>sitemap XML не защищён</b> и парсится напрямую.
+        </div>
         {robotsInfo && (
           <div style={{ marginTop: 8, fontSize: 12, padding: '6px 10px', borderRadius: 8, background: robotsInfo.allowed ? '#e8f8ef' : '#fdecea', border: '1px solid ' + (robotsInfo.allowed ? '#34c759' : '#e74c3c') }}>
             {robotsInfo.allowed ? '✅' : '❌'} robots.txt: {robotsInfo.note}
@@ -2780,11 +2813,17 @@ function ParseTab({ token, isMobileView, canRun }) {
               <span title={src.robots_note || ''} style={{ fontSize: 14 }}>{src.robots_ok === false ? '❌' : '✅'}</span>
               <b style={{ fontSize: 14 }}>{src.name || src.url}</b>
               <span style={{ color: '#8e8e93', fontSize: 12 }}>{src.site}</span>
+              <span style={{ fontSize: 11, padding: '1px 8px', borderRadius: 10, background: src.kind === 'sitemap' ? '#eaf3fb' : '#f5f5f7', color: '#555' }}>{src.kind === 'sitemap' ? '🗺 sitemap' : '📄 страница'}</span>
+              {src.filter && <span style={{ fontSize: 11, color: '#7c3aed' }}>фильтр: {src.filter}</span>}
               <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6 }}>
                 {canRun && <button onClick={() => runSource(src.id)} disabled={busyId === src.id}
                   style={{ padding: '5px 12px', borderRadius: 8, border: 'none', background: '#34c759', color: '#fff', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>
                   {busyId === src.id ? '⏳ Парсю…' : '▶ Спарсить'}
                 </button>}
+                {canRun && src.kind !== 'sitemap' && (
+                  <button onClick={() => { setPasteFor(src.id); setPasteHtml(''); }} title="Вставить исходник страницы из браузера (обход антибота)"
+                    style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12.5, cursor: 'pointer' }}>📋 HTML</button>
+                )}
                 <button onClick={() => hist[src.id] ? setHist(prev => { const h = { ...prev }; delete h[src.id]; return h; }) : loadHistory(src.id)}
                   style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12.5, cursor: 'pointer' }}>
                   {hist[src.id] ? '▴ Скрыть' : '🕘 История'}
@@ -2799,15 +2838,38 @@ function ParseTab({ token, isMobileView, canRun }) {
                 📦 {src.last.title || '(без названия)'} {src.last.price != null && <b style={{ color: '#1d1d1f' }}>· {src.last.price} {src.last.currency || '€'}</b>} <span style={{ color: '#8e8e93', fontSize: 11 }}>· {fmtDate(src.last.fetched_at)}</span>
               </div>
             )}
+            {src.last && src.last.data && Array.isArray(src.last.data.items) && src.last.data.items.length > 0 && (
+              <div style={{ marginTop: 6, display: 'grid', gap: 4 }}>
+                {src.last.data.items.slice(0, 8).map((it, i) => (
+                  <a key={i} href={it.url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#0071e3', textDecoration: 'none' }}>
+                    {it.image && <img src={it.image} alt="" style={{ width: 28, height: 28, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }} />}
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.name}</span>
+                  </a>
+                ))}
+                {src.last.data.items.length > 8 && <div style={{ fontSize: 11, color: '#8e8e93' }}>… ещё {src.last.data.items.length - 8} (вся выдача в «🕘 История»)</div>}
+              </div>
+            )}
             {src.robots_note && <div style={{ fontSize: 11, color: src.robots_ok === false ? '#e74c3c' : '#8e8e93', marginTop: 4 }}>{src.robots_note}</div>}
             {hist[src.id] && (
               <div style={{ marginTop: 8, borderTop: '1px solid #f0f0f2', paddingTop: 6 }}>
                 {hist[src.id].length === 0 && <div style={{ fontSize: 12, color: '#8e8e93' }}>История пуста — нажмите «▶ Спарсить»</div>}
                 {hist[src.id].map(r => (
-                  <div key={r.id} style={{ fontSize: 12, padding: '3px 0', display: 'flex', gap: 8, alignItems: 'baseline' }}>
-                    <span style={{ color: '#8e8e93', flexShrink: 0 }}>{fmtDate(r.fetched_at)}</span>
-                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title || '—'}</span>
-                    {r.price != null && <b>{r.price} {r.currency || '€'}</b>}
+                  <div key={r.id} style={{ fontSize: 12, padding: '3px 0' }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                      <span style={{ color: '#8e8e93', flexShrink: 0 }}>{fmtDate(r.fetched_at)}</span>
+                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title || '—'}</span>
+                      {r.price != null && <b>{r.price} {r.currency || '€'}</b>}
+                    </div>
+                    {r.data && Array.isArray(r.data.items) && r.data.items.length > 0 && (
+                      <div style={{ margin: '2px 0 4px 12px', display: 'grid', gap: 2 }}>
+                        {r.data.items.map((it, i) => (
+                          <a key={i} href={it.url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#0071e3', textDecoration: 'none', fontSize: 11.5 }}>
+                            {it.image && <img src={it.image} alt="" style={{ width: 22, height: 22, objectFit: 'cover', borderRadius: 3, flexShrink: 0 }} />}
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.name}</span>
+                          </a>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -2815,6 +2877,25 @@ function ParseTab({ token, isMobileView, canRun }) {
           </div>
         ))}
       </div>
+
+      {pasteFor && (
+        <div onClick={() => !pasteBusy && setPasteFor(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 220, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 16, width: 640, maxWidth: '94vw' }}>
+            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>📋 Вставить исходник страницы</div>
+            <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 8 }}>
+              Откройте страницу в браузере → правый клик → «Посмотреть исходный код» (или Cmd+S → сохранить) → скопируйте весь HTML сюда. Парсер извлечёт название, цену, фото — без обращения к сайту с сервера.
+            </div>
+            <textarea value={pasteHtml} onChange={e => setPasteHtml(e.target.value)} placeholder="<!DOCTYPE html>…"
+              style={{ width: '100%', boxSizing: 'border-box', height: 180, padding: 8, borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 11, fontFamily: 'monospace' }} />
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <button onClick={submitPaste} disabled={pasteBusy || pasteHtml.length < 200}
+                style={{ flex: 1, padding: '9px', borderRadius: 8, border: 'none', background: '#34c759', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>{pasteBusy ? '⏳ Извлекаю…' : '✅ Извлечь данные'}</button>
+              <button onClick={() => setPasteFor(null)} disabled={pasteBusy}
+                style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', cursor: 'pointer' }}>Отмена</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -8763,7 +8844,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-04 · v119 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-04 · v119.1 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8776,7 +8857,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v119</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v119.1</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">
