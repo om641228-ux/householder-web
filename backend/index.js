@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v115.1-2026-09-04', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v117-2026-09-04', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4443,6 +4443,83 @@ app.post('/api/links/ai-discover', requireAuth, requireRole('admin', 'manager'),
       .map(t => ({ type: String(t.type).replace(/[^a-z0-9_]/gi, '_').toLowerCase(), label: String(t.label).slice(0, 60), example: String(t.example || '').slice(0, 120) }));
     if (typeof logActivity === 'function') logActivity(req.user, 'Связи', 'AI-разведка типов', `типов: ${aiDiscoveredTypes.length}, образцов: ${docs.length}`, req);
     res.json({ ok: true, entityTypes: aiDiscoveredTypes, clusters: (j.doc_clusters || []).slice(0, 10), sampled: docs.length, total });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v117: AI сопоставляет кластер документов с реальными значениями дерева источников → фильтр области
+app.post('/api/links/ai-scope-filter', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const cfg = OPENAI_COMPAT_PROVIDERS.kimi;
+    if (!cfg || !cfg.apiKey) throw new Error('Kimi API key not configured');
+    const name = String((req.body && req.body.name) || '').trim().slice(0, 80);
+    const what = String((req.body && req.body.what) || '').trim().slice(0, 300);
+    if (!name) return res.status(400).json({ error: 'name required' });
+    // доступные значения (та же логика, что /api/links/tree)
+    const objects = new Map(), docTypes = new Map(), cps = new Map();
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin.from('receipts').select('object, document_type, store_name').order('id').range(from, from + 999);
+      if (error) throw error;
+      for (const r of (data || [])) {
+        const o = r.object || 'other'; objects.set(o, (objects.get(o) || 0) + 1);
+        const t = r.document_type || 'other'; docTypes.set(t, (docTypes.get(t) || 0) + 1);
+        const c = String(r.store_name || '').trim(); if (c) cps.set(c, (cps.get(c) || 0) + 1);
+      }
+      if (!data || data.length < 1000) break;
+    }
+    const ibans = new Map();
+    try {
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await supabaseAdmin.from('bank_movements').select('iban, counterparty').order('id').range(from, from + 999);
+        if (error) break;
+        for (const m of (data || [])) {
+          const i = String(m.iban || '').trim() || '(без счёта)'; ibans.set(i, (ibans.get(i) || 0) + 1);
+          const c = String(m.counterparty || '').trim(); if (c) cps.set(c, (cps.get(c) || 0) + 1);
+        }
+        if (!data || data.length < 1000) break;
+      }
+    } catch (_) { /* выписок может не быть */ }
+    const top = (mp, n) => [...mp.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([nm, cnt]) => `${nm} (${cnt})`);
+    const lists = {
+      objects: top(objects, 50), docTypes: top(docTypes, 50),
+      ibans: top(ibans, 50), counterparties: top(cps, 120)
+    };
+    const prompt = `Есть кластер документов: «${name}» — ${what || 'без описания'}.
+Ниже списки РЕАЛЬНЫХ значений из базы (название и кол-во документов в скобках). Выбери, что относится к этому кластеру.
+Правила: выбирай ТОЛЬКО значения из списков, копируй названия ТОЧНО как в списке (без количества в скобках). includeNames — контрагенты/имена, относящиеся к кластеру. Если к кластеру ничего не подходит в каком-то списке — пустой массив. Не выдумывай значения.
+Верни СТРОГО JSON: {"objects":[],"docTypes":[],"ibans":[],"includeNames":[]}
+
+ОБЪЕКТЫ: ${lists.objects.join('; ') || '—'}
+ТИПЫ ДОКУМЕНТОВ: ${lists.docTypes.join('; ') || '—'}
+СЧЕТА IBAN: ${lists.ibans.join('; ') || '—'}
+КОНТРАГЕНТЫ: ${lists.counterparties.join('; ') || '—'}`;
+    const body = {
+      model: cfg.defaultModel,
+      messages: [{ role: 'user', content: prompt }],
+      max_completion_tokens: 2048, reasoning_effort: 'low', response_format: { type: 'json_object' }
+    };
+    const r = await axios.post(`${cfg.baseURL}/chat/completions`, body, {
+      headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', ...cfg.extraHeaders },
+      timeout: 120000
+    });
+    const content = r.data?.choices?.[0]?.message?.content || '{}';
+    let j = {};
+    try { j = JSON.parse(content); } catch (_) { const m = content.match(/\{[\s\S]*\}/); if (m) { try { j = JSON.parse(m[0]); } catch (_) { /* ignore */ } } }
+    // валидация: оставляем только значения, реально есть в базе
+    const valid = {
+      objects: new Set([...objects.keys()]), docTypes: new Set([...docTypes.keys()]),
+      ibans: new Set([...ibans.keys()]), names: new Set([...cps.keys()].map(x => x.toLowerCase()))
+    };
+    const arr = (v) => Array.isArray(v) ? v.map(x => String(x).trim()).filter(Boolean) : [];
+    const filter = {
+      objects: arr(j.objects).filter(x => valid.objects.has(x)),
+      docTypes: arr(j.docTypes).filter(x => valid.docTypes.has(x)),
+      ibans: arr(j.ibans).filter(x => valid.ibans.has(x)),
+      includeNames: arr(j.includeNames).filter(x => valid.names.has(x.toLowerCase())).slice(0, 30),
+      excludeObjects: [], excludeDocTypes: [], excludeIbans: [], excludeNames: []
+    };
+    const picked = filter.objects.length + filter.docTypes.length + filter.ibans.length + filter.includeNames.length;
+    if (typeof logActivity === 'function') logActivity(req.user, 'Связи', 'AI-фильтр области', `${name}: выбрано ${picked}`, req);
+    res.json({ ok: true, filter, picked });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

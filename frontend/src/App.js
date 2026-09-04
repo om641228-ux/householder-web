@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v116 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v117 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2834,6 +2834,42 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
     setAiDiscovering(false);
   };
 
+  // v117: автосоздание областей из AI-кластеров (AI сам подбирает фильтр по дереву источников)
+  const [aiScopesBusy, setAiScopesBusy] = useState(false);
+  const [aiScopeStat, setAiScopeStat] = useState([]); // [{name, st:'wait'|'run'|'ok'|'err', msg}]
+  const createScopesFromClusters = async (onlyIdx = null) => {
+    if (aiScopesBusy) return;
+    const list = onlyIdx == null ? aiClusters : aiClusters.filter((_, i) => i === onlyIdx);
+    if (!list.length) return;
+    if (!window.confirm(`AI создаст ${list.length === 1 ? 'область' : 'области'}: ${list.map(c => '«' + c.name + '»').join(', ')}\n\nAI сам подберёт источники (объекты, типы документов, счета, контрагенты) по дереву. После создания область можно поправить вручную через 🗂.`)) return;
+    setAiScopesBusy(true);
+    const stat = aiClusters.map(c => ({ name: c.name, st: (onlyIdx == null || list.includes(c)) ? 'wait' : 'skip', msg: '' }));
+    setAiScopeStat(stat);
+    for (const c of list) {
+      const row = stat.find(x => x.name === c.name);
+      row.st = 'run'; setAiScopeStat([...stat]);
+      try {
+        const rf = await fetch(`${API_URL}/api/links/ai-scope-filter?token=${token}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: c.name, what: c.what || '' })
+        });
+        const jf = await rf.json();
+        if (!rf.ok) throw new Error(jf.error || ('HTTP ' + rf.status));
+        if (!jf.picked) { row.st = 'err'; row.msg = 'AI не нашёл подходящих источников'; continue; }
+        const rs = await fetch(`${API_URL}/api/links/scopes?token=${token}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: c.name, filter: jf.filter })
+        });
+        const js = await rs.json();
+        if (!rs.ok) throw new Error(js.error || ('HTTP ' + rs.status));
+        row.st = 'ok'; row.msg = `источников: ${jf.picked}`;
+      } catch (e) { row.st = 'err'; row.msg = e.message; }
+      setAiScopeStat([...stat]);
+    }
+    await loadScopes();
+    setAiScopesBusy(false);
+  };
+
   const loadBridges = async () => {
     setBridges(null); setErr('');
     try {
@@ -3046,9 +3082,28 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
             <div style={{ marginTop: 6, borderTop: '1px solid #e3e6ea', paddingTop: 6 }}>
               <div style={{ color: '#3a3a3c', marginBottom: 4 }}>AI видит кластеры документов (кандидаты в области):</div>
               {aiClusters.map((c, i) => (
-                <div key={i} style={{ padding: '2px 0', color: '#3a3a3c' }}>🗂 <b>{c.name}</b> — <span style={{ color: '#8e8e93' }}>{c.what}</span></div>
+                <div key={i} style={{ padding: '2px 0', color: '#3a3a3c', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ flex: 1 }}>🗂 <b>{c.name}</b> — <span style={{ color: '#8e8e93' }}>{c.what}</span></span>
+                  <button onClick={() => createScopesFromClusters(i)} disabled={aiScopesBusy} title="Создать область только из этого кластера"
+                    style={{ border: '1px solid #d0d0d5', background: '#fff', borderRadius: 6, fontSize: 11, cursor: 'pointer', padding: '2px 8px', flexShrink: 0 }}>⚡ область</button>
+                </div>
               ))}
-              <div style={{ color: '#8e8e93', fontSize: 11, marginTop: 2 }}>Создать области из кластеров: кнопка 🗂 → дерево источников (автосоздание — в следующем релизе v115)</div>
+              <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <button onClick={() => createScopesFromClusters()} disabled={aiScopesBusy}
+                  style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: '#1d1d1f', color: '#fff', fontWeight: 700, fontSize: 13, cursor: aiScopesBusy ? 'wait' : 'pointer' }}>
+                  {aiScopesBusy ? '⏳ Создаю области…' : '⚡ Создать области из всех кластеров'}
+                </button>
+                <span style={{ color: '#8e8e93', fontSize: 11 }}>AI сам подберёт источники по дереву; потом можно поправить вручную через 🗂</span>
+              </div>
+              {aiScopeStat.length > 0 && (
+                <div style={{ marginTop: 6, fontSize: 12 }}>
+                  {aiScopeStat.map((r, i) => (
+                    <div key={i} style={{ padding: '1px 0', color: r.st === 'err' ? '#e74c3c' : r.st === 'ok' ? '#1e7e34' : '#8e8e93' }}>
+                      {r.st === 'ok' ? '✅' : r.st === 'err' ? '❌' : r.st === 'run' ? '⏳' : r.st === 'skip' ? '➖' : '⚪'} {r.name}{r.msg ? ` — ${r.msg}` : ''}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -8523,7 +8578,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-04 · v116 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-04 · v117 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8536,7 +8591,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v116</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v117</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">
