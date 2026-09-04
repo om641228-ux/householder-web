@@ -2318,3 +2318,9 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - GET /api/links/tree: объекты/типы документов/IBAN/топ-100 контрагентов с количеством.
 - Фильтр области: + excludeObjects, excludeDocTypes, excludeIbans (❌ игнорировать); контрагенты из дерева мапятся в includeNames/excludeNames.
 - Менеджер областей: дерево-чеклист с циклом ⚪→✅→❌ (include/ignore), счётчики документов, секции details. Старые поля «объекты/IBAN текстом» убраны.
+
+## v114 (2026-09-04) — AI-архитектор (Фазы 1+2)
+- POST /api/links/ai-discover: равномерная выборка ~30 документов → Kimi определяет ДОПОЛНИТЕЛЬНЫЕ типы сущностей (нотариус, адрес, modelo…) + кластеры документов. Кэш в aiDiscoveredTypes (процесс).
+- aiExtractEntitiesFromText(text, customTypes): динамическая JSON-схема = 9 базовых + AI-открытые типы.
+- POST /api/links/ai-extract принимает extraTypes (или берёт кэш разведки); кастомные типы пишутся как entities.type = snake_case.
+- LinksTab: кнопка «🧠 AI-архитектор», панель найденных типов + кластеров, кнопка «▶ Извлечь эти типы из всех документов»; entColor() — хеш-цвет для неизвестных типов.

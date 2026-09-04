@@ -2164,7 +2164,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v112 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v114 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2582,6 +2582,12 @@ const LINK_TYPE_RU = {
 };
 const DOC_TYPE_COLORS = { receipt: '#0071e3', invoice: '#5e5ce6', contract: '#bf5af2', act: '#ff9f0a', ticket: '#30b0c7', bank: '#16a085', other: '#8e8e93' };
 const ENT_TYPE_COLORS = { company: '#34c759', person: '#ff9f0a', iban: '#0a84ff', tax_id: '#bf5af2', invoice_no: '#5e5ce6', contract_no: '#ff375f', poa: '#ff9500', cups: '#30b0c7', meter: '#30b0c7', amount_date: '#8e8e93' };
+const ENT_PALETTE = ['#e91e63', '#009688', '#ff5722', '#607d8b', '#795548', '#3f51b5', '#9c27b0', '#00bcd4'];
+const entColor = (type) => {
+  if (ENT_TYPE_COLORS[type]) return ENT_TYPE_COLORS[type];
+  let h = 0; for (let i = 0; i < String(type).length; i++) h = (h * 31 + String(type).charCodeAt(i)) >>> 0;
+  return ENT_PALETTE[h % ENT_PALETTE.length]; // v114: AI-открытые типы — стабильный цвет по имени
+};
 const ENT_TYPE_FILTERS = [ ['', 'Все'], ['company', '🏢 Компании'], ['person', '👤 Персоны'], ['contract_no', '📄 Договоры'], ['poa', '📜 Доверенности'], ['invoice_no', '🧾 № фактур'], ['iban', '💳 Счета'], ['tax_id', '🔢 Налоговые №'], ['amount_date', '💶 Суммы'] ];
 
 function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
@@ -2666,7 +2672,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
       while (!done) {
         const r = await fetch(`${API_URL}/api/links/ai-extract?token=${token}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ offset, limit: 6, scope: scopeId || undefined })
+          body: JSON.stringify({ offset, limit: 6, scope: scopeId || undefined, extraTypes: (aiTypes && aiTypes.length) ? aiTypes : undefined })
         });
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
@@ -2727,6 +2733,24 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
     } catch (e) { setErr(e.message); }
   };
 
+  // v114: AI-архитектор — разведка типов сущностей
+  const [aiDiscovering, setAiDiscovering] = useState(false);
+  const [aiTypes, setAiTypes] = useState(null);   // null = разведка не запускалась
+  const [aiClusters, setAiClusters] = useState([]);
+  const [aiSampled, setAiSampled] = useState(0);
+  const aiDiscover = async () => {
+    setAiDiscovering(true); setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/links/ai-discover?token=${token}`, { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setAiTypes(j.entityTypes || []);
+      setAiClusters(j.clusters || []);
+      setAiSampled(j.sampled || 0);
+    } catch (e) { setErr(e.message); }
+    setAiDiscovering(false);
+  };
+
   const loadBridges = async () => {
     setBridges(null); setErr('');
     try {
@@ -2768,7 +2792,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
     <button key={e.id} onClick={() => openGraph(e.id)}
       title={`${e.typeLabel}: ${e.label}`}
       style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: active ? '2px solid #0071e3' : '1px solid #d0d0d5', background: active ? '#eaf3fb' : '#fff', borderRadius: 20, padding: '5px 12px', fontSize: 13, cursor: 'pointer', margin: '0 6px 6px 0' }}>
-      <span style={{ width: 9, height: 9, borderRadius: '50%', background: ENT_TYPE_COLORS[e.type] || '#8e8e93', flexShrink: 0 }} />
+      <span style={{ width: 9, height: 9, borderRadius: '50%', background: entColor(e.type), flexShrink: 0 }} />
       <span style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.label}</span>
       <span style={{ color: '#8e8e93', fontSize: 12 }}>×{e.docs}</span>
     </button>
@@ -2805,6 +2829,13 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
             title="AI (Kimi) читает тексты всех документов — чеков, PDF, выписок, деклараций — извлекает сущности и достраивает связи"
             style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: aiBusy ? '#d9ccee' : '#7c3aed', color: '#fff', fontWeight: 700, fontSize: 14, cursor: aiBusy ? 'wait' : 'pointer' }}>
             {aiBusy ? `🤖 AI читает… ${aiProg ? aiProg.done + (aiProg.total ? '/' + aiProg.total : '') : ''}` : '🤖 AI-извлечение'}
+          </button>
+        )}
+        {canBuild && (
+          <button onClick={aiDiscover} disabled={aiDiscovering || aiBusy || building}
+            title="AI читает образцы всех документов и сам определяет, какие типы сущностей искать (нотариусы, адреса, формы деклараций…)"
+            style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: aiDiscovering ? '#e3d5f7' : '#1d1d1f', color: '#fff', fontWeight: 700, fontSize: 14, cursor: aiDiscovering ? 'wait' : 'pointer' }}>
+            {aiDiscovering ? '🧠 Анализирую…' : '🧠 AI-архитектор'}
           </button>
         )}
       </div>
@@ -2893,6 +2924,41 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
           </div>
         </div>
       )}
+      {aiTypes !== null && (
+        <div style={{ background: '#f5f5f7', border: '1px solid #1d1d1f', borderRadius: 10, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>
+          <b>🧠 AI-архитектор: проанализировано {aiSampled} образцов</b>
+          <button onClick={() => setAiTypes(null)} style={{ float: 'right', border: 'none', background: 'none', cursor: 'pointer' }}>✕</button>
+          {aiTypes.length === 0 && <div style={{ color: '#8e8e93', marginTop: 4 }}>Дополнительных типов не найдено — хватает базовых (персоны, компании, IBAN, фактуры, договоры, доверенности).</div>}
+          {aiTypes.length > 0 && (
+            <div style={{ margin: '6px 0' }}>
+              <div style={{ color: '#3a3a3c', marginBottom: 4 }}>AI нашёл новые типы сущностей в твоих документах:</div>
+              {aiTypes.map(t => (
+                <span key={t.type} title={t.example ? 'Пример: ' + t.example : ''}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid #d0d0d5', background: '#fff', borderRadius: 14, padding: '3px 10px', fontSize: 12, margin: '0 6px 6px 0' }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: entColor(t.type) }} />
+                  <b>{t.label}</b>{t.example ? <span style={{ color: '#8e8e93' }}>· {t.example}</span> : null}
+                </span>
+              ))}
+              <div style={{ marginTop: 4 }}>
+                <button onClick={aiExtract} disabled={aiBusy}
+                  style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: '#7c3aed', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                  ▶ Извлечь эти типы из всех документов
+                </button>
+                <span style={{ color: '#8e8e93', fontSize: 12, marginLeft: 8 }}>запустит 🤖 AI-извлечение с расширенной схемой</span>
+              </div>
+            </div>
+          )}
+          {aiClusters.length > 0 && (
+            <div style={{ marginTop: 6, borderTop: '1px solid #e3e6ea', paddingTop: 6 }}>
+              <div style={{ color: '#3a3a3c', marginBottom: 4 }}>AI видит кластеры документов (кандидаты в области):</div>
+              {aiClusters.map((c, i) => (
+                <div key={i} style={{ padding: '2px 0', color: '#3a3a3c' }}>🗂 <b>{c.name}</b> — <span style={{ color: '#8e8e93' }}>{c.what}</span></div>
+              ))}
+              <div style={{ color: '#8e8e93', fontSize: 11, marginTop: 2 }}>Создать области из кластеров: кнопка 🗂 → дерево источников (автосоздание — в следующем релизе v115)</div>
+            </div>
+          )}
+        </div>
+      )}
       {aiProg && (aiBusy || aiProg.done > 0) && (
         <div style={{ background: '#f5f0fa', border: '1px solid #7c3aed', borderRadius: 10, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>
           🤖 AI-извлечение: обработано {aiProg.done}{aiProg.total ? ' из ' + aiProg.total : ''} документов · сущностей добавлено {aiProg.added} · AI-связей {aiProg.links}
@@ -2932,7 +2998,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
       {graph && !graphLoading && (
         <div>
           <div style={{ fontSize: 14, margin: '6px 0', color: '#1d1d1f' }}>
-            <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: ENT_TYPE_COLORS[graph.entity.type] || '#8e8e93', marginRight: 6 }} />
+            <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: entColor(graph.entity.type), marginRight: 6 }} />
             <b>{graph.entity.label}</b> <span style={{ color: '#8e8e93' }}>({graph.entity.typeLabel})</span>
             <span style={{ color: '#8e8e93' }}> — документов: {graph.docs.length}, связанных сущностей: {graph.relEntities.length}</span>
             <button onClick={() => setGraph(null)} style={{ marginLeft: 10, border: '1px solid #d0d0d5', background: '#fff', borderRadius: 6, padding: '2px 10px', fontSize: 12, cursor: 'pointer' }}>✕ Скрыть</button>
@@ -2946,7 +3012,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
                   const other = mineIsA ? l.b : l.a;
                   return (
                     <div key={i} style={{ padding: '3px 0', borderBottom: '1px solid #e9e0f5', color: '#3a3a3c' }}>
-                      <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: '50%', background: ENT_TYPE_COLORS[other.type] || '#8e8e93', marginRight: 6 }} />
+                      <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: '50%', background: entColor(other.type), marginRight: 6 }} />
                       {mineIsA
                         ? <span>{l.typeLabel} → <a onClick={() => openGraph(other.id)} style={{ color: '#0071e3', cursor: 'pointer', fontWeight: 600 }}>{other.label}</a> <span style={{ color: '#8e8e93' }}>({other.typeLabel})</span></span>
                         : <span><a onClick={() => openGraph(other.id)} style={{ color: '#0071e3', cursor: 'pointer', fontWeight: 600 }}>{other.label}</a> <span style={{ color: '#8e8e93' }}>({other.typeLabel})</span> → {l.typeLabel} → эта сущность</span>}
@@ -2967,7 +3033,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
               {docPos.map((p, i) => <line key={'c' + i} x1={CX} y1={CY} x2={p.x} y2={p.y} stroke="#0071e3" strokeOpacity={0.35} strokeWidth={1.5} />)}
               {/* центральная сущность */}
               <g>
-                <circle cx={CX} cy={CY} r={40} fill={ENT_TYPE_COLORS[graph.entity.type] || '#8e8e93'} />
+                <circle cx={CX} cy={CY} r={40} fill={entColor(graph.entity.type)} />
                 <text x={CX} y={CY - 46} textAnchor="middle" fontSize={14} fontWeight={700} fill="#1d1d1f">{String(graph.entity.label).slice(0, 28)}</text>
                 <text x={CX} y={CY + 5} textAnchor="middle" fontSize={11} fill="#fff">{graph.entity.typeLabel}</text>
               </g>
@@ -2991,7 +3057,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
               {relPos.map((p, i) => (
                 <g key={'e' + i} onClick={() => openGraph(p.e.id)} style={{ cursor: 'pointer' }}>
                   <title>{p.e.typeLabel}: {p.e.label} — общих документов: {p.e.shared}</title>
-                  <rect x={p.x - 55} y={p.y - 14} width={110} height={28} rx={14} fill="#fff" stroke={ENT_TYPE_COLORS[p.e.type] || '#8e8e93'} strokeWidth={1.6} />
+                  <rect x={p.x - 55} y={p.y - 14} width={110} height={28} rx={14} fill="#fff" stroke={entColor(p.e.type)} strokeWidth={1.6} />
                   <text x={p.x} y={p.y + 4} textAnchor="middle" fontSize={10.5} fill="#1d1d1f">{String(p.e.label).slice(0, 16)} ×{p.e.shared}</text>
                 </g>
               ))}
@@ -8342,7 +8408,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-04 · v112 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-04 · v114 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8355,7 +8421,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v112</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-04 · v114</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">

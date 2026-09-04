@@ -4352,13 +4352,20 @@ function extractMovementEntities(mv) {
   return [...out.values()];
 }
 
-// v110: AI-извлечение сущностей из текста документа (Kimi, текстовый вызов)
-async function aiExtractEntitiesFromText(text) {
+// v110/v114: AI-извлечение сущностей из текста документа (Kimi, текстовый вызов)
+// v114: динамическая схема — базовые типы + типы, открытые AI-архитектором (ai-discover)
+async function aiExtractEntitiesFromText(text, customTypes) {
   const cfg = OPENAI_COMPAT_PROVIDERS.kimi;
   if (!cfg || !cfg.apiKey) throw new Error('Kimi API key not configured');
+  const extra = Array.isArray(customTypes) ? customTypes.filter(t => t && t.type) : [];
+  const schemaKeys = ['persons', 'companies', 'tax_ids', 'ibans', 'invoice_numbers', 'contracts', 'poa_numbers', 'cups', 'meters', ...extra.map(t => t.type)];
+  const schemaJson = '{' + schemaKeys.map(k => '"' + k + '":[]').join(',') + '}';
+  const extraRules = extra.length
+    ? '\nДополнительные типы (найдены AI-разведкой в ЭТОЙ базе документов):\n' + extra.map(t => '- ' + t.type + ' — ' + (t.label || t.type) + (t.example ? ' (пример: ' + t.example + ')' : '')).join('\n')
+    : '';
   const prompt = `Ты извлекаешь сущности из текста финансового/юридического документа (Испания: чек, фактура, банковская выписка, налоговая декларация, договор, доверенность).
 Верни СТРОГО JSON без markdown и пояснений:
-{"persons":[],"companies":[],"tax_ids":[],"ibans":[],"invoice_numbers":[],"contracts":[],"poa_numbers":[],"cups":[],"meters":[]}
+${schemaJson}
 Правила:
 - persons — полные имена людей (Имя Фамилия);
 - companies — юридические лица и автономо (с формой: S.L., SLU, S.A. и т.п., если есть);
@@ -4369,7 +4376,7 @@ async function aiExtractEntitiesFromText(text) {
 - poa_numbers — номера нотариальных доверенностей (poder notarial);
 - cups — коды CUPS (электро/газ);
 - meters — номера счётчиков.
-Только значения, ЯВНО присутствующие в тексте. Ничего не выдумывай. Категории без значений — пустые массивы.
+Только значения, ЯВНО присутствующие в тексте. Ничего не выдумывай. Категории без значений — пустые массивы.${extraRules}
 
 Текст документа:
 ` + String(text || '').slice(0, 12000);
@@ -4392,6 +4399,53 @@ async function aiExtractEntitiesFromText(text) {
   }
 }
 
+// v114 Фаза 1: AI-разведка — какие типы сущностей вообще есть в ЭТОЙ базе документов
+let aiDiscoveredTypes = []; // кэш процесса (переоткрывается кнопкой «AI-архитектор»)
+app.post('/api/links/ai-discover', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const cfg = OPENAI_COMPAT_PROVIDERS.kimi;
+    if (!cfg || !cfg.apiKey) throw new Error('Kimi API key not configured');
+    const { count } = await supabaseAdmin.from('receipts').select('id', { count: 'exact', head: true }).not('raw_text', 'is', null);
+    const total = count || 0;
+    if (!total) return res.json({ ok: true, entityTypes: [], clusters: [], sampled: 0, total: 0 });
+    // равномерная выборка ~30 документов по всей базе
+    const N = Math.min(30, total);
+    const docs = [];
+    for (let i = 0; i < N; i++) {
+      const off = Math.min(total - 1, Math.floor(i * total / N));
+      const { data } = await supabaseAdmin.from('receipts').select('id, store_name, document_type, raw_text').not('raw_text', 'is', null).order('id').range(off, off);
+      if (data && data[0]) docs.push(data[0]);
+    }
+    const sample = docs.map((d, i) => `--- Документ ${i + 1} (${d.document_type || 'doc'}: ${d.store_name || '—'}) ---\n${String(d.raw_text || '').slice(0, 800)}`).join('\n');
+    const prompt = `Проанализируй образцы текстов документов (Испания: чеки, фактуры, договоры, доверенности, банковские выписки, налоговые декларации).
+Эти типы сущностей УЖЕ извлекаются правилами: persons (имена), companies (компании), tax_ids (CIF/NIF), ibans, invoice_numbers, contracts, poa_numbers (доверенности), cups, meters.
+Найди ДОПОЛНИТЕЛЬНЫЕ типы сущностей, реально присутствующие в образцах и полезные для СВЯЗЫВАНИЯ документов между собой (например: нотариус, адрес/объект недвижимости, налоговая форма/modelo, период декларации, госорган, агентство, № протокола и т.п.).
+Верни СТРОГО JSON: {"entity_types":[{"type":"latin_snake_case","label":"Русское название","example":"пример из текста"}],"doc_clusters":[{"name":"название","what":"что входит"}]}
+Максимум 8 типов, только реально встречающиеся. Если дополнительных нет — пустой массив.
+
+Образцы:
+` + sample.slice(0, 24000);
+    const body = {
+      model: cfg.defaultModel,
+      messages: [{ role: 'user', content: prompt }],
+      max_completion_tokens: 4096, reasoning_effort: 'low', response_format: { type: 'json_object' }
+    };
+    const r = await axios.post(`${cfg.baseURL}/chat/completions`, body, {
+      headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', ...cfg.extraHeaders },
+      timeout: 180000
+    });
+    const content = r.data?.choices?.[0]?.message?.content || '{}';
+    let j = {};
+    try { j = JSON.parse(content); } catch (_) { const m = content.match(/\{[\s\S]*\}/); if (m) { try { j = JSON.parse(m[0]); } catch (_) { /* ignore */ } } }
+    aiDiscoveredTypes = (j.entity_types || [])
+      .filter(t => t && t.type && t.label)
+      .slice(0, 8)
+      .map(t => ({ type: String(t.type).replace(/[^a-z0-9_]/gi, '_').toLowerCase(), label: String(t.label).slice(0, 60), example: String(t.example || '').slice(0, 120) }));
+    if (typeof logActivity === 'function') logActivity(req.user, 'Связи', 'AI-разведка типов', `типов: ${aiDiscoveredTypes.length}, образцов: ${docs.length}`, req);
+    res.json({ ok: true, entityTypes: aiDiscoveredTypes, clusters: (j.doc_clusters || []).slice(0, 10), sampled: docs.length, total });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // v110: пакетное AI-извлечение сущностей по документам с raw_text (offset/limit — фронт крутит цикл)
 app.post('/api/links/ai-extract', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
   try {
@@ -4400,6 +4454,9 @@ app.post('/api/links/ai-extract', requireAuth, requireRole('admin', 'manager'), 
     const scopeId = String((req.body && req.body.scope) || '').trim() || ZERO_SCOPE;
     const scoped = await hasScopeSupport();
     const scopeFilter = scoped ? await getScopeFilter(scopeId) : null;
+    // v114: типы из тела запроса (клиент после разведки) или из кэша разведки
+    const bodyTypes = (req.body && Array.isArray(req.body.extraTypes)) ? req.body.extraTypes : null;
+    const customTypes = (bodyTypes || aiDiscoveredTypes || []).filter(t => t && /^[a-z0-9_]{2,40}$/i.test(t.type || '')).slice(0, 8);
     const withScope = (row) => scoped ? { ...row, scope_id: scopeId } : row;
     const ocEnt = scoped ? 'type,value,scope_id' : 'type,value';
     const ocDocLink = scoped ? 'doc_a,doc_b,link_type,scope_id' : 'doc_a,doc_b,link_type';
@@ -4415,7 +4472,7 @@ app.post('/api/links/ai-extract', requireAuth, requireRole('admin', 'manager'), 
     const touchedEnts = new Map(); // entity_id -> type
     for (const d of (docs || [])) {
       try {
-        const ex = await aiExtractEntitiesFromText(d.raw_text);
+        const ex = await aiExtractEntitiesFromText(d.raw_text, customTypes);
         const items = [];
         const seenV = new Set();
         const push = (type, v) => {
@@ -4434,6 +4491,7 @@ app.post('/api/links/ai-extract', requireAuth, requireRole('admin', 'manager'), 
         (ex.poa_numbers || []).forEach(v => push('poa', v));
         (ex.cups || []).forEach(v => push('cups', v));
         (ex.meters || []).forEach(v => push('meter', v));
+        for (const t of customTypes) (ex[t.type] || []).forEach(v => push(t.type, v)); // v114: AI-открытые типы
         if (items.length) {
           const { data: ups, error: ue } = await supabaseAdmin.from('entities')
             .upsert(items.map(e => withScope({ type: e.type, value: e.value, label: e.label })), { onConflict: ocEnt })
