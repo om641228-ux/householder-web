@@ -2414,3 +2414,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Причина: pending-prices возвращал ВСЕ товары без цены — провалившиеся (капча DataDome, снятые с производства, таймаут) попадали в каждую пачку заново.
 - Бэкенд: колонки price_attempts/price_attempt_at/price_fail_reason; ext-price принимает {fail:true, reason} (+1 попытка), успех сбрасывает счётчик; pending-prices исключает attempts>=5 и сортирует attempts asc; ответ включает total.
 - Расширение v1.2: extractOnPage детектит капчу (iframe captcha / #captcha-delivery / title); collectOne шлёт fail-репорт (captcha/no-price/load-error); autoDiscardable:false; таймаут 18с + settle 1с; авто-стоп после 3 капч подряд с инструкцией пройти проверку вручную.
+
+## v125 (2026-09-05) — Ref со страницы + парсинг целых разделов
+- Бэкенд: ext-price принимает article (Ref/sku со страницы, в приоритете над URL-регексом); новый POST /api/parse/ext-products (bulk до 300/запрос, upsert parse_products) — приём товаров со страниц списков. build v125-2026-09-05. SQL не требуется.
+- Расширение v1.3: extractOnPage берёт sku/mpn из JSON-LD + fallback-регекс «Ref. NNNN» из innerText; article уходит с ценой. Новый режим «🗂 Парсинг раздела»: extractLinksOnPage собирает карточки (a[href~-NNNNN.html]), листает ?p=N до отсутствия новых ссылок (≤100 стр.), шлёт пачками по 200 на ext-products; паузы 2,5–4 с.
+- Рекомендация по номерам: извлечение со страницы (бесплатно, точно) вместо AI; AI-кнопка «🔢 Артикулы» остаётся для старых записей.

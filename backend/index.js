@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v124.1-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v125-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4651,6 +4651,38 @@ app.get('/api/parse/catalog/stale-prices', requireAuth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// v125: массовый приём товаров из раздела сайта (расширение собирает карточки со списков)
+app.post('/api/parse/ext-products', requireAuth, async (req, res) => {
+  try {
+    const items = Array.isArray(req.body && req.body.items) ? req.body.items.slice(0, 300) : [];
+    if (!items.length) return res.status(400).json({ error: 'Передайте items (до 300)' });
+    const now = new Date().toISOString();
+    const rows = [];
+    for (const it of items) {
+      const url = String(it.url || '').trim();
+      if (!/^https?:\/\//i.test(url)) continue;
+      let host; try { host = new URL(url).hostname; } catch (e) { continue; }
+      const am = url.match(/-(\d{5,})\.html?/i);
+      const art = String(it.article || '').trim();
+      rows.push({
+        site: host, url,
+        name: String(it.name || '').slice(0, 300) || null,
+        image: String(it.image || '').slice(0, 500) || null,
+        article: /^\d{4,}$/.test(art) ? art : (am ? am[1] : null),
+        last_seen: now
+      });
+    }
+    if (!rows.length) return res.status(400).json({ error: 'Нет валидных товаров' });
+    let upserted = 0;
+    for (let i = 0; i < rows.length; i += 200) {
+      const { error } = await supabaseAdmin.from('parse_products').upsert(rows.slice(i, i + 200), { onConflict: 'site,url' });
+      if (error) throw error;
+      upserted += Math.min(200, rows.length - i);
+    }
+    res.json({ ok: true, upserted });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/parse/ext-price', requireAuth, async (req, res) => {
   try {
     const url = String((req.body && req.body.url) || '').trim();
@@ -4659,11 +4691,12 @@ app.post('/api/parse/ext-price', requireAuth, async (req, res) => {
     if (price != null && (!isFinite(price) || price <= 0 || price > 100000)) price = null;
     const u = new URL(url);
     const am = url.match(/-(\d{5,})\.html?/i);
+    const bodyArt = String((req.body && req.body.article) || '').trim(); // v125: Ref/sku прямо со страницы
     const upd = {
       site: u.hostname, url,
       name: String(req.body.title || '').slice(0, 300) || undefined,
       image: String(req.body.image || '').slice(0, 500) || undefined,
-      article: am ? am[1] : undefined,
+      article: (/^\d{4,}$/.test(bodyArt) ? bodyArt : (am ? am[1] : undefined)),
       last_seen: new Date().toISOString()
     };
     if (price != null) {

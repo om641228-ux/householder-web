@@ -24,6 +24,14 @@ async function start(continuous) {
 $('go').onclick = () => start(false);
 $('goall').onclick = () => start(true);
 $('stop').onclick = () => chrome.runtime.sendMessage({ type: 'stop' });
+$('secGo').onclick = async () => {
+  const { api, token } = await chrome.storage.local.get(['api', 'token']);
+  if (!api || !token) { $('st').textContent = '❌ Сначала заполните API URL и токен'; return; }
+  const url = $('secUrl').value.trim();
+  if (!/^https?:\/\//i.test(url)) { $('st').textContent = '❌ Вставьте полный URL раздела'; return; }
+  chrome.runtime.sendMessage({ type: 'section', api, token, url });
+  $('st').textContent = '⏳ Парсинг раздела запущен…';
+};
 $('schedSave').onclick = () => {
   const hours = parseInt($('sched').value, 10) || 0;
   chrome.runtime.sendMessage({ type: 'schedule', hours });

@@ -14,6 +14,7 @@ function extractOnPage() {
         for (const x of arr) {
           if (x && /Product/i.test(String(x['@type'] || ''))) {
             out.title = String(x.name || '');
+            out.article = String(x.sku || x.mpn || '').trim(); // v1.3: каталожный номер из JSON-LD
             const off = Array.isArray(x.offers) ? x.offers[0] : x.offers;
             if (off) {
               out.price = parseFloat(String(off.price || off.lowPrice || '').replace(',', '.')) || null;
@@ -32,6 +33,11 @@ function extractOnPage() {
   // v1.2: распознаём антибот-страницу DataDome, чтобы не считать её «нет цены»
   out.captcha = !!document.querySelector('iframe[src*="captcha"], #captcha-delivery, .captcha-delivery')
     || /captcha|are you a robot|vérif/i.test(String(document.title || ''));
+  // v1.3: «Ref. 82088689» из текста страницы, если JSON-LD sku не дал номера
+  if (!/^\d{4,}$/.test(out.article || '')) {
+    const m = String(document.body ? document.body.innerText.slice(0, 20000) : '').match(/Ref\.?\s*[:#]?\s*(\d{6,})/i);
+    if (m) out.article = m[1];
+  }
   return out;
 }
 
@@ -64,7 +70,7 @@ async function collectOne(api, token, p) {
     if (d.price != null) {
       const rr = await fetch(`${api}/api/parse/ext-price?token=${encodeURIComponent(token)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: p.url, price: d.price, currency: d.currency, title: d.title, image: d.image })
+        body: JSON.stringify({ url: p.url, price: d.price, currency: d.currency, title: d.title, image: d.image, article: d.article || undefined })
       });
       if (rr.ok) { saved = true; const jj = await rr.json().catch(() => ({})); chg = jj.changed || null; }
     } else {
@@ -122,7 +128,68 @@ async function run(api, token, batch, mode, staleDays, continuous) {
   running = false;
 }
 
+// v1.3: извлечение карточек товаров со страницы раздела/списка
+function extractLinksOnPage() {
+  const out = [];
+  const seen = new Set();
+  for (const a of document.querySelectorAll('a[href*=".html"]')) {
+    const href = a.href.split('#')[0];
+    if (!/-\d{5,}\.html?$/i.test(href)) continue;
+    if (seen.has(href)) continue;
+    seen.add(href);
+    const img = a.querySelector('img');
+    let name = String((img && img.alt) || a.getAttribute('aria-label') || a.textContent || '').replace(/\s+/g, ' ').trim();
+    if (name.length > 300) name = name.slice(0, 300);
+    out.push({ url: href, name, image: img ? String(img.currentSrc || img.src || '') : '' });
+  }
+  return out;
+}
+
+// v1.3: парсинг раздела до конца — листаем ?p=N, пока не кончатся новые товары
+async function runSection(api, token, startUrl) {
+  if (running) return;
+  running = true; stopped = false;
+  const known = new Set();
+  let totalSent = 0;
+  try {
+    for (let page = 1; page <= 100; page++) {
+      if (stopped) { progress(`⏹ Раздел остановлен: отправлено ${totalSent} товаров`); break; }
+      const sep = startUrl.includes('?') ? '&' : '?';
+      const pageUrl = page === 1 ? startUrl : `${startUrl}${sep}p=${page}`;
+      progress(`⏳ Раздел, стр. ${page}: ${pageUrl} (уже собрано ${totalSent})`);
+      let tab = null, links = [];
+      try {
+        tab = await chrome.tabs.create({ url: pageUrl, active: false });
+        try { await chrome.tabs.update(tab.id, { autoDiscardable: false }); } catch (e) {}
+        await new Promise((res) => {
+          const to = setTimeout(res, 18000);
+          chrome.tabs.onUpdated.addListener(function f(id, ch) {
+            if (id === tab.id && ch.status === 'complete') { clearTimeout(to); chrome.tabs.onUpdated.removeListener(f); res(); }
+          });
+        });
+        await sleep(1200);
+        const [inj] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractLinksOnPage });
+        links = (inj && inj.result) || [];
+      } catch (e) { progress('⚠️ Стр. ' + page + ': не загрузилась — ' + e.message); }
+      if (tab) try { await chrome.tabs.remove(tab.id); } catch (e) {}
+      const fresh = links.filter(l => !known.has(l.url));
+      if (!fresh.length) { progress(`✅ Раздел собран до конца: ${page - 1} стр., товаров отправлено ${totalSent}`); break; }
+      fresh.forEach(l => known.add(l.url));
+      for (let i = 0; i < fresh.length; i += 200) {
+        const rr = await fetch(`${api}/api/parse/ext-products?token=${encodeURIComponent(token)}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: fresh.slice(i, i + 200) })
+        });
+        if (rr.ok) { const jj = await rr.json().catch(() => ({})); totalSent += jj.upserted || 0; }
+      }
+      await sleep(2500 + Math.random() * 1500); // вежливая пауза между страницами
+    }
+  } catch (e) { progress('❌ ' + e.message); }
+  running = false;
+}
+
 chrome.runtime.onMessage.addListener((m) => {
+  if (m.type === 'section' && !running) runSection(m.api, m.token, m.url);
   if (m.type === 'start' && !running) run(m.api, m.token, m.batch, m.mode, m.staleDays, !!m.continuous);
   if (m.type === 'stop') stopped = true;
   if (m.type === 'schedule') { // v124: планировщик — часы между запусками (0 = выкл)
