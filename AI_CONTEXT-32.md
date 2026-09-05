@@ -2442,3 +2442,9 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Баг: ext-products upsert писал image:null и стирал картинки, пришедшие из sitemap. Теперь пустые name/image/article/category НЕ включаются в row (upsert их не трогает). build v126.2.
 - Расширение v1.5.2: srcOf() — currentSrc/src/data-src/data-lazy-src/data-original + srcset (последний вариант), фильтр placeholder/blank.gif, fallback picture>source; перед extractLinksOnPage страница раздела прокручивается вниз (600px/150мс) для lazy-load.
 - Восстановление уже затёртых картинок: пересинхронизировать sitemap (⬇ sitemap 1) ИЛИ перепарсить раздел новой версией.
+
+## v128 (2026-09-05) — бренд+MPN, точное дерево из URL, сворачиваемый каталог
+- SQL (ПЕРЕЗАПУСТИТЬ): parse_products + brand text, mpn text.
+- Бэкенд: ext-price/ext-products принимают brand/mpn (не затирают пустыми); POST /api/parse/catalog/backfill-brand-mpn — эвристика из названия (код в скобках / токен A-Z0-9 с цифрой → mpn; первое слово не-глагол → brand), до 40×500. build v128-2026-09-05.
+- Расширение v1.6: extractOnPage берёт brand (x.brand.name) и mpn из JSON-LD → ext-price; extractLinksOnPage строит category из ПУТИ URL (точное дерево как на сайте, напр. Herramientas > Herramientas electricas portatiles > … > Taladros con cable), fallback H1.
+- Фронт: убран заголовок «🌐 Парсинг сайтов»; каталог сворачивается (▸/▾, catOpen); новый столбец «Производитель» (brand жирным + mpn mono под ним); кнопка «🏷 Бренды» (backfillBrands).

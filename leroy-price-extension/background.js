@@ -15,6 +15,8 @@ function extractOnPage() {
           if (x && /Product/i.test(String(x['@type'] || ''))) {
             out.title = String(x.name || '');
             out.article = String(x.sku || x.mpn || '').trim(); // v1.3: каталожный номер из JSON-LD
+            out.mpn = String(x.mpn || '').trim(); // v1.6: оригинальный номер производителя
+            out.brand = String((x.brand && (x.brand.name || x.brand)) || '').trim(); // v1.6: производитель
             const off = Array.isArray(x.offers) ? x.offers[0] : x.offers;
             if (off) {
               out.price = parseFloat(String(off.price || off.lowPrice || '').replace(',', '.')) || null;
@@ -70,7 +72,7 @@ async function collectOne(api, token, p) {
     if (d.price != null) {
       const rr = await fetch(`${api}/api/parse/ext-price?token=${encodeURIComponent(token)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: p.url, price: d.price, currency: d.currency, title: d.title, image: d.image, article: d.article || undefined })
+        body: JSON.stringify({ url: p.url, price: d.price, currency: d.currency, title: d.title, image: d.image, article: d.article || undefined, brand: d.brand || undefined, mpn: d.mpn || undefined })
       });
       if (rr.ok) { saved = true; const jj = await rr.json().catch(() => ({})); chg = jj.changed || null; }
     } else {
@@ -133,14 +135,18 @@ function extractLinksOnPage() {
   const out = [];
   const seen = new Set();
   // v1.4: путь раздела из хлебных крошек («Productos > Herramientas > …»), fallback — заголовок H1
+  // v1.6: точное дерево из пути URL — /productos/herramientas/…/taladros-con-cable/ → «Herramientas > … > Taladros con cable»
   let category = '';
   try {
-    const crumbs = [...document.querySelectorAll('nav[aria-label*="readcrumb" i] a, [class*="breadcrumb" i] a, ol[class*="breadcrumb" i] li')]
-      .map(x => String(x.textContent || '').replace(/\s+/g, ' ').trim()).filter(t => t && !/^home$/i.test(t));
-    const h1 = String((document.querySelector('h1') || {}).textContent || '').trim();
-    const parts = crumbs.slice();
-    if (h1 && !parts.some(p => p.toLowerCase() === h1.toLowerCase())) parts.push(h1);
-    category = parts.join(' > ').slice(0, 300);
+    const hum = (t) => { const h = t.replace(/\.html?$/i, '').replace(/-/g, ' ').trim(); return h.charAt(0).toUpperCase() + h.slice(1); };
+    let parts = location.pathname.split('/').filter(Boolean);
+    if (/^productos$/i.test(parts[0] || '')) parts = parts.slice(1);
+    parts = parts.filter(p => !/-\d{5,}\.html?$/i.test(p));
+    if (parts.length) category = parts.map(hum).join(' > ').slice(0, 300);
+    if (!category) {
+      const h1 = String((document.querySelector('h1') || {}).textContent || '').trim();
+      if (h1) category = h1;
+    }
   } catch (e) {}
   for (const a of document.querySelectorAll('a[href*=".html"]')) {
     const href = a.href.split('#')[0];

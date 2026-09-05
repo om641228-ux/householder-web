@@ -70,3 +70,7 @@ alter table parse_products add column if not exists price_fail_reason text;
 -- v126: путь раздела товара (дерево каталога как на сайте)
 alter table parse_products add column if not exists category text;
 create index if not exists parse_products_category_idx on parse_products (category text_pattern_ops);
+
+-- v128: производитель и оригинальный номер производителя (MPN)
+alter table parse_products add column if not exists brand text;
+alter table parse_products add column if not exists mpn text;

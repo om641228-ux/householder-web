@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v127.2 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v128 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2707,6 +2707,7 @@ function ParseTab({ token, isMobileView, canRun }) {
   const [catExpanded, setCatExpanded] = useState({});
   const catParamsRef = useRef({});
   const [catBusy, setCatBusy] = useState(false);
+  const [catOpen, setCatOpen] = useState(true); // v128: сворачиваемый каталог
   const [priceBusy, setPriceBusy] = useState({}); // id -> bool
 
   const loadSources = async () => {
@@ -2933,6 +2934,17 @@ function ParseTab({ token, isMobileView, canRun }) {
     } catch (e) { setErr(e.message); }
     ids.forEach(id => setPriceBusy(prev => ({ ...prev, [id]: false })));
   };
+  const backfillBrands = async () => {
+    setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/parse/catalog/backfill-brand-mpn?token=${token}`, { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setErr('');
+      catSearch();
+      alert(`Готово: проверено ${j.scanned}, заполнено ${j.updated} (производитель/№ производителя)`);
+    } catch (e) { setErr(e.message); }
+  };
   const backfillArticles = async () => {
     setErr('');
     try {
@@ -2952,12 +2964,10 @@ function ParseTab({ token, isMobileView, canRun }) {
 
   return (
     <div style={{ padding: isMobileView ? '6px 10px 20px' : '6px 15px 20px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '4px 0 10px' }}>
-        {!isMobileView && <h2 style={{ margin: 0 }}>🌐 Парсинг сайтов</h2>}
-      </div>
-
       <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: 12, marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>🗂 Каталог товаров (Leroy Merlin)</div>
+        <div onClick={() => setCatOpen(o => !o)} style={{ fontSize: 13, fontWeight: 700, marginBottom: catOpen ? 8 : 0, cursor: 'pointer', userSelect: 'none' }}>{catOpen ? '▾' : '▸'} 🗂 Каталог товаров (Leroy Merlin){!catOpen && catPricedTotal != null ? ` · с ценой: ${catPricedTotal}` : ''}</div>
+        {catOpen && (<>
+
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           {LM_SITEMAPS.map(u => (
             <button key={u} onClick={() => syncSitemap(u)} disabled={catSync[u] && catSync[u].status === 'run'}
@@ -3008,6 +3018,10 @@ function ParseTab({ token, isMobileView, canRun }) {
             <button onClick={backfillArticles} title="Извлечь артикулы из URL для уже загруженного каталога"
               style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>🔢 Артикулы</button>
           )}
+          {canRun && (
+            <button onClick={backfillBrands} title="Заполнить производителя и № производителя из названий (эвристика, быстро)"
+              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>🏷 Бренды</button>
+          )}
         </div>
         {catItems && (
           <div style={{ marginTop: 8 }}>
@@ -3028,6 +3042,7 @@ function ParseTab({ token, isMobileView, canRun }) {
                   <tr style={{ textAlign: 'left', color: '#8e8e93', borderBottom: '2px solid #f0f0f2' }}>
                     <th style={{ padding: '6px 8px' }}>Товар</th>
                     <th style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>Артикул</th>
+                    <th style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>Производитель</th>
                     <th style={{ padding: '6px 8px' }}>Раздел</th>
                     <th style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>Цена</th>
                     {canRun && <th style={{ padding: '6px 8px' }}></th>}
@@ -3043,6 +3058,10 @@ function ParseTab({ token, isMobileView, canRun }) {
                         </div>
                       </td>
                       <td style={{ padding: '6px 8px', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{p.article || '—'}</td>
+                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
+                        {p.brand ? <b style={{ fontSize: 12 }}>{p.brand}</b> : <span style={{ color: '#c7c7cc' }}>—</span>}
+                        {p.mpn && <div style={{ fontFamily: 'monospace', fontSize: 11, color: '#8e8e93' }} title="Оригинальный номер производителя (MPN)">{p.mpn}</div>}
+                      </td>
                       <td style={{ padding: '6px 8px', color: '#8e8e93', fontSize: 11, maxWidth: 220 }} title={p.category || ''}>
                         {p.category
                           ? <span onClick={() => pickCat(p.category)} style={{ cursor: 'pointer' }}>{p.category.split(' > ').slice(-2).join(' › ')}</span>
@@ -3070,6 +3089,7 @@ function ParseTab({ token, isMobileView, canRun }) {
             </div>
           </div>
         )}
+        </>)}
       </div>
 
       {err && <div style={{ background: '#fdecea', border: '1px solid #e74c3c', borderRadius: 10, padding: '10px 12px', fontSize: 13, marginBottom: 10, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>❌ {err}</div>}
@@ -9064,7 +9084,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-05 · v127.2 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-05 · v128 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9077,7 +9097,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-05 · v127.2</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-05 · v128</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">

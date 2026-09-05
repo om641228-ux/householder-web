@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v126.2-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v128-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4674,6 +4674,42 @@ app.get('/api/parse/catalog/stale-prices', requireAuth, async (req, res) => {
 });
 
 // v125: массовый приём товаров из раздела сайта (расширение собирает карточки со списков)
+// v128: заполнить brand/mpn из названия (код в скобках или токен вида BEH710K-QS → MPN; первое слово КАПСОМ → бренд)
+app.post('/api/parse/catalog/backfill-brand-mpn', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const site = String(req.query.site || 'www.leroymerlin.es');
+    let updated = 0, scanned = 0;
+    for (let batch = 0; batch < 40; batch++) {
+      const { data, error } = await supabaseAdmin.from('parse_products').select('id, name').eq('site', site).is('brand', null).not('name', 'is', null).limit(500);
+      if (error) throw error;
+      if (!data || !data.length) break;
+      scanned += data.length;
+      for (const p of data) {
+        const name = String(p.name || '');
+        let mpn = null;
+        const par = name.match(/\(([A-Z0-9][A-Z0-9.\-]{4,})\)/);
+        if (par) mpn = par[1];
+        else {
+          const toks = name.split(/\s+/).filter(t => /^(?=.*[A-Z])(?=.*\d)[A-Z0-9][A-Z0-9.\-]{3,}$/.test(t));
+          if (toks.length) mpn = toks[toks.length - 1];
+        }
+        let brand = null;
+        const bw = name.split(/\s+/)[0] || '';
+        if (/^[A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑa-záéíóúüñ+]{1,20}$/.test(bw) && !/^(\d|Taladro|Atornillador|Sierra|Juego|Kit|Set|Pack|Lijadora|Amoladora|Martillo|Llave|Cortadora|Pulidora)/i.test(bw)) brand = bw.replace(/[+]/g, ' ');
+        const upd = {};
+        if (mpn) upd.mpn = mpn;
+        if (brand) upd.brand = brand;
+        if (Object.keys(upd).length) {
+          const { error: ue } = await supabaseAdmin.from('parse_products').update(upd).eq('id', p.id);
+          if (!ue) updated++;
+        }
+      }
+      if (data.length < 500) break;
+    }
+    res.json({ ok: true, scanned, updated });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/parse/ext-products', requireAuth, async (req, res) => {
   try {
     const items = Array.isArray(req.body && req.body.items) ? req.body.items.slice(0, 300) : [];
@@ -4692,6 +4728,8 @@ app.post('/api/parse/ext-products', requireAuth, async (req, res) => {
       const im = String(it.image || '').slice(0, 500); if (im) row.image = im;
       const artOk = /^\d{4,}$/.test(art) ? art : (am ? am[1] : null); if (artOk) row.article = artOk;
       const cg = String(it.category || req.body.category || '').slice(0, 300); if (cg) row.category = cg;
+      const br = String(it.brand || '').slice(0, 120); if (br) row.brand = br; // v128
+      const mp = String(it.mpn || '').slice(0, 120); if (mp) row.mpn = mp; // v128
       // v126.1: цена прямо с витрины раздела (последняя «xx,xx €» в карточке)
       const lp = it.price != null ? parseFloat(String(it.price).replace(',', '.')) : null;
       if (lp != null && isFinite(lp) && lp > 0 && lp < 100000) {
@@ -4731,6 +4769,8 @@ app.post('/api/parse/ext-price', requireAuth, async (req, res) => {
       upd.price = price; upd.currency = String(req.body.currency || 'EUR').slice(0, 5);
       upd.price_at = new Date().toISOString(); upd.price_source = 'extension';
     }
+    const brandIn = String(req.body.brand || '').slice(0, 120); if (brandIn) upd.brand = brandIn; // v128
+    const mpnIn = String(req.body.mpn || '').slice(0, 120); if (mpnIn) upd.mpn = mpnIn; // v128
     Object.keys(upd).forEach(k => upd[k] === undefined && delete upd[k]);
     // v124: отслеживание изменения цены — запоминаем предыдущую
     let changed = null;
