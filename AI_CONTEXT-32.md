@@ -2448,3 +2448,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Бэкенд: ext-price/ext-products принимают brand/mpn (не затирают пустыми); POST /api/parse/catalog/backfill-brand-mpn — эвристика из названия (код в скобках / токен A-Z0-9 с цифрой → mpn; первое слово не-глагол → brand), до 40×500. build v128-2026-09-05.
 - Расширение v1.6: extractOnPage берёт brand (x.brand.name) и mpn из JSON-LD → ext-price; extractLinksOnPage строит category из ПУТИ URL (точное дерево как на сайте, напр. Herramientas > Herramientas electricas portatiles > … > Taladros con cable), fallback H1.
 - Фронт: убран заголовок «🌐 Парсинг сайтов»; каталог сворачивается (▸/▾, catOpen); новый столбец «Производитель» (brand жирным + mpn mono под ним); кнопка «🏷 Бренды» (backfillBrands).
+
+## v128.1 (2026-09-05) — сворачивание только списка + усиленный backfill брендов
+- Фронт: {catOpen && (<>} перенесён ПОД блок sitemap — кнопки sitemap всегда видимы, сворачивается дерево+поиск+таблица.
+- Бэкенд backfill-brand-mpn v2: выбирает строки где brand IS NULL OR mpn IS NULL (не затирает заполненное); KNOWN_BRANDS (30+ брендов, поиск в первых 45 символах, канонизация регистра); MPN: (код в скобках) → смешанный токен с цифрой+буквой ≥4 → чисто цифровой 5–9 знаков сразу после бренда (EINHELL 4259825). build v128.1-2026-09-05.
+- ВАЖНО: если колонки brand/mpn не созданы в SQL — update молча падает (updated=0). Перезапуск v119-парсинг.sql обязателен.

@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v128-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v128.1-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4680,25 +4680,40 @@ app.post('/api/parse/catalog/backfill-brand-mpn', requireAuth, requireRole('admi
     const site = String(req.query.site || 'www.leroymerlin.es');
     let updated = 0, scanned = 0;
     for (let batch = 0; batch < 40; batch++) {
-      const { data, error } = await supabaseAdmin.from('parse_products').select('id, name').eq('site', site).is('brand', null).not('name', 'is', null).limit(500);
+      const { data, error } = await supabaseAdmin.from('parse_products').select('id, name, brand, mpn').eq('site', site).or('brand.is.null,mpn.is.null').not('name', 'is', null).limit(500);
       if (error) throw error;
       if (!data || !data.length) break;
       scanned += data.length;
+      // v128.1: известные бренды Leroy + усиленные правила MPN
+      const KNOWN_BRANDS = ['BLACK+DECKER', 'BLACK & DECKER', 'DEWALT', 'MAKITA', 'BOSCH', 'EINHELL', 'STANLEY', 'DEXTER', 'WORX', 'RYOBI', 'MILWAUKEE', 'HILTI', 'METABO', 'AEG', 'FESTOOL', 'RUKO', 'PRACTYL', 'KARCHER', 'KÄRCHER', 'SKIL', 'WAGNER', 'RUBI', 'BELLOTA', 'STIHL', 'HUSQVARNA', 'GARDENA', 'WEBER', 'NORTON', 'WOLFPACK', 'COFAN', 'FACOM', 'BAHCO', 'IRWIN', 'TACKLIFE', 'OX', 'KRÜGER', 'KRUGER'];
+      const GENERIC_FIRST = /^(taladro|atornillador|sierra|juego|kit|set|pack|lijadora|amoladora|martillo|llave|cortadora|pulidora|destornillador|atornilladora|con|de|la|el|para|sin|conjunto|máquina|maquina|herramienta|caja|maletín|maletin|cable|escalera|silla|mesa|armario|estantería|estanteria|grifo|lámpara|lampara|ventilador|tiras|corindón|corindon)$/i;
       for (const p of data) {
         const name = String(p.name || '');
         let mpn = null;
         const par = name.match(/\(([A-Z0-9][A-Z0-9.\-]{4,})\)/);
         if (par) mpn = par[1];
         else {
-          const toks = name.split(/\s+/).filter(t => /^(?=.*[A-Z])(?=.*\d)[A-Z0-9][A-Z0-9.\-]{3,}$/.test(t));
+          // смешанный код с цифрой и буквой: BEH710K-QS, DTD172ZJ, 06039B5004, BCK24D2S-QW
+          const toks = name.split(/[\s,;]+/).filter(t => /^(?=.*\d)(?=.*[A-Z])[A-Z0-9][A-Z0-9.\-]{3,}$/.test(t));
           if (toks.length) mpn = toks[toks.length - 1];
+          else {
+            // чисто цифровой код производителя сразу после бренда: «EINHELL 4259825 - …»
+            const dm = name.match(/^[A-ZÁÉÍÓÚÜÑ&+\s]+?\s(\d{5,9})[\s\-–—]/);
+            if (dm) mpn = dm[1];
+          }
         }
         let brand = null;
-        const bw = name.split(/\s+/)[0] || '';
-        if (/^[A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑa-záéíóúüñ+]{1,20}$/.test(bw) && !/^(\d|Taladro|Atornillador|Sierra|Juego|Kit|Set|Pack|Lijadora|Amoladora|Martillo|Llave|Cortadora|Pulidora)/i.test(bw)) brand = bw.replace(/[+]/g, ' ');
+        const head = name.slice(0, 45).toUpperCase();
+        for (const b of KNOWN_BRANDS) {
+          if (head.includes(b)) { brand = b === 'BLACK & DECKER' ? 'BLACK+DECKER' : b.charAt(0) + b.slice(1).toLowerCase().replace(/^(\w)/, (m) => m.toUpperCase()); brand = b === 'BLACK+DECKER' ? 'BLACK+DECKER' : brand; break; }
+        }
+        if (!brand) {
+          const bw = name.split(/\s+/)[0] || '';
+          if (/^[A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑa-záéíóúüñ+]{1,20}$/.test(bw) && !GENERIC_FIRST.test(bw)) brand = bw.replace(/\+/g, ' ');
+        }
         const upd = {};
-        if (mpn) upd.mpn = mpn;
-        if (brand) upd.brand = brand;
+        if (mpn && !p.mpn) upd.mpn = mpn;
+        if (brand && !p.brand) upd.brand = brand;
         if (Object.keys(upd).length) {
           const { error: ue } = await supabaseAdmin.from('parse_products').update(upd).eq('id', p.id);
           if (!ue) updated++;

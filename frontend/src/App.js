@@ -2966,8 +2966,6 @@ function ParseTab({ token, isMobileView, canRun }) {
     <div style={{ padding: isMobileView ? '6px 10px 20px' : '6px 15px 20px' }}>
       <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: 12, marginBottom: 12 }}>
         <div onClick={() => setCatOpen(o => !o)} style={{ fontSize: 13, fontWeight: 700, marginBottom: catOpen ? 8 : 0, cursor: 'pointer', userSelect: 'none' }}>{catOpen ? '▾' : '▸'} 🗂 Каталог товаров (Leroy Merlin){!catOpen && catPricedTotal != null ? ` · с ценой: ${catPricedTotal}` : ''}</div>
-        {catOpen && (<>
-
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           {LM_SITEMAPS.map(u => (
             <button key={u} onClick={() => syncSitemap(u)} disabled={catSync[u] && catSync[u].status === 'run'}
@@ -2980,6 +2978,7 @@ function ParseTab({ token, isMobileView, canRun }) {
         {Object.entries(catSync).map(([u, st]) => (
           <div key={u} style={{ fontSize: 12, marginTop: 4, color: st.status === 'err' ? '#e74c3c' : st.status === 'ok' ? '#1e7e34' : '#8e8e93' }}>{u.split('/').pop()}: {st.msg}</div>
         ))}
+        {catOpen && (<>
         {catTree.length === 0 && catItems && (
           <div style={{ marginTop: 10, fontSize: 12, color: '#8e8e93', padding: '6px 10px', background: '#f8f9fb', borderRadius: 8 }}>
             🌳 Дерево разделов пока пусто — оно заполняется, когда расширение Chrome парсит разделы («🗂 Парсинг раздела» в popup): каждый товар получает путь вида «Productos › Herramientas › …». Товары из sitemap раздела не имеют.
