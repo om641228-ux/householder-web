@@ -19,8 +19,10 @@
     <option value="pending">🆕 Товары без цены</option>
     <option value="stale">🔄 Обновить старые цены</option>
   </select>
-  <input id="days" type="number" min="1" max="90" value="7" placeholder="Старше N дней (для режима обновления)">
-  <input id="batch" type="number" min="1" max="100" value="20" placeholder="Размер пачки (1–100)">
+  <label style="font-size:11px;color:#555">Цена старше N дней — для режима «🔄 Обновить старые»:</label>
+  <input id="days" type="number" min="1" max="90" value="7">
+  <label style="font-size:11px;color:#555">Размер пачки — сколько товаров за один проход (1–100):</label>
+  <input id="batch" type="number" min="1" max="100" value="20">
   <button id="go">▶ Собрать пачку</button>
   <button id="goall" class="all">▶▶ Собрать ВСЁ (до конца очереди)</button>
   <button id="stop" class="stop">⏹ Остановить</button>

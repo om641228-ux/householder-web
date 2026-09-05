@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v126 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v127 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2653,6 +2653,29 @@ const entColor = (type) => {
 const ENT_TYPE_FILTERS = [ ['', 'Все'], ['company', '🏢 Компании'], ['person', '👤 Персоны'], ['contract_no', '📄 Договоры'], ['poa', '📜 Доверенности'], ['invoice_no', '🧾 № фактур'], ['iban', '💳 Счета'], ['tax_id', '🔢 Налоговые №'], ['amount_date', '💶 Суммы'] ];
 
 // ========== v119: вкладка «🌐 Парсинг» — источники, проверка robots.txt, запуск парсера ==========
+// v127: общая панель страниц — «← 1 … 5 6 7 … 45 →», точки прыгают в середину пропуска
+function PageBar({ page, totalPages, onGo, style }) {
+  if (!totalPages || totalPages <= 1) return null;
+  const btn = (key, label, target, opts = {}) => (
+    <button key={key} onClick={() => onGo(target)} disabled={!!opts.disabled} title={opts.title || ('Страница ' + target)}
+      style={{ minWidth: 30, padding: '4px 8px', borderRadius: 8, border: opts.active ? 'none' : '1px solid #d0d0d5', background: opts.active ? '#0071e3' : '#fff', color: opts.active ? '#fff' : '#333', fontSize: 12, fontWeight: opts.active ? 700 : 400, cursor: opts.disabled ? 'not-allowed' : 'pointer', opacity: opts.disabled ? 0.45 : 1 }}>{label}</button>
+  );
+  const items = [];
+  items.push(btn('prev', '←', Math.max(1, page - 1), { disabled: page === 1, title: 'Предыдущая' }));
+  const show = [...new Set([1, totalPages, page - 1, page, page + 1])].filter(p => p >= 1 && p <= totalPages).sort((a, b) => a - b);
+  let prev = 0;
+  for (const p of show) {
+    if (p - prev > 1) {
+      const mid = prev + Math.ceil((p - prev) / 2);
+      items.push(btn('dots' + prev + '_' + p, '…', mid, { title: 'К странице ' + mid }));
+    }
+    items.push(btn('p' + p, String(p), p, { active: p === page }));
+    prev = p;
+  }
+  items.push(btn('next', '→', Math.min(totalPages, page + 1), { disabled: page === totalPages, title: 'Следующая' }));
+  return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 4, flexWrap: 'wrap', ...(style || {}) }}>{items}</div>;
+}
+
 function ParseTab({ token, isMobileView, canRun }) {
   const [sources, setSources] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -2934,36 +2957,6 @@ function ParseTab({ token, isMobileView, canRun }) {
       </div>
 
       <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: 12, marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>➕ Новый источник</div>
-        <div style={{ display: 'grid', gap: 8, gridTemplateColumns: isMobileView ? '1fr' : 'auto 2fr 1fr auto' }}>
-          <select value={kind} onChange={e => setKind(e.target.value)} title="Тип источника"
-            style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13, background: '#fff' }}>
-            <option value="page">📄 Страница HTML</option>
-            <option value="sitemap">🗺 Sitemap XML</option>
-          </select>
-          <input value={url} onChange={e => setUrl(e.target.value)} placeholder={kind === 'sitemap' ? 'URL сайтмапа (https://www.leroymerlin.es/sitemap-productos1.xml)' : 'URL страницы (напр. https://www.leroymerlin.es/productos/...)'}
-            style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
-          <input value={name} onChange={e => setName(e.target.value)} placeholder="Название (необязательно)"
-            style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
-          {canRun && <button onClick={addSource} disabled={!url.trim()}
-            style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#0071e3', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>Добавить</button>}
-        </div>
-        {kind === 'sitemap' && (
-          <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Фильтр: слова из названия/URL через пробел (напр. plato ducha) — пусто = первые 100"
-            style={{ marginTop: 8, width: '100%', boxSizing: 'border-box', padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
-        )}
-        <div style={{ fontSize: 11, color: '#8e8e93', marginTop: 6 }}>
-          При добавлении проверяется robots.txt. ⚠️ Leroy Merlin защищает HTML-страницы антиботом DataDome (сервер получает 403) — для цен используйте «📋 HTML» (вставка страницы из вашего браузера), а <b>sitemap XML не защищён</b> и парсится напрямую.
-        </div>
-        {robotsInfo && (
-          <div style={{ marginTop: 8, fontSize: 12, padding: '6px 10px', borderRadius: 8, background: robotsInfo.allowed ? '#e8f8ef' : '#fdecea', border: '1px solid ' + (robotsInfo.allowed ? '#34c759' : '#e74c3c') }}>
-            {robotsInfo.allowed ? '✅' : '❌'} robots.txt: {robotsInfo.note}
-            {robotsInfo.sitemaps && robotsInfo.sitemaps.length > 0 && <div style={{ color: '#555', marginTop: 2 }}>Sitemaps: {robotsInfo.sitemaps.slice(0, 3).join(' · ')}{robotsInfo.sitemaps.length > 3 ? ` … (всего ${robotsInfo.sitemaps.length})` : ''}</div>}
-          </div>
-        )}
-      </div>
-
-      <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: 12, marginBottom: 12 }}>
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>🗂 Каталог товаров (Leroy Merlin)</div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           {LM_SITEMAPS.map(u => (
@@ -2977,6 +2970,11 @@ function ParseTab({ token, isMobileView, canRun }) {
         {Object.entries(catSync).map(([u, st]) => (
           <div key={u} style={{ fontSize: 12, marginTop: 4, color: st.status === 'err' ? '#e74c3c' : st.status === 'ok' ? '#1e7e34' : '#8e8e93' }}>{u.split('/').pop()}: {st.msg}</div>
         ))}
+        {catTree.length === 0 && catItems && (
+          <div style={{ marginTop: 10, fontSize: 12, color: '#8e8e93', padding: '6px 10px', background: '#f8f9fb', borderRadius: 8 }}>
+            🌳 Дерево разделов пока пусто — оно заполняется, когда расширение Chrome парсит разделы («🗂 Парсинг раздела» в popup): каждый товар получает путь вида «Productos › Herramientas › …». Товары из sitemap раздела не имеют.
+          </div>
+        )}
         {catTree.length > 0 && (
           <div style={{ marginTop: 10, border: '1px solid #f0f0f2', borderRadius: 10, padding: 8, maxHeight: 240, overflowY: 'auto' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
@@ -3020,10 +3018,7 @@ function ParseTab({ token, isMobileView, canRun }) {
                 <option value={60}>60 на страницу</option>
                 <option value={100}>100 на страницу</option>
               </select>
-              <button onClick={() => { const pg = Math.max(0, catPage - 1); setCatPage(pg); catSearch({ page: pg }); }} disabled={catBusy || catPage === 0}
-                style={{ padding: '4px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>← Пред</button>
-              <button onClick={() => { const pg = catPage + 1; setCatPage(pg); catSearch({ page: pg }); }} disabled={catBusy || (catPage + 1) * catLimit >= catTotal}
-                style={{ padding: '4px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>След →</button>
+              <PageBar page={catPage + 1} totalPages={Math.max(1, Math.ceil(catTotal / catLimit))} onGo={(p) => { const pg = p - 1; setCatPage(pg); catSearch({ page: pg }); }} />
               <button onClick={() => { catSearch(); loadCatTree(); }} title="Обновить (список сам обновляется каждые 15 с)"
                 style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>🔄</button>
             </div>
@@ -3078,102 +3073,6 @@ function ParseTab({ token, isMobileView, canRun }) {
       </div>
 
       {err && <div style={{ background: '#fdecea', border: '1px solid #e74c3c', borderRadius: 10, padding: '10px 12px', fontSize: 13, marginBottom: 10, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>❌ {err}</div>}
-      {loading && <div style={{ color: '#8e8e93', fontSize: 13 }}>⏳ Загружаю источники…</div>}
-      {!loading && sources.length === 0 && !err && (
-        <div style={{ color: '#8e8e93', fontSize: 14, margin: '20px 0' }}>Источников пока нет. Добавьте первый URL выше — например, карточку товара Leroy Merlin для отслеживания цены.</div>
-      )}
-
-      <div style={{ display: 'grid', gap: 10 }}>
-        {sources.map(src => (
-          <div key={src.id} style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <span title={src.robots_note || ''} style={{ fontSize: 14 }}>{src.robots_ok === false ? '❌' : '✅'}</span>
-              <b style={{ fontSize: 14 }}>{src.name || src.url}</b>
-              <span style={{ color: '#8e8e93', fontSize: 12 }}>{src.site}</span>
-              <span style={{ fontSize: 11, padding: '1px 8px', borderRadius: 10, background: src.kind === 'sitemap' ? '#eaf3fb' : '#f5f5f7', color: '#555' }}>{src.kind === 'sitemap' ? '🗺 sitemap' : '📄 страница'}</span>
-              {src.filter && <span style={{ fontSize: 11, color: '#7c3aed' }}>фильтр: {src.filter}</span>}
-              <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6 }}>
-                {canRun && <button onClick={() => runSource(src.id)} disabled={busyId === src.id}
-                  style={{ padding: '5px 12px', borderRadius: 8, border: 'none', background: '#34c759', color: '#fff', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>
-                  {busyId === src.id ? '⏳ Парсю…' : '▶ Спарсить'}
-                </button>}
-                {canRun && src.kind !== 'sitemap' && (
-                  <button onClick={() => { setPasteFor(src.id); setPasteHtml(''); }} title="Вставить исходник страницы из браузера (обход антибота)"
-                    style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12.5, cursor: 'pointer' }}>📋 HTML</button>
-                )}
-                {canRun && src.kind !== 'sitemap' && (
-                  <button onClick={() => setAutoHelpFor(src.id)} title="Букмарклет и iOS Shortcut — отправка страницы в один клик"
-                    style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12.5, cursor: 'pointer' }}>🔗 Авто</button>
-                )}
-                {canRun && (
-                  <select value={src.auto_every_hours || 0} onChange={e => setAuto(src.id, parseInt(e.target.value, 10))}
-                    title="Автозапуск с сервера (для sitemap и сайтов без антибота)"
-                    style={{ padding: '5px 8px', borderRadius: 8, border: '1px solid #d0d0d5', background: (src.auto_every_hours || 0) > 0 ? '#e8f8ef' : '#fff', fontSize: 12, cursor: 'pointer' }}>
-                    <option value={0}>⏱ выкл</option>
-                    <option value={6}>⏱ 6ч</option>
-                    <option value={12}>⏱ 12ч</option>
-                    <option value={24}>⏱ 24ч</option>
-                    <option value={168}>⏱ 7д</option>
-                  </select>
-                )}
-                <button onClick={() => hist[src.id] ? setHist(prev => { const h = { ...prev }; delete h[src.id]; return h; }) : loadHistory(src.id)}
-                  style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12.5, cursor: 'pointer' }}>
-                  {hist[src.id] ? '▴ Скрыть' : '🕘 История'}
-                </button>
-                {canRun && <button onClick={() => removeSource(src.id)}
-                  style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #f5c2c7', background: '#fff', color: '#e74c3c', fontSize: 12.5, cursor: 'pointer' }}>🗑</button>}
-              </span>
-            </div>
-            <div style={{ fontSize: 12, color: '#8e8e93', marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{src.url}</div>
-            {src.last && (
-              <div style={{ fontSize: 13, marginTop: 6 }}>
-                📦 {src.last.title || '(без названия)'} {src.last.price != null && <b style={{ color: '#1d1d1f' }}>· {src.last.price} {src.last.currency || '€'}</b>} <span style={{ color: '#8e8e93', fontSize: 11 }}>· {fmtDate(src.last.fetched_at)}</span>
-                {src.last_change && (
-                  <div style={{ marginTop: 2, fontSize: 12, fontWeight: 700, color: /→/.test(src.last_change) ? (/\(\+/.test(src.last_change) ? '#e67e22' : '#1e7e34') : '#8e8e93' }}>
-                    {/→/.test(src.last_change) ? (/\(\+/.test(src.last_change) ? '📈' : '📉') : 'ℹ️'} {src.last_change}
-                  </div>
-                )}
-              </div>
-            )}
-            {src.last && src.last.data && Array.isArray(src.last.data.items) && src.last.data.items.length > 0 && (
-              <div style={{ marginTop: 6, display: 'grid', gap: 4 }}>
-                {src.last.data.items.slice(0, 8).map((it, i) => (
-                  <a key={i} href={it.url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#0071e3', textDecoration: 'none' }}>
-                    {it.image && <img src={it.image} alt="" style={{ width: 28, height: 28, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }} />}
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.name}</span>
-                  </a>
-                ))}
-                {src.last.data.items.length > 8 && <div style={{ fontSize: 11, color: '#8e8e93' }}>… ещё {src.last.data.items.length - 8} (вся выдача в «🕘 История»)</div>}
-              </div>
-            )}
-            {src.robots_note && <div style={{ fontSize: 11, color: src.robots_ok === false ? '#e74c3c' : '#8e8e93', marginTop: 4 }}>{src.robots_note}</div>}
-            {hist[src.id] && (
-              <div style={{ marginTop: 8, borderTop: '1px solid #f0f0f2', paddingTop: 6 }}>
-                {hist[src.id].length === 0 && <div style={{ fontSize: 12, color: '#8e8e93' }}>История пуста — нажмите «▶ Спарсить»</div>}
-                {hist[src.id].map(r => (
-                  <div key={r.id} style={{ fontSize: 12, padding: '3px 0' }}>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
-                      <span style={{ color: '#8e8e93', flexShrink: 0 }}>{fmtDate(r.fetched_at)}</span>
-                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title || '—'}</span>
-                      {r.price != null && <b>{r.price} {r.currency || '€'}</b>}
-                    </div>
-                    {r.data && Array.isArray(r.data.items) && r.data.items.length > 0 && (
-                      <div style={{ margin: '2px 0 4px 12px', display: 'grid', gap: 2 }}>
-                        {r.data.items.map((it, i) => (
-                          <a key={i} href={it.url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#0071e3', textDecoration: 'none', fontSize: 11.5 }}>
-                            {it.image && <img src={it.image} alt="" style={{ width: 22, height: 22, objectFit: 'cover', borderRadius: 3, flexShrink: 0 }} />}
-                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.name}</span>
-                          </a>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
 
       {autoHelpFor && (
         <div onClick={() => setAutoHelpFor(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 220, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -9165,7 +9064,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-05 · v126 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-05 · v127 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9178,7 +9077,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-05 · v126</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-05 · v127</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">
@@ -10721,6 +10620,9 @@ ${bodyHtml}
             <p className="empty-state">Нет чеков. Загрузите первый!</p>
           ) : (
             <>
+              {itemsPerPage !== 'all' && totalPages > 1 && (
+                <PageBar page={currentPage} totalPages={totalPages} onGo={(p) => { setCurrentPage(p); window.scrollTo({ top: 0, behavior: 'smooth' }); }} style={{ marginBottom: 12 }} />
+              )}
               {dateRailGroups.length >= 2 && (
                 <div style={isMobileView
                   ? { position: 'fixed', left: 6, right: 6, bottom: 'calc(64px + env(safe-area-inset-bottom))', zIndex: 60, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, background: 'rgba(255,255,255,0.94)', border: '1px solid #e3e6ea', borderRadius: 12, padding: '6px 10px', boxShadow: '0 2px 10px rgba(0,0,0,0.10)', overflowX: 'auto', overflowY: 'hidden', WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none', boxSizing: 'border-box' }
@@ -10865,13 +10767,7 @@ ${bodyHtml}
                 })}
               </div>
 
-              {itemsPerPage !== 'all' && totalPages > 1 && (
-                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 20 }}>
-                  <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} style={{ padding: '8px 16px', borderRadius: 6, border: 'none', background: currentPage === 1 ? '#ddd' : '#3498db', color: 'white', cursor: currentPage === 1 ? 'not-allowed' : 'pointer' }}>◀ Назад</button>
-                  <span>Страница {currentPage} из {totalPages}</span>
-                  <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} style={{ padding: '8px 16px', borderRadius: 6, border: 'none', background: currentPage === totalPages ? '#ddd' : '#3498db', color: 'white', cursor: currentPage === totalPages ? 'not-allowed' : 'pointer' }}>Вперёд ▶</button>
-                </div>
-              )}
+
             </>
           )}
         </div>
