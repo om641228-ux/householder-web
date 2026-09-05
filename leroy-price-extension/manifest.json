@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Householder — сборщик цен",
-  "version": "1.3",
+  "version": "1.4",
   "description": "Открывает товары из каталога Householder в фоновых вкладках и отправляет точные цены в систему.",
   "permissions": [
     "tabs",

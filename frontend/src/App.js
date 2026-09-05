@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v125 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v126 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2676,6 +2676,13 @@ function ParseTab({ token, isMobileView, canRun }) {
   const [catTotal, setCatTotal] = useState(0);
   const [catPriced, setCatPriced] = useState(false); // v123.1: показывать только с ценой
   const [catPricedTotal, setCatPricedTotal] = useState(null);
+  // v126: структурный каталог — дерево разделов, пагинация, автообновление
+  const [catPage, setCatPage] = useState(0);
+  const [catLimit, setCatLimit] = useState(60);
+  const [catCat, setCatCat] = useState(''); // выбранный путь раздела
+  const [catTree, setCatTree] = useState([]); // [{path, count}]
+  const [catExpanded, setCatExpanded] = useState({});
+  const catParamsRef = useRef({});
   const [catBusy, setCatBusy] = useState(false);
   const [priceBusy, setPriceBusy] = useState({}); // id -> bool
 
@@ -2801,20 +2808,72 @@ function ParseTab({ token, isMobileView, canRun }) {
   const catSearch = async (over = {}) => {
     const q = over.q !== undefined ? over.q : catQ;
     const pr = over.priced !== undefined ? over.priced : catPriced;
-    setCatBusy(true); setErr('');
+    const pg = over.page !== undefined ? over.page : catPage;
+    const lim = over.limit !== undefined ? over.limit : catLimit;
+    const cc = over.category !== undefined ? over.category : catCat;
+    catParamsRef.current = { q, pr, pg, lim, cc };
+    if (!over.silent) { setCatBusy(true); setErr(''); }
     try {
-      const r = await fetch(`${API_URL}/api/parse/catalog?token=${token}&q=${encodeURIComponent(q)}&site=www.leroymerlin.es${pr ? '&priced=1' : ''}`);
+      const r = await fetch(`${API_URL}/api/parse/catalog?token=${token}&q=${encodeURIComponent(q)}&site=www.leroymerlin.es${pr ? '&priced=1' : ''}${cc ? '&category=' + encodeURIComponent(cc) : ''}&limit=${lim}&offset=${pg * lim}`);
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
       if (j.missing) setErr('Нет таблицы parse_products — выполните v119-парсинг.sql повторно в Supabase');
       setCatItems(j.products || []); setCatTotal(j.total || 0);
       if (j.pricedTotal != null) setCatPricedTotal(j.pricedTotal);
-    } catch (e) { setErr(e.message); }
-    setCatBusy(false);
+    } catch (e) { if (!over.silent) setErr(e.message); }
+    if (!over.silent) setCatBusy(false);
   };
+  // v126: дерево разделов каталога
+  const loadCatTree = async () => {
+    try {
+      const r = await fetch(`${API_URL}/api/parse/catalog/categories?token=${token}&site=www.leroymerlin.es`);
+      const j = await r.json();
+      if (r.ok) setCatTree(j.categories || []);
+    } catch (e) { /* не критично */ }
+  };
+  const catChildrenOf = (prefix) => {
+    const agg = {};
+    for (const c of catTree) {
+      const rest = prefix ? (c.path.startsWith(prefix + ' > ') ? c.path.slice(prefix.length + 3) : null) : c.path;
+      if (rest == null || rest === '') continue;
+      const seg = rest.split(' > ')[0];
+      agg[seg] = (agg[seg] || 0) + c.count;
+    }
+    return Object.entries(agg).sort((a, b) => b[1] - a[1]);
+  };
+  const pickCat = (full) => { setCatCat(full); setCatPage(0); catSearch({ category: full, page: 0 }); };
+  const renderCatLevel = (prefix, depth) => catChildrenOf(prefix).map(([seg, cnt]) => {
+    const full = prefix ? prefix + ' > ' + seg : seg;
+    const hasKids = catTree.some(c => c.path.startsWith(full + ' > '));
+    const open = !!catExpanded[full];
+    const active = catCat === full;
+    return (
+      <div key={full}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, paddingLeft: depth * 14, fontSize: 12, paddingTop: 2, paddingBottom: 2 }}>
+          {hasKids
+            ? <span onClick={() => setCatExpanded(prev => ({ ...prev, [full]: !prev[full] }))} style={{ cursor: 'pointer', width: 14, color: '#8e8e93', flexShrink: 0 }}>{open ? '▾' : '▸'}</span>
+            : <span style={{ width: 14, flexShrink: 0 }} />}
+          <span onClick={() => pickCat(full)} style={{ cursor: 'pointer', color: active ? '#0071e3' : '#333', fontWeight: active ? 700 : 400 }}>{seg}</span>
+          <span style={{ color: '#c7c7cc', fontSize: 11 }}>{cnt}</span>
+        </div>
+        {open && hasKids && renderCatLevel(full, depth + 1)}
+      </div>
+    );
+  });
   // v123.1: каталог уже в базе — подгружаем при открытии вкладки, без пересинхронизации sitemap
+  // v126: автообновление каждые 15 с — товары, распознанные расширением прямо сейчас, появляются сверху сами
   const catAutoLoaded = useRef(false);
-  useEffect(() => { if (!catAutoLoaded.current) { catAutoLoaded.current = true; catSearch(); } }, []);
+  useEffect(() => {
+    if (!catAutoLoaded.current) { catAutoLoaded.current = true; catSearch(); loadCatTree(); }
+    const iv = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        const p = catParamsRef.current || {};
+        catSearch({ q: p.q || '', priced: !!p.pr, page: p.pg || 0, limit: p.lim || 60, category: p.cc || '', silent: true });
+        loadCatTree();
+      }
+    }, 15000);
+    return () => clearInterval(iv);
+  }, []);
   const fetchPrices = async (ids) => {
     ids.forEach(id => setPriceBusy(prev => ({ ...prev, [id]: true })));
     setErr('');
@@ -2905,7 +2964,7 @@ function ParseTab({ token, isMobileView, canRun }) {
       </div>
 
       <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: 12, marginBottom: 12 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>🗂 Каталог товаров из sitemap (Leroy Merlin)</div>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>🗂 Каталог товаров (Leroy Merlin)</div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           {LM_SITEMAPS.map(u => (
             <button key={u} onClick={() => syncSitemap(u)} disabled={catSync[u] && catSync[u].status === 'run'}
@@ -2918,13 +2977,25 @@ function ParseTab({ token, isMobileView, canRun }) {
         {Object.entries(catSync).map(([u, st]) => (
           <div key={u} style={{ fontSize: 12, marginTop: 4, color: st.status === 'err' ? '#e74c3c' : st.status === 'ok' ? '#1e7e34' : '#8e8e93' }}>{u.split('/').pop()}: {st.msg}</div>
         ))}
+        {catTree.length > 0 && (
+          <div style={{ marginTop: 10, border: '1px solid #f0f0f2', borderRadius: 10, padding: 8, maxHeight: 240, overflowY: 'auto' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12, fontWeight: 700 }}>🌳 Разделы каталога</span>
+              {catCat && <button onClick={() => { setCatCat(''); setCatPage(0); catSearch({ category: '', page: 0 }); }}
+                title="Сбросить фильтр по разделу"
+                style={{ fontSize: 11, border: '1px solid #e74c3c', color: '#e74c3c', background: '#fdecea', borderRadius: 8, padding: '2px 8px', cursor: 'pointer' }}>✕ {catCat}</button>}
+              {!catCat && <span style={{ fontSize: 11, color: '#8e8e93' }}>клик по разделу — товары этого раздела, ▸ — раскрыть вложенные</span>}
+            </div>
+            {renderCatLevel('', 0)}
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
-          <input value={catQ} onChange={e => setCatQ(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') catSearch(); }}
+          <input value={catQ} onChange={e => setCatQ(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { setCatPage(0); catSearch({ page: 0 }); } }}
             placeholder="Поиск по каталогу: напр. taladro black decker"
             style={{ flex: 1, padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
-          <button onClick={() => catSearch()} disabled={catBusy}
+          <button onClick={() => { setCatPage(0); catSearch({ page: 0 }); }} disabled={catBusy}
             style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#0071e3', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>{catBusy ? '⏳' : '🔍 Найти'}</button>
-          <button onClick={() => { const nv = !catPriced; setCatPriced(nv); catSearch({ priced: nv }); }} disabled={catBusy}
+          <button onClick={() => { const nv = !catPriced; setCatPriced(nv); setCatPage(0); catSearch({ priced: nv, page: 0 }); }} disabled={catBusy}
             title="Показать только товары с фактической ценой (последние обновлённые первыми)"
             style={{ padding: '8px 14px', borderRadius: 8, border: catPriced ? 'none' : '1px solid #34c759', background: catPriced ? '#34c759' : '#e8f8ef', color: catPriced ? '#fff' : '#1e7e34', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>💶 С ценой{catPricedTotal != null ? `: ${catPricedTotal}` : ''}</button>
           {catItems && catItems.length > 0 && canRun && (
@@ -2942,36 +3013,65 @@ function ParseTab({ token, isMobileView, canRun }) {
         </div>
         {catItems && (
           <div style={{ marginTop: 8 }}>
-            <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 6 }}>{catPriced ? 'С ценой' : 'Найдено'}: {catTotal} (показано {catItems.length}){catPricedTotal != null && !catPriced ? ` · с ценой в каталоге: ${catPricedTotal}` : ''}</div>
-            <div style={{ display: 'grid', gridTemplateColumns: isMobileView ? '1fr' : 'repeat(auto-fill, minmax(320px, 1fr))', gap: 8 }}>
-              {catItems.map(p => (
-                <div key={p.id} style={{ display: 'flex', gap: 8, border: '1px solid #f0f0f2', borderRadius: 10, padding: 8, alignItems: 'center' }}>
-                  {p.image && <img src={p.image} alt="" style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 6, flexShrink: 0 }} />}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <a href={p.url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#0071e3', textDecoration: 'none', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name || p.url}</a>
-                    <div style={{ fontSize: 12, marginTop: 2 }}>
-                      {p.article && <span style={{ color: '#8e8e93', marginRight: 6 }}>арт. {p.article}</span>}
-                      {p.price != null ? <b>{p.price} {p.currency || '€'}</b> : (p.price_estimate != null ? <span style={{ color: '#e67e22' }}>≈ {p.price_estimate} {p.currency || '€'} <span style={{ fontSize: 10 }}>(оценка AI)</span></span> : <span style={{ color: '#8e8e93' }}>цена не снята</span>)}
-                      {p.price_source === 'ai-search' && <span title="Цена найдена AI через веб-поиск (подтверждена по артикулу)" style={{ fontSize: 10, color: '#7c3aed', marginLeft: 4 }}>🤖</span>}
-                      {p.price_source === 'extension' && <span title="Цена собрана расширением браузера со страницы товара" style={{ fontSize: 10, color: '#16a34a', marginLeft: 4 }}>🧩</span>}
-                      {p.price_estimate != null && <span title="Есть оценка AI (price_estimate), не путать с фактической ценой" style={{ fontSize: 10, color: '#94a3b8', marginLeft: 4 }}>🤖≈</span>}
-                      {p.price_prev != null && p.price != null && Math.abs(p.price - p.price_prev) > 0.001 && <span title={`Было ${p.price_prev} ${p.currency || '€'}`} style={{ fontSize: 10, marginLeft: 4, color: p.price > p.price_prev ? '#e67e22' : '#1e7e34' }}>{p.price > p.price_prev ? '📈' : '📉'} было {p.price_prev}</span>}
-                    </div>
-                  </div>
-                  {canRun && (
-                    <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 4, flexShrink: 0 }}>
-                      <button onClick={() => fetchPrices([p.id])} disabled={!!priceBusy[p.id]} title="Снять цену со страницы товара (403 без прокси)"
-                        style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>
-                        {priceBusy[p.id] ? '⏳' : '💶'}
-                      </button>
-                      <button onClick={() => fetchAiPrices([p.id])} disabled={!!priceBusy[p.id]} title="Цена через AI веб-поиск (без 403)"
-                        style={{ padding: '4px 10px', borderRadius: 8, border: 'none', background: '#7c3aed', color: '#fff', fontSize: 12, cursor: 'pointer' }}>
-                        {priceBusy[p.id] ? '⏳' : '🤖'}
-                      </button>
-                    </span>
-                  )}
-                </div>
-              ))}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6, fontSize: 12, color: '#8e8e93' }}>
+              <span>{catPriced ? 'С ценой' : 'Найдено'}: {catTotal}{catCat ? ` · раздел «${catCat.split(' > ').pop()}»` : ''} · стр. {catPage + 1} из {Math.max(1, Math.ceil(catTotal / catLimit))}{catPricedTotal != null && !catPriced ? ` · с ценой в каталоге: ${catPricedTotal}` : ''}</span>
+              <select value={catLimit} onChange={e => { const lim = parseInt(e.target.value, 10); setCatLimit(lim); setCatPage(0); catSearch({ limit: lim, page: 0 }); }}
+                style={{ padding: '4px 8px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 12 }}>
+                <option value={60}>60 на страницу</option>
+                <option value={100}>100 на страницу</option>
+              </select>
+              <button onClick={() => { const pg = Math.max(0, catPage - 1); setCatPage(pg); catSearch({ page: pg }); }} disabled={catBusy || catPage === 0}
+                style={{ padding: '4px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>← Пред</button>
+              <button onClick={() => { const pg = catPage + 1; setCatPage(pg); catSearch({ page: pg }); }} disabled={catBusy || (catPage + 1) * catLimit >= catTotal}
+                style={{ padding: '4px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>След →</button>
+              <button onClick={() => { catSearch(); loadCatTree(); }} title="Обновить (список сам обновляется каждые 15 с)"
+                style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>🔄</button>
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ textAlign: 'left', color: '#8e8e93', borderBottom: '2px solid #f0f0f2' }}>
+                    <th style={{ padding: '6px 8px' }}>Товар</th>
+                    <th style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>Артикул</th>
+                    <th style={{ padding: '6px 8px' }}>Раздел</th>
+                    <th style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>Цена</th>
+                    {canRun && <th style={{ padding: '6px 8px' }}></th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {catItems.map(p => (
+                    <tr key={p.id} style={{ borderBottom: '1px solid #f5f5f7' }}>
+                      <td style={{ padding: '6px 8px' }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 220 }}>
+                          {p.image && <img src={p.image} alt="" loading="lazy" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 6, flexShrink: 0 }} />}
+                          <a href={p.url} target="_blank" rel="noreferrer" style={{ color: '#0071e3', textDecoration: 'none' }}>{p.name || p.url}</a>
+                        </div>
+                      </td>
+                      <td style={{ padding: '6px 8px', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{p.article || '—'}</td>
+                      <td style={{ padding: '6px 8px', color: '#8e8e93', fontSize: 11, maxWidth: 220 }} title={p.category || ''}>
+                        {p.category
+                          ? <span onClick={() => pickCat(p.category)} style={{ cursor: 'pointer' }}>{p.category.split(' > ').slice(-2).join(' › ')}</span>
+                          : '—'}
+                      </td>
+                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
+                        {p.price != null ? <b>{p.price} {p.currency || '€'}</b> : (p.price_estimate != null ? <span style={{ color: '#e67e22' }}>≈ {p.price_estimate} {p.currency || '€'} <span style={{ fontSize: 10 }}>(оценка)</span></span> : <span style={{ color: '#c7c7cc' }}>—</span>)}
+                        {p.price_source === 'ai-search' && <span title="Цена найдена AI через веб-поиск (подтверждена по артикулу)" style={{ fontSize: 10, color: '#7c3aed', marginLeft: 4 }}>🤖</span>}
+                        {p.price_source === 'extension' && <span title="Цена собрана расширением браузера со страницы товара" style={{ fontSize: 10, color: '#16a34a', marginLeft: 4 }}>🧩</span>}
+                        {p.price_estimate != null && <span title="Есть оценка AI (price_estimate), не путать с фактической ценой" style={{ fontSize: 10, color: '#94a3b8', marginLeft: 4 }}>🤖≈</span>}
+                        {p.price_prev != null && p.price != null && Math.abs(p.price - p.price_prev) > 0.001 && <span title={`Было ${p.price_prev} ${p.currency || '€'}`} style={{ fontSize: 10, marginLeft: 4, color: p.price > p.price_prev ? '#e67e22' : '#1e7e34' }}>{p.price > p.price_prev ? '📈' : '📉'} было {p.price_prev}</span>}
+                      </td>
+                      {canRun && (
+                        <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
+                          <button onClick={() => fetchPrices([p.id])} disabled={!!priceBusy[p.id]} title="Снять цену со страницы товара (403 без прокси)"
+                            style={{ padding: '3px 9px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>{priceBusy[p.id] ? '⏳' : '💶'}</button>
+                          <button onClick={() => fetchAiPrices([p.id])} disabled={!!priceBusy[p.id]} title="Цена через AI веб-поиск (без 403)"
+                            style={{ padding: '3px 9px', borderRadius: 8, border: 'none', background: '#7c3aed', color: '#fff', fontSize: 12, cursor: 'pointer', marginLeft: 4 }}>{priceBusy[p.id] ? '⏳' : '🤖'}</button>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
@@ -9065,7 +9165,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-05 · v125 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-05 · v126 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9078,7 +9178,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-05 · v125</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-05 · v126</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">

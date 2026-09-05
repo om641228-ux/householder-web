@@ -132,6 +132,16 @@ async function run(api, token, batch, mode, staleDays, continuous) {
 function extractLinksOnPage() {
   const out = [];
   const seen = new Set();
+  // v1.4: путь раздела из хлебных крошек («Productos > Herramientas > …»), fallback — заголовок H1
+  let category = '';
+  try {
+    const crumbs = [...document.querySelectorAll('nav[aria-label*="readcrumb" i] a, [class*="breadcrumb" i] a, ol[class*="breadcrumb" i] li')]
+      .map(x => String(x.textContent || '').replace(/\s+/g, ' ').trim()).filter(t => t && !/^home$/i.test(t));
+    const h1 = String((document.querySelector('h1') || {}).textContent || '').trim();
+    const parts = crumbs.slice();
+    if (h1 && !parts.some(p => p.toLowerCase() === h1.toLowerCase())) parts.push(h1);
+    category = parts.join(' > ').slice(0, 300);
+  } catch (e) {}
   for (const a of document.querySelectorAll('a[href*=".html"]')) {
     const href = a.href.split('#')[0];
     if (!/-\d{5,}\.html?$/i.test(href)) continue;
@@ -140,7 +150,7 @@ function extractLinksOnPage() {
     const img = a.querySelector('img');
     let name = String((img && img.alt) || a.getAttribute('aria-label') || a.textContent || '').replace(/\s+/g, ' ').trim();
     if (name.length > 300) name = name.slice(0, 300);
-    out.push({ url: href, name, image: img ? String(img.currentSrc || img.src || '') : '' });
+    out.push({ url: href, name, image: img ? String(img.currentSrc || img.src || '') : '', category });
   }
   return out;
 }

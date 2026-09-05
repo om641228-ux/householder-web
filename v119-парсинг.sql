@@ -66,3 +66,7 @@ alter table parse_products add column if not exists price_changed_at timestamptz
 alter table parse_products add column if not exists price_attempts integer default 0;
 alter table parse_products add column if not exists price_attempt_at timestamptz;
 alter table parse_products add column if not exists price_fail_reason text;
+
+-- v126: путь раздела товара (дерево каталога как на сайте)
+alter table parse_products add column if not exists category text;
+create index if not exists parse_products_category_idx on parse_products (category text_pattern_ops);

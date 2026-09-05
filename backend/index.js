@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v125-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v126-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4465,14 +4465,36 @@ app.post('/api/parse/catalog/sync', requireAuth, requireRole('admin', 'manager')
 });
 
 // Поиск по каталогу
+// v126: дерево разделов каталога (пути вида «Productos > Herramientas > …»)
+app.get('/api/parse/catalog/categories', requireAuth, async (req, res) => {
+  try {
+    const site = String(req.query.site || '').trim();
+    let q = supabaseAdmin.from('parse_products').select('category').not('category', 'is', null).limit(30000);
+    if (site) q = q.eq('site', site);
+    const { data, error } = await q;
+    if (error) {
+      if (/does not exist/i.test(error.message || '')) return res.json({ categories: [], missing: true });
+      throw error;
+    }
+    const counts = {};
+    for (const r of (data || [])) if (r.category) counts[r.category] = (counts[r.category] || 0) + 1;
+    const categories = Object.entries(counts).map(([path, cnt]) => ({ path, count: cnt })).sort((a, b) => a.path.localeCompare(b.path));
+    res.json({ categories });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/parse/catalog', requireAuth, tabGuard('list'), async (req, res) => {
   try {
     const q = String(req.query.q || '').trim();
     const site = String(req.query.site || '').trim();
     const priced = String(req.query.priced || '') === '1'; // v123.1: только товары с ценой
-    let query = supabaseAdmin.from('parse_products').select('*', { count: 'exact' }).order(priced ? 'price_at' : 'last_seen', { ascending: false, nullsFirst: false }).limit(Math.min(200, parseInt(req.query.limit || '60', 10) || 60));
+    const category = String(req.query.category || '').trim(); // v126: фильтр по пути раздела (префикс)
+    const lim = Math.min(200, Math.max(10, parseInt(req.query.limit || '60', 10) || 60));
+    const off = Math.max(0, parseInt(req.query.offset || '0', 10) || 0); // v126: постранично
+    let query = supabaseAdmin.from('parse_products').select('*', { count: 'exact' }).order(priced ? 'price_at' : 'last_seen', { ascending: false, nullsFirst: false }).range(off, off + lim - 1);
     if (site) query = query.eq('site', site);
     if (priced) query = query.not('price', 'is', null);
+    if (category) query = query.ilike('category', category.replace(/[%_]/g, ' ') + '%');
     if (q) {
       const words = q.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6);
       if (words.length === 1 && /^\d{5,}$/.test(words[0])) query = query.eq('article', words[0]); // поиск по артикулу
@@ -4669,6 +4691,7 @@ app.post('/api/parse/ext-products', requireAuth, async (req, res) => {
         name: String(it.name || '').slice(0, 300) || null,
         image: String(it.image || '').slice(0, 500) || null,
         article: /^\d{4,}$/.test(art) ? art : (am ? am[1] : null),
+        category: String(it.category || req.body.category || '').slice(0, 300) || null, // v126: путь раздела
         last_seen: now
       });
     }
