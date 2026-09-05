@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v128.1-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v129-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4678,6 +4678,12 @@ app.get('/api/parse/catalog/stale-prices', requireAuth, async (req, res) => {
 app.post('/api/parse/catalog/backfill-brand-mpn', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
   try {
     const site = String(req.query.site || 'www.leroymerlin.es');
+    // v129: бренды из справочника parse_brands (если собран), иначе — встроенный список
+    let dbBrands = [];
+    try {
+      const { data: br } = await supabaseAdmin.from('parse_brands').select('name').eq('site', site).limit(1000);
+      dbBrands = (br || []).map(b => b.name);
+    } catch (e) { /* таблицы ещё нет */ }
     let updated = 0, scanned = 0;
     for (let batch = 0; batch < 40; batch++) {
       const { data, error } = await supabaseAdmin.from('parse_products').select('id, name, brand, mpn').eq('site', site).or('brand.is.null,mpn.is.null').not('name', 'is', null).limit(500);
@@ -4685,7 +4691,9 @@ app.post('/api/parse/catalog/backfill-brand-mpn', requireAuth, requireRole('admi
       if (!data || !data.length) break;
       scanned += data.length;
       // v128.1: известные бренды Leroy + усиленные правила MPN
-      const KNOWN_BRANDS = ['BLACK+DECKER', 'BLACK & DECKER', 'DEWALT', 'MAKITA', 'BOSCH', 'EINHELL', 'STANLEY', 'DEXTER', 'WORX', 'RYOBI', 'MILWAUKEE', 'HILTI', 'METABO', 'AEG', 'FESTOOL', 'RUKO', 'PRACTYL', 'KARCHER', 'KÄRCHER', 'SKIL', 'WAGNER', 'RUBI', 'BELLOTA', 'STIHL', 'HUSQVARNA', 'GARDENA', 'WEBER', 'NORTON', 'WOLFPACK', 'COFAN', 'FACOM', 'BAHCO', 'IRWIN', 'TACKLIFE', 'OX', 'KRÜGER', 'KRUGER'];
+      const BUILTIN = ['BLACK+DECKER', 'BLACK & DECKER', 'DEWALT', 'MAKITA', 'BOSCH', 'EINHELL', 'STANLEY', 'DEXTER', 'WORX', 'RYOBI', 'MILWAUKEE', 'HILTI', 'METABO', 'AEG', 'FESTOOL', 'RUKO', 'PRACTYL', 'KARCHER', 'KÄRCHER', 'SKIL', 'WAGNER', 'RUBI', 'BELLOTA', 'STIHL', 'HUSQVARNA', 'GARDENA', 'WEBER', 'NORTON', 'WOLFPACK', 'COFAN', 'FACOM', 'BAHCO', 'IRWIN', 'TACKLIFE', 'OX', 'KRÜGER', 'KRUGER'];
+      const KNOWN_BRANDS = [...new Set([...(dbBrands.length ? dbBrands : []), ...BUILTIN])]; // справочник + встроенный
+      const CANON = {}; for (const b of KNOWN_BRANDS) CANON[b.toUpperCase()] = b;
       const GENERIC_FIRST = /^(taladro|atornillador|sierra|juego|kit|set|pack|lijadora|amoladora|martillo|llave|cortadora|pulidora|destornillador|atornilladora|con|de|la|el|para|sin|conjunto|máquina|maquina|herramienta|caja|maletín|maletin|cable|escalera|silla|mesa|armario|estantería|estanteria|grifo|lámpara|lampara|ventilador|tiras|corindón|corindon)$/i;
       for (const p of data) {
         const name = String(p.name || '');
@@ -4704,8 +4712,9 @@ app.post('/api/parse/catalog/backfill-brand-mpn', requireAuth, requireRole('admi
         }
         let brand = null;
         const head = name.slice(0, 45).toUpperCase();
-        for (const b of KNOWN_BRANDS) {
-          if (head.includes(b)) { brand = b === 'BLACK & DECKER' ? 'BLACK+DECKER' : b.charAt(0) + b.slice(1).toLowerCase().replace(/^(\w)/, (m) => m.toUpperCase()); brand = b === 'BLACK+DECKER' ? 'BLACK+DECKER' : brand; break; }
+        // длинные названия брендов проверяем первыми (BLACK+DECKER раньше BLACK)
+        for (const b of [...KNOWN_BRANDS].sort((x, y) => y.length - x.length)) {
+          if (head.includes(b.toUpperCase())) { brand = b; break; }
         }
         if (!brand) {
           const bw = name.split(/\s+/)[0] || '';
@@ -4722,6 +4731,42 @@ app.post('/api/parse/catalog/backfill-brand-mpn', requireAuth, requireRole('admi
       if (data.length < 500) break;
     }
     res.json({ ok: true, scanned, updated });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v129: приём справочника брендов из расширения (страница /productos/marcas/)
+app.post('/api/parse/ext-brands', requireAuth, async (req, res) => {
+  try {
+    const items = Array.isArray(req.body && req.body.items) ? req.body.items.slice(0, 1000) : [];
+    if (!items.length) return res.status(400).json({ error: 'Передайте items' });
+    const rows = [];
+    for (const it of items) {
+      const name = String(it.name || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+      if (!name || name.length < 2) continue;
+      let host = 'www.leroymerlin.es';
+      const url = String(it.url || '').slice(0, 500);
+      if (url) { try { host = new URL(url).hostname; } catch (e) {} }
+      rows.push({ site: host, name, url: url || null });
+    }
+    if (!rows.length) return res.status(400).json({ error: 'Нет валидных брендов' });
+    const { error } = await supabaseAdmin.from('parse_brands').upsert(rows, { onConflict: 'site,name' });
+    if (error) throw error;
+    res.json({ ok: true, upserted: rows.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v129: справочник брендов (для UI и отладки)
+app.get('/api/parse/brands', requireAuth, async (req, res) => {
+  try {
+    const site = String(req.query.site || '').trim();
+    let q = supabaseAdmin.from('parse_brands').select('name, url', { count: 'exact' }).order('name').limit(1000);
+    if (site) q = q.eq('site', site);
+    const { data, error, count } = await q;
+    if (error) {
+      if (/does not exist/i.test(error.message || '')) return res.json({ brands: [], total: 0, missing: true });
+      throw error;
+    }
+    res.json({ brands: data || [], total: count || 0 });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

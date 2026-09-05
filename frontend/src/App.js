@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v128 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v129 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2708,6 +2708,7 @@ function ParseTab({ token, isMobileView, canRun }) {
   const catParamsRef = useRef({});
   const [catBusy, setCatBusy] = useState(false);
   const [catOpen, setCatOpen] = useState(true); // v128: сворачиваемый каталог
+  const [brandsTotal, setBrandsTotal] = useState(null); // v129: размер справочника брендов
   const [priceBusy, setPriceBusy] = useState({}); // id -> bool
 
   const loadSources = async () => {
@@ -2847,6 +2848,14 @@ function ParseTab({ token, isMobileView, canRun }) {
     } catch (e) { if (!over.silent) setErr(e.message); }
     if (!over.silent) setCatBusy(false);
   };
+  // v129: размер справочника брендов
+  const loadBrandsCount = async () => {
+    try {
+      const r = await fetch(`${API_URL}/api/parse/brands?token=${token}&site=www.leroymerlin.es`);
+      const j = await r.json();
+      if (r.ok && !j.missing) setBrandsTotal(j.total || 0);
+    } catch (e) { /* не критично */ }
+  };
   // v126: дерево разделов каталога
   const loadCatTree = async () => {
     try {
@@ -2888,7 +2897,7 @@ function ParseTab({ token, isMobileView, canRun }) {
   // v126: автообновление каждые 15 с — товары, распознанные расширением прямо сейчас, появляются сверху сами
   const catAutoLoaded = useRef(false);
   useEffect(() => {
-    if (!catAutoLoaded.current) { catAutoLoaded.current = true; catSearch(); loadCatTree(); }
+    if (!catAutoLoaded.current) { catAutoLoaded.current = true; catSearch(); loadCatTree(); loadBrandsCount(); }
     const iv = setInterval(() => {
       if (document.visibilityState === 'visible') {
         const p = catParamsRef.current || {};
@@ -3018,9 +3027,10 @@ function ParseTab({ token, isMobileView, canRun }) {
               style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>🔢 Артикулы</button>
           )}
           {canRun && (
-            <button onClick={backfillBrands} title="Заполнить производителя и № производителя из названий (эвристика, быстро)"
+            <button onClick={backfillBrands} title="Заполнить производителя и № производителя из названий (справочник брендов + эвристика, быстро)"
               style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>🏷 Бренды</button>
           )}
+          {brandsTotal != null && <span style={{ fontSize: 11, color: '#8e8e93', alignSelf: 'center' }} title="Справочник брендов с leroymerlin.es/productos/marcas (обновляется кнопкой в расширении)">справочник: {brandsTotal} брендов</span>}
         </div>
         {catItems && (
           <div style={{ marginTop: 8 }}>
@@ -9083,7 +9093,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-05 · v128 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-05 · v129 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9096,7 +9106,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-05 · v128</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-05 · v129</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">

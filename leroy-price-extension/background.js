@@ -226,8 +226,61 @@ async function runSection(api, token, startUrl) {
   running = false;
 }
 
+// v1.7: извлечение брендов со страницы /productos/marcas/
+function extractBrandsOnPage() {
+  const out = []; const seen = new Set();
+  for (const a of document.querySelectorAll('a[href]')) {
+    const href = a.href.split('#')[0];
+    if (!/\/productos\/marcas\/[^/]+/i.test(href) || /\/productos\/marcas\/?$/i.test(href)) continue;
+    let name = String(a.getAttribute('aria-label') || a.textContent || (a.querySelector('img') && a.querySelector('img').alt) || '').replace(/\s+/g, ' ').trim();
+    if (!name) { const m = href.match(/\/marcas\/([^/?]+)/i); name = m ? m[1].replace(/-/g, ' ') : ''; }
+    name = name.charAt(0).toUpperCase() + name.slice(1);
+    if (!name || name.length < 2 || name.length > 60) continue;
+    const key = name.toUpperCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name, url: href });
+  }
+  return out;
+}
+
+async function runBrands(api, token) {
+  if (running) return;
+  running = true; stopped = false;
+  let tab = null;
+  try {
+    progress('⏳ Открываю страницу брендов…');
+    tab = await chrome.tabs.create({ url: 'https://www.leroymerlin.es/productos/marcas/', active: false });
+    try { await chrome.tabs.update(tab.id, { autoDiscardable: false }); } catch (e) {}
+    await new Promise((res) => {
+      const to = setTimeout(res, 18000);
+      chrome.tabs.onUpdated.addListener(function f(id, ch) {
+        if (id === tab.id && ch.status === 'complete') { clearTimeout(to); chrome.tabs.onUpdated.removeListener(f); res(); }
+      });
+    });
+    await sleep(1500);
+    // прокрутка — список брендов ленивый
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => new Promise((res) => { let y = 0; const t = setInterval(() => { y += 700; window.scrollTo(0, y); if (y >= document.body.scrollHeight) { clearInterval(t); res(); } }, 150); }) });
+    } catch (e) {}
+    await sleep(800);
+    const [inj] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractBrandsOnPage });
+    const brands = (inj && inj.result) || [];
+    if (!brands.length) { progress('❌ Бренды не найдены на странице (возможно, DataDome)'); running = false; return; }
+    const rr = await fetch(`${api}/api/parse/ext-brands?token=${encodeURIComponent(token)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: brands })
+    });
+    const jj = await rr.json().catch(() => ({}));
+    progress(rr.ok ? `✅ Справочник брендов обновлён: ${jj.upserted} шт.` : ('❌ ' + (jj.error || rr.status)));
+  } catch (e) { progress('❌ ' + e.message); }
+  if (tab) try { await chrome.tabs.remove(tab.id); } catch (e) {}
+  running = false;
+}
+
 chrome.runtime.onMessage.addListener((m) => {
   if (m.type === 'section' && !running) runSection(m.api, m.token, m.url);
+  if (m.type === 'brands' && !running) runBrands(m.api, m.token);
   if (m.type === 'start' && !running) run(m.api, m.token, m.batch, m.mode, m.staleDays, !!m.continuous);
   if (m.type === 'stop') stopped = true;
   if (m.type === 'schedule') { // v124: планировщик — часы между запусками (0 = выкл)

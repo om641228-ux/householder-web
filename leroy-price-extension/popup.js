@@ -32,6 +32,12 @@ $('secGo').onclick = async () => {
   chrome.runtime.sendMessage({ type: 'section', api, token, url });
   $('st').textContent = '⏳ Парсинг раздела запущен…';
 };
+$('brGo').onclick = async () => {
+  const { api, token } = await chrome.storage.local.get(['api', 'token']);
+  if (!api || !token) { $('st').textContent = '❌ Сначала заполните API URL и токен'; return; }
+  chrome.runtime.sendMessage({ type: 'brands', api, token });
+  $('st').textContent = '⏳ Собираю справочник брендов…';
+};
 $('schedSave').onclick = () => {
   const hours = parseInt($('sched').value, 10) || 0;
   chrome.runtime.sendMessage({ type: 'schedule', hours });

@@ -74,3 +74,13 @@ create index if not exists parse_products_category_idx on parse_products (catego
 -- v128: производитель и оригинальный номер производителя (MPN)
 alter table parse_products add column if not exists brand text;
 alter table parse_products add column if not exists mpn text;
+
+-- v129: справочник производителей (брендов) с /productos/marcas/
+create table if not exists parse_brands (
+  id uuid primary key default gen_random_uuid(),
+  site text not null,
+  name text not null,
+  url text,
+  first_seen timestamptz default now(),
+  unique (site, name)
+);
