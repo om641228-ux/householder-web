@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v124-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v124.1-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4623,11 +4623,14 @@ app.get('/api/parse/catalog/pending-prices', requireAuth, async (req, res) => {
   try {
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '30', 10) || 30));
     const site = String(req.query.site || '').trim();
-    let q = supabaseAdmin.from('parse_products').select('id, url, name, article').is('price', null).order('last_seen', { ascending: false }).limit(limit);
+    // v124.1: не берём товары с 5+ неудачных попыток; в первую очередь — ещё не пробованные
+    let q = supabaseAdmin.from('parse_products').select('id, url, name, article, price_attempts', { count: 'exact' })
+      .is('price', null).or('price_attempts.is.null,price_attempts.lt.5')
+      .order('price_attempts', { ascending: true, nullsFirst: true }).order('last_seen', { ascending: false }).limit(limit);
     if (site) q = q.eq('site', site);
-    const { data, error } = await q;
+    const { data, error, count } = await q;
     if (error) throw error;
-    res.json({ products: data || [] });
+    res.json({ products: data || [], total: count || 0 });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -4679,6 +4682,21 @@ app.post('/api/parse/ext-price', requireAuth, async (req, res) => {
         }
       } catch (e) { /* колонок ещё нет — работаем без истории */ }
     }
+    // v124.1: расширение сообщает о неудаче — считаем попытки, чтобы не мучить товар бесконечно
+    if (req.body && req.body.fail === true) {
+      const reason = String(req.body.reason || 'no-price').slice(0, 60);
+      try {
+        const { data: ex } = await supabaseAdmin.from('parse_products').select('price_attempts').eq('site', u.hostname).eq('url', url).maybeSingle();
+        await supabaseAdmin.from('parse_products').update({
+          price_attempts: ((ex && ex.price_attempts) || 0) + 1,
+          price_attempt_at: new Date().toISOString(),
+          price_fail_reason: reason
+        }).eq('site', u.hostname).eq('url', url);
+      } catch (e) { /* колонок ещё нет */ }
+      return res.json({ ok: true, failed: true, reason });
+    }
+    // успех — сбрасываем счётчик неудач
+    try { await supabaseAdmin.from('parse_products').update({ price_attempts: 0, price_fail_reason: null }).eq('site', u.hostname).eq('url', url); } catch (e) { /* колонок ещё нет */ }
     const { data, error } = await supabaseAdmin.from('parse_products').upsert(upd, { onConflict: 'site,url' }).select().single();
     if (error) throw error;
     res.json({ ok: true, product: data, changed });

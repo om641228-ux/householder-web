@@ -29,6 +29,9 @@ function extractOnPage() {
     const mp = document.querySelector('meta[property="product:price:amount"],meta[name="og:price:amount"]');
     if (mp) out.price = parseFloat(mp.content.replace(',', '.')) || null;
   }
+  // v1.2: распознаём антибот-страницу DataDome, чтобы не считать её «нет цены»
+  out.captcha = !!document.querySelector('iframe[src*="captcha"], #captcha-delivery, .captcha-delivery')
+    || /captcha|are you a robot|vérif/i.test(String(document.title || ''));
   return out;
 }
 
@@ -45,15 +48,17 @@ async function fetchQueue(api, token, lim, mode, staleDays) {
 
 async function collectOne(api, token, p) {
   let tab = null;
-  let saved = false, chg = null;
+  let saved = false, chg = null, failReason = null;
   try {
     tab = await chrome.tabs.create({ url: p.url, active: false });
+    try { await chrome.tabs.update(tab.id, { autoDiscardable: false }); } catch (e) {} // не даём Chrome выгрузить вкладку
     await new Promise((res) => {
-      const to = setTimeout(res, 12000);
+      const to = setTimeout(res, 18000);
       chrome.tabs.onUpdated.addListener(function f(id, ch) {
         if (id === tab.id && ch.status === 'complete') { clearTimeout(to); chrome.tabs.onUpdated.removeListener(f); res(); }
       });
     });
+    await sleep(1000); // даём дорендериться JSON-LD/цене
     const [inj] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractOnPage });
     const d = (inj && inj.result) || {};
     if (d.price != null) {
@@ -62,10 +67,21 @@ async function collectOne(api, token, p) {
         body: JSON.stringify({ url: p.url, price: d.price, currency: d.currency, title: d.title, image: d.image })
       });
       if (rr.ok) { saved = true; const jj = await rr.json().catch(() => ({})); chg = jj.changed || null; }
+    } else {
+      failReason = d.captcha ? 'captcha' : 'no-price';
     }
-  } catch (e) { /* страница не загрузилась — пропускаем */ }
+  } catch (e) { failReason = 'load-error'; }
+  // v1.2: сообщаем серверу о неудаче — товар получит +1 попытку и не будет крутиться вечно
+  if (failReason) {
+    try {
+      await fetch(`${api}/api/parse/ext-price?token=${encodeURIComponent(token)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: p.url, fail: true, reason: failReason })
+      });
+    } catch (e) {}
+  }
   if (tab) try { await chrome.tabs.remove(tab.id); } catch (e) {}
-  return { saved, chg };
+  return { saved, chg, failReason };
 }
 
 // v124: continuous = крутить пачки до конца очереди (режим «Собрать ВСЕ»)
@@ -83,13 +99,18 @@ async function run(api, token, batch, mode, staleDays, continuous) {
         break;
       }
       rounds++;
-      let done = 0;
+      let done = 0, captchaStreak = 0, fails = 0;
       for (const p of items) {
         if (stopped) { progress(`⏹ Остановлено: всего обработано ${totalDone}, цен ${totalOk}`); break; }
-        progress(`⏳ ${totalDone + 1}${total != null && !continuous ? '/' + total : ''} (пачка ${rounds}, ок ${totalOk}, изм ${totalChanges}): ${p.name || p.url}`);
+        progress(`⏳ ${totalDone + 1}${total != null && !continuous ? '/' + total : ''} (пачка ${rounds}, ок ${totalOk}, изм ${totalChanges}, неудач ${fails}): ${p.name || p.url}`);
         const r0 = await collectOne(api, token, p);
         if (r0.saved) totalOk++;
         if (r0.chg) { totalChanges++; progress(`${r0.chg.to > r0.chg.from ? '📈' : '📉'} ${p.name || p.url}: ${r0.chg.from} → ${r0.chg.to}`); }
+        if (r0.failReason) {
+          fails++;
+          captchaStreak = r0.failReason === 'captcha' ? captchaStreak + 1 : 0;
+          if (captchaStreak >= 3) { progress('🛑 DataDome показал капчу 3 раза подряд — сбор остановлен. Откройте leroymerlin.es в обычной вкладке, пройдите проверку и запустите снова через 10–15 минут.'); stopped = true; break; }
+        }
         done++; totalDone++;
         await sleep(2000 + Math.random() * 1500); // вежливая пауза 2–3,5 с
       }

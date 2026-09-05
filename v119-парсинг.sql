@@ -61,3 +61,8 @@ alter table parse_products add column if not exists price_estimate_at timestampt
 -- v124: история изменения цены (для 📈📉)
 alter table parse_products add column if not exists price_prev numeric;
 alter table parse_products add column if not exists price_changed_at timestamptz;
+
+-- v124.1: учёт неудачных попыток снятия цены (чтобы очередь не зацикливалась)
+alter table parse_products add column if not exists price_attempts integer default 0;
+alter table parse_products add column if not exists price_attempt_at timestamptz;
+alter table parse_products add column if not exists price_fail_reason text;
