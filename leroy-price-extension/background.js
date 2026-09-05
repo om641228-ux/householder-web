@@ -147,10 +147,23 @@ function extractLinksOnPage() {
     if (!/-\d{5,}\.html?$/i.test(href)) continue;
     if (seen.has(href)) continue;
     seen.add(href);
-    const img = a.querySelector('img');
+    // v1.5: фото и цена — из всей карточки товара, не только из ссылки
+    const card = a.closest('li, article, [class*="product" i], [class*="card" i]') || a.parentElement || a;
+    const img = card.querySelector('img') || a.querySelector('img');
+    let imgSrc = '';
+    if (img) {
+      imgSrc = String(img.currentSrc || img.src || img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || '');
+      if (!imgSrc) { const ss = String(img.getAttribute('srcset') || img.getAttribute('data-srcset') || ''); imgSrc = ss.split(',')[0].trim().split(' ')[0] || ''; }
+      if (imgSrc && !/^https?:/i.test(imgSrc)) imgSrc = new URL(imgSrc, location.href).href;
+    }
     let name = String((img && img.alt) || a.getAttribute('aria-label') || a.textContent || '').replace(/\s+/g, ' ').trim();
     if (name.length > 300) name = name.slice(0, 300);
-    out.push({ url: href, name, image: img ? String(img.currentSrc || img.src || '') : '', category });
+    // цена в карточке: берём ПОСЛЕДНЮю «xx,xx €» (первая бывает зачёркнутой старой)
+    let price = null, currency = '';
+    const txt = String(card.innerText || '');
+    const matches = [...txt.matchAll(/(\d{1,5}[.,]\d{2})\s*(€|EUR)/g)];
+    if (matches.length) { price = parseFloat(matches[matches.length - 1][1].replace(',', '.')); currency = 'EUR'; }
+    out.push({ url: href, name, image: imgSrc, category, price, currency });
   }
   return out;
 }

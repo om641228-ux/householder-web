@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v126-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v126.1-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4686,14 +4686,21 @@ app.post('/api/parse/ext-products', requireAuth, async (req, res) => {
       let host; try { host = new URL(url).hostname; } catch (e) { continue; }
       const am = url.match(/-(\d{5,})\.html?/i);
       const art = String(it.article || '').trim();
-      rows.push({
+      const row = {
         site: host, url,
         name: String(it.name || '').slice(0, 300) || null,
         image: String(it.image || '').slice(0, 500) || null,
         article: /^\d{4,}$/.test(art) ? art : (am ? am[1] : null),
         category: String(it.category || req.body.category || '').slice(0, 300) || null, // v126: путь раздела
         last_seen: now
-      });
+      };
+      // v126.1: цена прямо с витрины раздела (последняя «xx,xx €» в карточке)
+      const lp = it.price != null ? parseFloat(String(it.price).replace(',', '.')) : null;
+      if (lp != null && isFinite(lp) && lp > 0 && lp < 100000) {
+        row.price = lp; row.currency = String(it.currency || 'EUR').slice(0, 5);
+        row.price_at = now; row.price_source = 'extension-list';
+      }
+      rows.push(row);
     }
     if (!rows.length) return res.status(400).json({ error: 'Нет валидных товаров' });
     let upserted = 0;
