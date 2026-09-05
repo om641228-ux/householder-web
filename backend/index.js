@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v129-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v129.1-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4750,7 +4750,10 @@ app.post('/api/parse/ext-brands', requireAuth, async (req, res) => {
     }
     if (!rows.length) return res.status(400).json({ error: 'Нет валидных брендов' });
     const { error } = await supabaseAdmin.from('parse_brands').upsert(rows, { onConflict: 'site,name' });
-    if (error) throw error;
+    if (error) {
+      if (/does not exist|schema cache|parse_brands/i.test(error.message || '')) return res.status(500).json({ error: 'Нет таблицы parse_brands — выполните v119-парсинг.sql повторно в Supabase (SQL Editor → Run)' });
+      throw error;
+    }
     res.json({ ok: true, upserted: rows.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

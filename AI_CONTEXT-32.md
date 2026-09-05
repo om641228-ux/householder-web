@@ -2453,3 +2453,12 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Фронт: {catOpen && (<>} перенесён ПОД блок sitemap — кнопки sitemap всегда видимы, сворачивается дерево+поиск+таблица.
 - Бэкенд backfill-brand-mpn v2: выбирает строки где brand IS NULL OR mpn IS NULL (не затирает заполненное); KNOWN_BRANDS (30+ брендов, поиск в первых 45 символах, канонизация регистра); MPN: (код в скобках) → смешанный токен с цифрой+буквой ≥4 → чисто цифровой 5–9 знаков сразу после бренда (EINHELL 4259825). build v128.1-2026-09-05.
 - ВАЖНО: если колонки brand/mpn не созданы в SQL — update молча падает (updated=0). Перезапуск v119-парсинг.sql обязателен.
+
+## v129 (2026-09-05) — справочник брендов с /productos/marcas/
+- SQL (ПЕРЕЗАПУСТИТЬ): create table parse_brands (site,name unique, url).
+- Бэкенд: POST /api/parse/ext-brands (upsert по site,name); GET /api/parse/brands; backfill-brand-mpn теперь берёт список брендов из parse_brands + встроенный fallback, сортировка по длине (BLACK+DECKER раньше BLACK), каноническое написание из справочника. build v129-2026-09-05.
+- Расширение v1.7: кнопка «🏷 Обновить справочник брендов» — открывает /productos/marcas/ фоном, скроллит, extractBrandsOnPage собирает ссылки /productos/marcas/<slug>/ (имя из aria-label/text/img.alt/slug), шлёт на ext-brands.
+- Фронт: у кнопки «🏷 Бренды» подпись «справочник: N брендов».
+
+## v129.1 — понятная ошибка при отсутствии parse_brands
+- ext-brands: при missing table возвращает подсказку «выполните v119-парсинг.sql повторно в Supabase». build v129.1-2026-09-05.
