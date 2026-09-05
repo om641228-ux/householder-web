@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v129.1-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v129.2-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4702,7 +4702,7 @@ app.post('/api/parse/catalog/backfill-brand-mpn', requireAuth, requireRole('admi
         if (par) mpn = par[1];
         else {
           // смешанный код с цифрой и буквой: BEH710K-QS, DTD172ZJ, 06039B5004, BCK24D2S-QW
-          const toks = name.split(/[\s,;]+/).filter(t => /^(?=.*\d)(?=.*[A-Z])[A-Z0-9][A-Z0-9.\-]{3,}$/.test(t));
+          const toks = name.split(/[\s,;]+/).filter(t => /^(?=.*\d)(?=.*[A-Z])[A-Z0-9][A-Z0-9.\-]{4,}$/.test(t) && !/^\d+(W|V|AH|L|NM|MM)$/i.test(t));
           if (toks.length) mpn = toks[toks.length - 1];
           else {
             // чисто цифровой код производителя сразу после бренда: «EINHELL 4259825 - …»
@@ -4714,7 +4714,10 @@ app.post('/api/parse/catalog/backfill-brand-mpn', requireAuth, requireRole('admi
         const head = name.slice(0, 45).toUpperCase();
         // длинные названия брендов проверяем первыми (BLACK+DECKER раньше BLACK)
         for (const b of [...KNOWN_BRANDS].sort((x, y) => y.length - x.length)) {
-          if (head.includes(b.toUpperCase())) { brand = b; break; }
+          if (head.includes(b.toUpperCase())) {
+            brand = (b === b.toUpperCase() && b.length > 3 && !/[+&]/.test(b)) ? b.charAt(0) + b.slice(1).toLowerCase() : b;
+            break;
+          }
         }
         if (!brand) {
           const bw = name.split(/\s+/)[0] || '';
@@ -4735,6 +4738,39 @@ app.post('/api/parse/catalog/backfill-brand-mpn', requireAuth, requireRole('admi
 });
 
 // v129: приём справочника брендов из расширения (страница /productos/marcas/)
+// v129.2: сбор справочника брендов СЕРВЕРОМ из sitemap-searchdex (XML не защищён DataDome)
+app.post('/api/parse/brands/sync', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const files = [1, 2, 3].map(n => `https://www.leroymerlin.es/sitemap-searchdex${n}.xml`);
+    const seen = new Set(); const rows = [];
+    let filesOk = 0;
+    for (const f of files) {
+      const r = await axios.get(f, { headers: { 'User-Agent': PARSE_UA }, timeout: 120000, maxContentLength: 80 * 1024 * 1024, responseType: 'text', validateStatus: () => true });
+      if (r.status >= 400) continue;
+      filesOk++;
+      const xml = String(r.data || '');
+      for (const m of xml.matchAll(/<loc>(https?:\/\/[^<]*?\/productos\/marcas\/([^/<]+))\/?(?:[^<]*)<\/loc>/gi)) {
+        const slug = m[2];
+        if (!slug || slug.length > 60) continue;
+        const name = decodeURIComponent(slug).replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        const key = name.toUpperCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push({ site: 'www.leroymerlin.es', name, url: `https://www.leroymerlin.es/productos/marcas/${slug}/` });
+      }
+    }
+    if (!rows.length) return res.status(502).json({ error: 'Бренды не найдены в sitemap-searchdex (files ok: ' + filesOk + ')' });
+    for (let i = 0; i < rows.length; i += 200) {
+      const { error } = await supabaseAdmin.from('parse_brands').upsert(rows.slice(i, i + 200), { onConflict: 'site,name' });
+      if (error) {
+        if (/does not exist|schema cache|parse_brands/i.test(error.message || '')) return res.status(500).json({ error: 'Нет таблицы parse_brands — выполните v119-парсинг.sql повторно в Supabase' });
+        throw error;
+      }
+    }
+    res.json({ ok: true, total: rows.length, filesOk });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/parse/ext-brands', requireAuth, async (req, res) => {
   try {
     const items = Array.isArray(req.body && req.body.items) ? req.body.items.slice(0, 1000) : [];

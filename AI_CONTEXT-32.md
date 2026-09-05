@@ -2462,3 +2462,8 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 
 ## v129.1 — понятная ошибка при отсутствии parse_brands
 - ext-brands: при missing table возвращает подсказку «выполните v119-парсинг.sql повторно в Supabase». build v129.1-2026-09-05.
+
+## v129.2 (2026-09-05) — справочник брендов сервером из sitemap-searchdex
+- Бренды есть в НЕзащищённом sitemap-searchdex1..3.xml как /productos/marcas/<slug>/… — расширение не нужно.
+- Бэкенд: POST /api/parse/brands/sync (axios, ≤80МБ, upsert parse_brands, humanize slug); канонизация ALL-CAPS → Title Case (METABO→Metabo, BLACK+DECKER сохраняется); MPN ≥5 символов и отсев единиц (710W, 18V, 3.0AH). build v129.2-2026-09-05.
+- Фронт: кнопка «⇪ Справочник» рядом со счётчиком брендов.
