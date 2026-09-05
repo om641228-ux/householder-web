@@ -2432,3 +2432,13 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Каталог: «← Пред/След →» заменены на PageBar (0-based catPage → 1-based p).
 - Вкладка Парсинг: удалены карточка «➕ Новый источник» и список источников (модалки autoHelpFor/paste остались как dead-код); если дерево разделов пусто — подсказка, что оно заполняется парсингом разделов расширением.
 - Расширение v1.5: подписи у числовых полей (дни / размер пачки).
+
+## v127.1 (2026-09-05) — фото и цена прямо с витрины раздела
+- Расширение v1.5.1: extractLinksOnPage ищет img в карточке (closest li/article/.product/.card), читает currentSrc/src/data-src/data-lazy-src/srcset (относительные → absolute); цена = ПОСЛЕДНЯЯ «xx,xx €» в тексте карточки (первая бывает зачёркнутой).
+- Бэкенд: ext-products принимает price/currency → price + price_source='extension-list' + price_at. build v126.1-2026-09-05.
+- Фронт: бейдж 🧩 покрывает и extension-list (title различает). Версия v127.1.
+
+## v127.2 (2026-09-05) — фикс затирания картинок при парсинге раздела
+- Баг: ext-products upsert писал image:null и стирал картинки, пришедшие из sitemap. Теперь пустые name/image/article/category НЕ включаются в row (upsert их не трогает). build v126.2.
+- Расширение v1.5.2: srcOf() — currentSrc/src/data-src/data-lazy-src/data-original + srcset (последний вариант), фильтр placeholder/blank.gif, fallback picture>source; перед extractLinksOnPage страница раздела прокручивается вниз (600px/150мс) для lazy-load.
+- Восстановление уже затёртых картинок: пересинхронизировать sitemap (⬇ sitemap 1) ИЛИ перепарсить раздел новой версией.

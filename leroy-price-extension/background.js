@@ -151,11 +151,15 @@ function extractLinksOnPage() {
     const card = a.closest('li, article, [class*="product" i], [class*="card" i]') || a.parentElement || a;
     const img = card.querySelector('img') || a.querySelector('img');
     let imgSrc = '';
-    if (img) {
-      imgSrc = String(img.currentSrc || img.src || img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || '');
-      if (!imgSrc) { const ss = String(img.getAttribute('srcset') || img.getAttribute('data-srcset') || ''); imgSrc = ss.split(',')[0].trim().split(' ')[0] || ''; }
-      if (imgSrc && !/^https?:/i.test(imgSrc)) imgSrc = new URL(imgSrc, location.href).href;
-    }
+    const srcOf = (el) => {
+      if (!el) return '';
+      let v = String(el.currentSrc || el.src || el.getAttribute('data-src') || el.getAttribute('data-lazy-src') || el.getAttribute('data-original') || '');
+      if (!v || /placeholder|blank|\.gif$/i.test(v)) { const ss = String(el.getAttribute('srcset') || el.getAttribute('data-srcset') || ''); v = ss.split(',').pop().trim().split(' ')[0] || ''; }
+      return v;
+    };
+    imgSrc = srcOf(img) || srcOf(card.querySelector('picture source')) || srcOf(card.querySelector('[data-src]'));
+    if (imgSrc && !/^https?:/i.test(imgSrc)) { try { imgSrc = new URL(imgSrc, location.href).href; } catch (e) { imgSrc = ''; } }
+    if (/placeholder|blank\.gif/i.test(imgSrc)) imgSrc = '';
     let name = String((img && img.alt) || a.getAttribute('aria-label') || a.textContent || '').replace(/\s+/g, ' ').trim();
     if (name.length > 300) name = name.slice(0, 300);
     // цена в карточке: берём ПОСЛЕДНЮю «xx,xx €» (первая бывает зачёркнутой старой)
@@ -191,6 +195,11 @@ async function runSection(api, token, startUrl) {
           });
         });
         await sleep(1200);
+        // v1.5.2: прокрутка вниз — принуждаем lazy-load отдать реальные src картинок
+        try {
+          await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => new Promise((res) => { let y = 0; const t = setInterval(() => { y += 600; window.scrollTo(0, y); if (y >= document.body.scrollHeight) { clearInterval(t); res(); } }, 150); }) });
+        } catch (e) {}
+        await sleep(800);
         const [inj] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractLinksOnPage });
         links = (inj && inj.result) || [];
       } catch (e) { progress('⚠️ Стр. ' + page + ': не загрузилась — ' + e.message); }
