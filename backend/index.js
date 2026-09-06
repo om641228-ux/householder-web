@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v133.2-2026-09-07', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v134-2026-09-07', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4956,7 +4956,27 @@ app.post('/api/parse/ext-products', requireAuth, async (req, res) => {
       const artOk = /^\d{4,}$/.test(art) ? art : (am ? am[1] : null); if (artOk) row.article = artOk;
       const cg = String(it.category || req.body.category || '').slice(0, 300); if (cg) row.category = cg;
       const br = String(it.brand || '').slice(0, 120); if (br) row.brand = br; // v128
-      const mp = String(it.mpn || '').slice(0, 120); if (mp) row.mpn = mp; // v128
+      let mp = String(it.mpn || '').slice(0, 120);
+      // v134: MPN из строки товара, если расширение не прислало
+      if (!mp && row.name) {
+        const nm = row.name;
+        const pm = nm.match(/\(([A-Za-z0-9][A-Za-z0-9.\/\- ]{2,24})\)/);
+        if (pm && /\d/.test(pm[1])) mp = pm[1].trim().slice(0, 120);
+        else {
+          const toks = nm.match(/[A-Za-z0-9][A-Za-z0-9.\/\-]*/g) || [];
+          const UNIT = /^\d+([.,]\d+)?(w|kw|v|a|mah|ah|l|ml|mm|cm|m|kg|g|hz|db|rpm|bar|lm|kwh|mbar)$/i;
+          const DIM = /^\d+([.,]\d+)?([xх×*]\d+([.,]\d+)?)+$/;
+          const bl = br.toLowerCase();
+          const bi = bl ? toks.findIndex(t => t.toLowerCase() === bl || t.toLowerCase().startsWith(bl + '-')) : -1;
+          if (bi >= 0) {
+            for (let i = bi + 1; i < Math.min(toks.length - 1, bi + 5); i++) {
+              if (/^[A-Za-z]{1,8}$/.test(toks[i]) && /\d/.test(toks[i + 1]) && !UNIT.test(toks[i + 1]) && !DIM.test(toks[i + 1]) && !/^\d{5,9}$/.test(toks[i + 1])) { mp = (toks[i] + ' ' + toks[i + 1]).slice(0, 120); break; }
+            }
+          }
+          if (!mp) { for (const t of toks) { if (!UNIT.test(t) && !DIM.test(t) && /[A-Za-z]/.test(t) && /\d/.test(t) && t.length >= 3 && t.length <= 24) { mp = t; break; } } }
+        }
+      }
+      if (mp) row.mpn = mp;
       // v126.1: цена прямо с витрины раздела (последняя «xx,xx €» в карточке)
       const lp = it.price != null ? parseFloat(String(it.price).replace(',', '.')) : null;
       if (lp != null && isFinite(lp) && lp > 0 && lp < 100000) {

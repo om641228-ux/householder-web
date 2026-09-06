@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v133.1 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v134 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -3158,6 +3158,7 @@ function ParseTab({ token, isMobileView, canRun }) {
                     {catTh('name', 'Товар')}
                     {catTh('article', 'Артикул', { whiteSpace: 'nowrap' })}
                     {catTh('brand', 'Производитель', { whiteSpace: 'nowrap' })}
+                    {catTh('mpn', '№ производителя', { whiteSpace: 'nowrap' })}
                     {catTh('category', 'Раздел')}
                     {catTh('price', 'Цена', { whiteSpace: 'nowrap' })}
                     {catTh('date', 'Дата', { whiteSpace: 'nowrap' })}
@@ -3178,7 +3179,9 @@ function ParseTab({ token, isMobileView, canRun }) {
                       <td style={{ padding: '6px 8px', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{p.article || '—'}</td>
                       <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
                         {p.brand ? <b style={{ fontSize: 12 }}>{p.brand}</b> : <span style={{ color: '#c7c7cc' }}>—</span>}
-                        {p.mpn && <div style={{ fontFamily: 'monospace', fontSize: 11, color: '#8e8e93' }} title="Оригинальный номер производителя (MPN)">{p.mpn}</div>}
+                      </td>
+                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontFamily: 'monospace', fontSize: 11, color: '#444' }} title="Оригинальный номер производителя (MPN)">
+                        {p.mpn || <span style={{ color: '#c7c7cc' }}>—</span>}
                       </td>
                       <td style={{ padding: '6px 8px', color: '#8e8e93', fontSize: 11, maxWidth: 220 }} title={p.category || ''}>
                         {p.category
@@ -9206,7 +9209,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-07 · v133.1 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-07 · v134 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9219,7 +9222,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-07 · v133.1</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-07 · v134</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">

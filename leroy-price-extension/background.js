@@ -264,6 +264,8 @@ async function runSectionOnce(api, token, startUrl) {
             links = [...byUrl.values()];
           }
         } catch (e) { /* нет доступа к MAIN — работаем по DOM */ }
+        // v1.10: добиваем MPN из строки товара, если из JSON не пришёл
+        for (const l of links) { if (!l.mpn) { const d = deriveMpn(l.name, l.brand); if (d) l.mpn = d; } }
       } catch (e) { progress('⚠️ Стр. ' + page + ': не загрузилась — ' + e.message); }
       if (tab) try { await chrome.tabs.remove(tab.id); } catch (e) {}
       const fresh = links.filter(l => !known.has(l.url));
@@ -279,6 +281,32 @@ async function runSectionOnce(api, token, startUrl) {
       await sleep(2500 + Math.random() * 1500); // вежливая пауза между страницами
     }
   } catch (e) { progress('❌ ' + e.message); }
+}
+
+// v1.10: выделение оригинального номера производителя (MPN) из строки товара
+function deriveMpn(name, brand) {
+  if (!name) return '';
+  const pm = name.match(/\(([A-Za-z0-9][A-Za-z0-9.\/\- ]{2,24})\)/);
+  if (pm && /\d/.test(pm[1]) && !/^\d+([.,]\d+)?\s*(w|v|a|l|kg|mm|cm|m)$/i.test(pm[1].trim())) return pm[1].trim();
+  const toks = name.match(/[A-Za-z0-9][A-Za-z0-9.\/\-]*/g) || [];
+  const UNIT = /^\d+([.,]\d+)?(w|kw|v|a|mah|ah|l|ml|mm|cm|m|kg|g|hz|db|rpm|bar|lm|kwh|mbar|hz)$/i;
+  const DIM = /^\d+([.,]\d+)?([xх×*]\d+([.,]\d+)?)+$/;
+  const bl = brand ? String(brand).toLowerCase() : '';
+  const bi = bl ? toks.findIndex(t => t.toLowerCase() === bl || t.toLowerCase().startsWith(bl + '-')) : -1;
+  // пары «БУКВЫ + цифровой код» сразу после бренда: GBH 2-26, ML 915
+  if (bi >= 0) {
+    for (let i = bi + 1; i < Math.min(toks.length - 1, bi + 5); i++) {
+      if (/^[A-Za-z]{1,8}$/.test(toks[i]) && /\d/.test(toks[i + 1]) && !UNIT.test(toks[i + 1]) && !DIM.test(toks[i + 1]) && !/^\d{5,9}$/.test(toks[i + 1])) {
+        return (toks[i] + ' ' + toks[i + 1]).slice(0, 60);
+      }
+    }
+  }
+  // одиночный токен буквы+цифры: DHP453, GBH2-26, UP2500
+  for (const t of toks) {
+    if (UNIT.test(t) || DIM.test(t)) continue;
+    if (/[A-Za-z]/.test(t) && /\d/.test(t) && t.length >= 3 && t.length <= 24) return t;
+  }
+  return '';
 }
 
 // v1.9: извлечение товаров из JSON-состояния страницы (MAIN world) — __NEXT_DATA__/__PRELOADED_STATE__/JSON-LD.
