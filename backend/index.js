@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v134-2026-09-07', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v136-2026-09-07', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4492,7 +4492,7 @@ app.get('/api/parse/catalog', requireAuth, tabGuard('list'), async (req, res) =>
     const lim = Math.min(200, Math.max(10, parseInt(req.query.limit || '60', 10) || 60));
     const off = Math.max(0, parseInt(req.query.offset || '0', 10) || 0); // v126: постранично
     // v130: сортировка по любому столбцу (строгий whitelist)
-    const SORTABLE = { image: 'image', name: 'name', article: 'article', brand: 'brand', mpn: 'mpn', category: 'category', price: 'price', date: 'last_seen' };
+    const SORTABLE = { image: 'image', name: 'name', article: 'article', brand: 'brand', mpn: 'mpn', category: 'category', price: 'price', price_original: 'price_original', discount_pct: 'discount_pct', discount_abs: 'discount_abs', date: 'last_seen' };
     const sortCol = SORTABLE[String(req.query.sort || '')] || null;
     const sortAsc = String(req.query.dir || '') === 'asc';
     let query = supabaseAdmin.from('parse_products').select('*', { count: 'exact' });
@@ -4568,7 +4568,7 @@ app.get('/api/parse/catalog/export', requireAuth, tabGuard('list'), async (req, 
     const site = String(req.query.site || '').trim();
     const priced = String(req.query.priced || '') === '1';
     const category = String(req.query.category || '').trim();
-    const SORTABLE = { image: 'image', name: 'name', article: 'article', brand: 'brand', mpn: 'mpn', category: 'category', price: 'price', date: 'last_seen' };
+    const SORTABLE = { image: 'image', name: 'name', article: 'article', brand: 'brand', mpn: 'mpn', category: 'category', price: 'price', price_original: 'price_original', discount_pct: 'discount_pct', discount_abs: 'discount_abs', date: 'last_seen' };
     const sortCol = SORTABLE[String(req.query.sort || '')] || null;
     const sortAsc = String(req.query.dir || '') === 'asc';
     let query = supabaseAdmin.from('parse_products').select('*').limit(50000);
@@ -4586,10 +4586,10 @@ app.get('/api/parse/catalog/export', requireAuth, tabGuard('list'), async (req, 
     if (error) throw error;
     const esc = (v) => { v = v == null ? '' : String(v); return /[";\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
     const fmtD = (d) => d ? new Date(d).toLocaleString('ru-RU') : '';
-    const head = ['Фото', 'Товар', 'Артикул', 'Производитель', 'Номер производителя', 'Раздел', 'Цена', 'Валюта', 'Источник цены', 'Дата парсинга', 'URL'];
+    const head = ['Фото', 'Товар', 'Артикул', 'Производитель', 'Номер производителя', 'Раздел', 'Цена', 'Цена без скидки', 'Скидка %', 'Скидка €', 'Валюта', 'Источник цены', 'Дата парсинга', 'URL'];
     const lines = [head.join(';')];
     for (const p of (data || [])) {
-      lines.push([p.image, p.name, p.article, p.brand, p.mpn, p.category, p.price != null ? p.price : (p.price_estimate != null ? '~' + p.price_estimate : ''), p.currency || '', p.price_source || '', fmtD(p.last_seen), p.url].map(esc).join(';'));
+      lines.push([p.image, p.name, p.article, p.brand, p.mpn, p.category, p.price != null ? p.price : (p.price_estimate != null ? '~' + p.price_estimate : ''), p.price_original != null ? p.price_original : '', p.discount_pct != null ? p.discount_pct : '', p.discount_abs != null ? p.discount_abs : '', p.currency || '', p.price_source || '', fmtD(p.last_seen), p.url].map(esc).join(';'));
     }
     const csv = '\uFEFF' + lines.join('\r\n');
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -4982,6 +4982,20 @@ app.post('/api/parse/ext-products', requireAuth, async (req, res) => {
       if (lp != null && isFinite(lp) && lp > 0 && lp < 100000) {
         row.price = lp; row.currency = String(it.currency || 'EUR').slice(0, 5);
         row.price_at = now; row.price_source = 'extension-list';
+        // v136: цена без скидки + скидка
+        const numOr = (v) => { if (v == null || v === '') return null; const n = parseFloat(String(v).replace(/\s/g, '').replace(',', '.')); return (isFinite(n) && n >= 0 && n < 100000) ? n : null; };
+        let po = numOr(it.price_original), dp = numOr(it.discount_pct), da = numOr(it.discount_abs);
+        if (po != null && po > lp) {
+          if (da == null) da = Math.round((po - lp) * 100) / 100;
+          if (dp == null) dp = Math.round((po - lp) / po * 1000) / 10;
+        } else if (po == null && da != null) {
+          po = Math.round((lp + da) * 100) / 100;
+          if (dp == null) dp = Math.round(da / po * 1000) / 10;
+        } else if (po == null && dp != null && dp > 0 && dp < 100) {
+          po = Math.round(lp / (1 - dp / 100) * 100) / 100;
+          da = Math.round((po - lp) * 100) / 100;
+        }
+        row.price_original = po; row.discount_pct = dp; row.discount_abs = da;
       }
       rows.push(row);
     }
@@ -5002,6 +5016,21 @@ app.post('/api/parse/ext-price', requireAuth, async (req, res) => {
     if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'Нужен полный URL' });
     let price = req.body.price != null ? parseFloat(String(req.body.price).replace(',', '.')) : null;
     if (price != null && (!isFinite(price) || price <= 0 || price > 100000)) price = null;
+    // v136: цена без скидки + скидка (%, абсолют); недостающее досчитываем
+    const numOr = (v) => { if (v == null || v === '') return null; const n = parseFloat(String(v).replace(/\s/g, '').replace(',', '.')); return (isFinite(n) && n >= 0 && n < 100000) ? n : null; };
+    let priceOriginal = numOr(req.body.price_original);
+    let discountPct = numOr(req.body.discount_pct);
+    let discountAbs = numOr(req.body.discount_abs);
+    if (price != null && priceOriginal != null && priceOriginal > price) {
+      if (discountAbs == null) discountAbs = Math.round((priceOriginal - price) * 100) / 100;
+      if (discountPct == null) discountPct = Math.round((priceOriginal - price) / priceOriginal * 1000) / 10;
+    } else if (price != null && priceOriginal == null && discountAbs != null) {
+      priceOriginal = Math.round((price + discountAbs) * 100) / 100;
+      if (discountPct == null) discountPct = Math.round(discountAbs / priceOriginal * 1000) / 10;
+    } else if (price != null && priceOriginal == null && discountPct != null && discountPct > 0 && discountPct < 100) {
+      priceOriginal = Math.round(price / (1 - discountPct / 100) * 100) / 100;
+      discountAbs = Math.round((priceOriginal - price) * 100) / 100;
+    }
     const u = new URL(url);
     const am = url.match(/-(\d{5,})\.html?/i);
     const bodyArt = String((req.body && req.body.article) || '').trim(); // v125: Ref/sku прямо со страницы
@@ -5015,6 +5044,7 @@ app.post('/api/parse/ext-price', requireAuth, async (req, res) => {
     if (price != null) {
       upd.price = price; upd.currency = String(req.body.currency || 'EUR').slice(0, 5);
       upd.price_at = new Date().toISOString(); upd.price_source = 'extension';
+      upd.price_original = priceOriginal; upd.discount_pct = discountPct; upd.discount_abs = discountAbs; // v136: null — скидки нет, старое затираем
     }
     const brandIn = String(req.body.brand || '').slice(0, 120); if (brandIn) upd.brand = brandIn; // v128
     const mpnIn = String(req.body.mpn || '').slice(0, 120); if (mpnIn) upd.mpn = mpnIn; // v128

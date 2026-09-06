@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v135 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v136 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -3163,6 +3163,9 @@ function ParseTab({ token, isMobileView, canRun }) {
                     {catTh('mpn', '№ производителя', { whiteSpace: 'nowrap' })}
                     {catTh('category', 'Раздел')}
                     {catTh('price', 'Цена', { whiteSpace: 'nowrap' })}
+                    {catTh('price_original', 'Без скидки', { whiteSpace: 'nowrap' })}
+                    {catTh('discount_pct', '−%', { whiteSpace: 'nowrap' })}
+                    {catTh('discount_abs', '−€', { whiteSpace: 'nowrap' })}
                     {catTh('date', 'Дата', { whiteSpace: 'nowrap' })}
                     {canRun && <th style={{ padding: '6px 8px' }}></th>}
                   </tr>
@@ -3196,6 +3199,15 @@ function ParseTab({ token, isMobileView, canRun }) {
                         {(p.price_source === 'extension' || p.price_source === 'extension-list') && <span title={p.price_source === 'extension-list' ? 'Цена снята расширением с витрины раздела' : 'Цена собрана расширением со страницы товара'} style={{ fontSize: 10, color: '#16a34a', marginLeft: 4 }}>🧩</span>}
                         {p.price_estimate != null && <span title="Есть оценка AI (price_estimate), не путать с фактической ценой" style={{ fontSize: 10, color: '#94a3b8', marginLeft: 4 }}>🤖≈</span>}
                         {p.price_prev != null && p.price != null && Math.abs(p.price - p.price_prev) > 0.001 && <span title={`Было ${p.price_prev} ${p.currency || '€'}`} style={{ fontSize: 10, marginLeft: 4, color: p.price > p.price_prev ? '#e67e22' : '#1e7e34' }}>{p.price > p.price_prev ? '📈' : '📉'} было {p.price_prev}</span>}
+                      </td>
+                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontSize: 11, color: '#8e8e93', textDecoration: 'line-through' }} title="Цена без скидки (зачёркнутая на сайте)">
+                        {p.price_original != null ? p.price_original + ' ' + (p.currency || '€') : <span style={{ color: '#e5e5ea', textDecoration: 'none' }}>—</span>}
+                      </td>
+                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontSize: 11 }} title="Скидка в процентах (бейдж на сайте)">
+                        {p.discount_pct != null ? <b style={{ color: '#d70015' }}>−{p.discount_pct}%</b> : <span style={{ color: '#e5e5ea' }}>—</span>}
+                      </td>
+                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontSize: 11 }} title="Скидка в евро (например, при покупке онлайн)">
+                        {p.discount_abs != null ? <b style={{ color: '#d70015' }}>−{p.discount_abs} {p.currency || '€'}</b> : <span style={{ color: '#e5e5ea' }}>—</span>}
                       </td>
                       <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontSize: 11, color: '#8e8e93' }}
                         title={p.last_seen ? ('Дата парсинга: ' + new Date(p.last_seen).toLocaleString('ru-RU') + (p.first_seen ? ' · впервые: ' + new Date(p.first_seen).toLocaleString('ru-RU') : '') + (p.price_at ? ' · цена: ' + new Date(p.price_at).toLocaleString('ru-RU') : '')) : ''}>
@@ -9211,7 +9223,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-07 · v135 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-07 · v136 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9224,7 +9236,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-07 · v135</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-07 · v136</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">
