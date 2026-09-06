@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v132 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v133 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2976,6 +2976,64 @@ function ParseTab({ token, isMobileView, canRun }) {
       alert(`Готово: проверено ${j.scanned}, заполнено ${j.updated} (производитель/№ производителя)` + (j.cleaned ? `\n🧹 Почищено мусорных строк «Leroy Merlin»: ${j.cleaned}` : ''));
     } catch (e) { setErr(e.message); }
   };
+  // v133: загрузка заполненного AI-файла (CSV) обратно в базу — бренд + № производителя, ключ = артикул
+  const importFileRef = useRef(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const parseCsvText = (text) => {
+    const rows = [];
+    let row = [], cur = '', inQ = false;
+    const src = text.replace(/^\uFEFF/, '');
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i];
+      if (inQ) {
+        if (c === '"' && src[i + 1] === '"') { cur += '"'; i++; }
+        else if (c === '"') inQ = false;
+        else cur += c;
+      } else if (c === '"') inQ = true;
+      else if (c === ';') { row.push(cur); cur = ''; }
+      else if (c === '\n' || c === '\r') {
+        if (c === '\r' && src[i + 1] === '\n') i++;
+        row.push(cur); cur = '';
+        if (row.length > 1 || row[0] !== '') rows.push(row);
+        row = [];
+      } else cur += c;
+    }
+    if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
+    return rows;
+  };
+  const importBrandMpn = async (file) => {
+    if (!file || importBusy) return;
+    setImportBusy(true); setErr('');
+    try {
+      const text = await file.text();
+      const rows = parseCsvText(text);
+      const head = (rows[0] || []).map(h => h.trim());
+      const iA = head.indexOf('Артикул'), iB = head.indexOf('Производитель'), iM = head.indexOf('Номер производителя');
+      if (iA < 0 || iB < 0 || iM < 0) throw new Error('В файле нет колонок «Артикул», «Производитель», «Номер производителя» — нужен CSV из «⬇ Скачать», заполненный AI-скриптом');
+      const items = [];
+      for (const r of rows.slice(1)) {
+        const art = (r[iA] || '').trim();
+        if (!/^\d{4,}$/.test(art)) continue;
+        items.push({ article: art, brand: (r[iB] || '').trim(), mpn: (r[iM] || '').trim() });
+      }
+      if (!items.length) throw new Error('Не найдено строк с артикулом');
+      let matched = 0, updated = 0, notFound = 0;
+      for (let i = 0; i < items.length; i += 500) {
+        const r = await fetch(`${API_URL}/api/parse/catalog/import-brand-mpn?token=${token}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: items.slice(i, i + 500) })
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+        matched += j.matched; updated += j.updated; notFound += j.notFound;
+        setErr(`⇪ Загрузка в базу: ${Math.min(i + 500, items.length)}/${items.length}…`);
+      }
+      setErr('');
+      catSearch();
+      alert(`✅ Импорт в базу завершён:\nстрок в файле: ${items.length}\nнайдено по артикулу: ${matched}\nобновлено бренд/номер: ${updated}` + (notFound ? `\nне найдено в базе: ${notFound}` : ''));
+    } catch (e) { setErr(e.message); alert('❌ ' + e.message); }
+    setImportBusy(false);
+    if (importFileRef.current) importFileRef.current.value = '';
+  };
   const backfillArticles = async () => {
     setErr('');
     try {
@@ -3082,6 +3140,15 @@ function ParseTab({ token, isMobileView, canRun }) {
                 window.open(u, '_blank');
               }} title="Скачать спарсенный каталог файлом CSV (открывается в Excel) — учитываются текущий поиск, раздел и сортировка"
                 style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #1e7e34', background: '#e8f5e9', color: '#1e7e34', fontSize: 12, cursor: 'pointer' }}>⬇ Скачать</button>
+              {canRun && (
+                <>
+                  <input ref={importFileRef} type="file" accept=".csv,text/csv" style={{ display: 'none' }}
+                    onChange={e => importBrandMpn(e.target.files && e.target.files[0])} />
+                  <button onClick={() => importFileRef.current && importFileRef.current.click()} disabled={importBusy}
+                    title="Загрузить заполненный AI-файл (CSV) обратно в базу: бренд и № производителя подтянутся по артикулу"
+                    style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #7c3aed', background: '#f5f3ff', color: '#7c3aed', fontSize: 12, cursor: 'pointer' }}>{importBusy ? '⏳' : '⇪ В базу'}</button>
+                </>
+              )}
             </div>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
@@ -9139,7 +9206,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-06 · v132 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-06 · v133 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9152,7 +9219,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-06 · v132</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-06 · v133</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">

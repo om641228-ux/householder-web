@@ -315,7 +315,50 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v101-2026-08-28', features: ['planned-freq', 'docs', 'crm-contact-files'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v133-2026-09-06', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+
+// ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
+// Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
+// SW-кэш дважды отдавал пользователям старую сборку, обновления важнее офлайна.
+const PWA_ICON_SVG = (size) => `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">
+  <rect width="${size}" height="${size}" rx="${Math.round(size * 0.22)}" fill="#0071e3"/>
+  <text x="50%" y="54%" font-size="${Math.round(size * 0.52)}" text-anchor="middle" dominant-baseline="middle">🧾</text>
+</svg>`;
+
+app.get('/manifest.json', (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Content-Type', 'application/manifest+json');
+  res.json({
+    name: 'Фактуры — Householder',
+    short_name: 'Фактуры',
+    description: 'Учёт чеков, фактур и документов',
+    start_url: '.',
+    scope: '.',
+    display: 'standalone',
+    orientation: 'portrait',
+    background_color: '#f5f5f7',
+    theme_color: '#0071e3',
+    icons: [
+      { src: '/pwa-icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: '/pwa-icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+      { src: '/pwa-icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' }
+    ]
+  });
+});
+
+const pwaIcon = (size) => async (req, res) => {
+  try {
+    const png = await sharp(Buffer.from(PWA_ICON_SVG(size))).png().toBuffer();
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Content-Type', 'image/png');
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.send(png);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+};
+app.get('/pwa-icon-192.png', pwaIcon(192));
+app.get('/pwa-icon-512.png', pwaIcon(512));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
@@ -3790,18 +3833,44 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
 
     try {
       // Распознаём страницы и сохраняем КАЖДУЮ в Storage (page_urls)
-      const visionFn = pageProvider
+      const baseVisionFn = pageProvider
         ? (buf, mime, n, total) => (mime === 'application/pdf'
             ? extractPageTextWithGemini(buf, mime, n, total) // OpenAI-совместимые vision не читают PDF — эти страницы через Gemini
             : extractPageTextWithOpenAICompat(buf, n, total, pageModel.slice(pageProvider.length + 1), pageProvider))
         : null;
+      // v105: failover — выбранная модель упала (404/429/удалена/нет эндпоинтов) →
+      // берём следующую АКТИВНУЮ из кэша статусов и дораспознаём ею; упавшую помечаем неактивной
+      let failoverInfo = null;
+      const visionFn = baseVisionFn ? async (buf, mime, n, total) => {
+        try {
+          return await baseVisionFn(buf, mime, n, total);
+        } catch (e) {
+          if (mime === 'application/pdf') throw e; // PDF-страницы идут через Gemini — там своя цепочка
+          const msg = String(e.message || '');
+          if (!/404|not.?found|no endpoints|429|rate.?limit|quota|unavailable|suspended|decommission|deprecat/i.test(msg)) throw e;
+          // помечаем упавшую модель в кэше — список «сам» обновляется
+          const down = modelStatusCache.models.find(m => m.name === pageModel);
+          if (down) { down.active = false; down.ms = null; down.error = msg.slice(0, 140); }
+          const alt = modelStatusCache.models.find(m =>
+            m.active === true && m.name !== pageModel && /^(openrouter|github|mistral|kimi)-/.test(m.name));
+          if (!alt) throw e;
+          const altKey = ['openrouter', 'github', 'mistral', 'kimi'].find(k => alt.name.startsWith(k + '-'));
+          if (!altKey) throw e;
+          if (!failoverInfo) {
+            failoverInfo = { from: pageModel, to: alt.name };
+            console.warn(`[models] failover: ${pageModel} → ${alt.name} (${msg.slice(0, 100)})`);
+            logActivity(user, 'list', 'model-failover', `модель ${pageModel} недоступна → автопереключение на ${alt.name} (${msg.slice(0, 80)})`, req);
+          }
+          return extractPageTextWithOpenAICompat(buf, n, total, alt.name.slice(altKey.length + 1), altKey);
+        }
+      } : null;
       const receiptData = await assembleDocumentFromPages(pageBuffers, mimeTypes, currency, docType, user.id, (stage) => {
         if (stage === 'vision') job.visionDone++;
         else if (stage === 'translate') { job.stage = 'translate'; job.translateDone++; }
       }, visionFn);
       job.stage = 'finalize';
       const recognitionMethod = pageProvider
-        ? `page-by-page ${files.length}f (${pageModel}${pageBuffers.some((_, i) => mimeTypes[i] === 'application/pdf') ? ', PDF-стр. через gemini' : ''}, async)`
+        ? `page-by-page ${files.length}f (${pageModel}${failoverInfo ? ` → failover ${failoverInfo.to}` : ''}${pageBuffers.some((_, i) => mimeTypes[i] === 'application/pdf') ? ', PDF-стр. через gemini' : ''}, async)`
         : `page-by-page ${files.length}f (gemini vision, async)`;
       receiptData.docType = docType === 'auto' ? (receiptData.document_type || 'other') : docType;
       receiptData.object = (object && object !== 'other') ? object : (receiptData.object || 'other');
@@ -3815,7 +3884,7 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
       if (req.body.allow_duplicate === '1') receiptData.allowDuplicate = true;
       const saved = await saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod);
       job.status = 'done';
-      job.result = { success: true, id: saved.id, ...saved, image_url: imageUrl };
+      job.result = { success: true, id: saved.id, ...saved, image_url: imageUrl, ...(failoverInfo ? { failover: failoverInfo } : {}) };
       console.log(`Задача ${jobId}: документ ${files.length} стр. готов за ${Math.round((Date.now() - t0) / 1000)}с`);
     } catch (e) {
       console.error(`Задача ${jobId} упала:`, e);
@@ -4026,6 +4095,1931 @@ app.post('/api/translate-receipt', requireAuth, async (req, res) => {
 });
 
 // ========== LIST RECEIPTS ==========
+// ==================== v107: ГРАФ СВЯЗЕЙ ДОКУМЕНТОВ (шаг 1: сущности + детерминированные связи) ====================
+// SQL (один раз в Supabase SQL Editor) — также возвращается в ошибках API, если таблиц нет:
+const LINKS_SQL = "create table if not exists entities (id uuid primary key default gen_random_uuid(), type text not null, value text not null, label text, created_at timestamptz default now(), unique(type, value)); "
+  + "create table if not exists doc_entities (doc_id text not null, entity_id uuid not null references entities(id) on delete cascade, role text default 'mention', primary key (doc_id, entity_id, role)); "
+  + "create table if not exists doc_links (id uuid primary key default gen_random_uuid(), doc_a text not null, doc_b text not null, link_type text not null, confidence numeric default 1, evidence text, created_by text default 'rule', created_at timestamptz default now(), unique(doc_a, doc_b, link_type));";
+
+const LINK_TYPE_BY_ENTITY = {
+  company: 'same_counterparty', person: 'same_person', iban: 'same_account',
+  tax_id: 'same_tax_id', invoice_no: 'invoice_match', contract_no: 'contract_match',
+  cups: 'same_supply', meter: 'same_meter', amount_date: 'same_amount_date'
+};
+const ENTITY_TYPE_LABELS = { company: 'Компания', person: 'Персона', iban: 'Счёт IBAN', tax_id: 'Налоговый №', invoice_no: '№ фактуры', contract_no: '№ договора', poa: 'Доверенность', cups: 'CUPS', meter: 'Счётчик', amount_date: 'Сумма+дата' };
+// v109: иерархия — типы-субъекты (владельцы) и типы-атрибуты (принадлежат субъекту)
+const SUBJECT_TYPES = new Set(['company', 'person']);
+const ATTRIBUTE_TYPES = new Set(['iban', 'tax_id', 'invoice_no', 'contract_no', 'poa', 'cups', 'meter']);
+const ENT_LINK_LABELS = { belongs_to: 'принадлежит', represents: 'представляет' };
+
+// v111: изолированные области графа (scopes). «Все документы» = ZERO_SCOPE (текущее поведение).
+const ZERO_SCOPE = '00000000-0000-0000-0000-000000000000';
+let _scopeSupport = null;
+async function hasScopeSupport() {
+  if (_scopeSupport === true) return true; // v111.2: кэшируем ТОЛЬКО успех — SQL могли выполнить после старта сервера
+  try {
+    const { error } = await supabaseAdmin.from('graph_scopes').select('id').limit(1);
+    _scopeSupport = !error ? true : null;
+  } catch (_) { _scopeSupport = null; }
+  return _scopeSupport === true;
+}
+function receiptInScope(r, f) {
+  if (!f) return true;
+  if (Array.isArray(f.objects) && f.objects.length && !f.objects.includes(r.object || 'other')) return false;
+  if (Array.isArray(f.excludeObjects) && f.excludeObjects.includes(r.object || 'other')) return false; // v112: ❌ игнорировать объект
+  if (Array.isArray(f.docTypes) && f.docTypes.length && !f.docTypes.includes(r.document_type || 'other')) return false;
+  if (Array.isArray(f.excludeDocTypes) && f.excludeDocTypes.includes(r.document_type || 'other')) return false;
+  const nm = ((r.store_name || '') + ' ' + (r.store_name_ru || '')).toLowerCase();
+  if (Array.isArray(f.includeNames) && f.includeNames.length
+      && !f.includeNames.some(inc => inc && nm.includes(String(inc).toLowerCase()))) return false; // v111.3: «включить по названию»
+  for (const ex of (f.excludeNames || [])) { if (ex && nm.includes(String(ex).toLowerCase())) return false; }
+  return true;
+}
+function movementInScope(mv, f) {
+  if (!f) return true;
+  if (Array.isArray(f.ibans) && f.ibans.length && !f.ibans.includes(mv.iban || '')) return false;
+  if (Array.isArray(f.excludeIbans) && f.excludeIbans.includes(mv.iban || '')) return false;
+  const nm = ((mv.counterparty || '') + ' ' + (mv.concept || '')).toLowerCase();
+  if (Array.isArray(f.includeNames) && f.includeNames.length
+      && !f.includeNames.some(inc => inc && nm.includes(String(inc).toLowerCase()))) return false;
+  for (const ex of (f.excludeNames || [])) { if (ex && nm.includes(String(ex).toLowerCase())) return false; }
+  return true;
+}
+async function getScopeFilter(scopeId) {
+  if (!scopeId || scopeId === ZERO_SCOPE || scopeId === 'all') return null;
+  const { data } = await supabaseAdmin.from('graph_scopes').select('filter').eq('id', scopeId).maybeSingle();
+  return (data && data.filter) || {};
+}
+
+// v111: CRUD областей
+app.get('/api/links/scopes', requireAuth, tabGuard('list'), async (req, res) => {
+  try {
+    if (!(await hasScopeSupport())) return res.json({ scopes: [], supported: false });
+    const { data, error } = await supabaseAdmin.from('graph_scopes').select('*').order('created_at');
+    if (error) throw error;
+    res.json({ scopes: data || [], supported: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/links/scopes', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    if (!(await hasScopeSupport())) return res.status(500).json({ error: 'Нет таблицы graph_scopes. Выполните v111-области.sql в Supabase' });
+    const name = String((req.body && req.body.name) || '').trim().slice(0, 80);
+    if (!name) return res.status(400).json({ error: 'Название области обязательно' });
+    const f = (req.body && req.body.filter) || {};
+    const filter = {
+      objects: Array.isArray(f.objects) ? f.objects.map(String).slice(0, 50) : [],
+      docTypes: Array.isArray(f.docTypes) ? f.docTypes.map(String).slice(0, 50) : [],
+      includeNames: Array.isArray(f.includeNames) ? f.includeNames.map(String).slice(0, 50) : [],
+      excludeNames: Array.isArray(f.excludeNames) ? f.excludeNames.map(String).slice(0, 50) : [],
+      excludeObjects: Array.isArray(f.excludeObjects) ? f.excludeObjects.map(String).slice(0, 50) : [],
+      excludeDocTypes: Array.isArray(f.excludeDocTypes) ? f.excludeDocTypes.map(String).slice(0, 50) : [],
+      excludeIbans: Array.isArray(f.excludeIbans) ? f.excludeIbans.map(String).slice(0, 50) : [],
+      ibans: Array.isArray(f.ibans) ? f.ibans.map(String).slice(0, 50) : []
+    };
+    const { data, error } = await supabaseAdmin.from('graph_scopes').insert([{ name, filter }]).select().single();
+    if (error) throw error;
+    res.json({ ok: true, scope: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/links/scopes', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const id = String(req.query.id || '');
+    if (!id) return res.status(400).json({ error: 'id обязателен' });
+    await supabaseAdmin.from('doc_links').delete().eq('scope_id', id);
+    await supabaseAdmin.from('entity_links').delete().eq('scope_id', id);
+    await supabaseAdmin.from('doc_entities').delete().eq('scope_id', id);
+    const { error } = await supabaseAdmin.from('graph_scopes').delete().eq('id', id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ================== v119: ПАРСИНГ сайтов (источники, robots.txt, извлечение данных) ==================
+const PARSE_SQL = "create table if not exists parse_sources (id uuid primary key default gen_random_uuid(), name text, url text not null, site text, robots_ok boolean, robots_note text, created_at timestamptz default now()); "
+  + "create table if not exists parse_results (id uuid primary key default gen_random_uuid(), source_id uuid references parse_sources(id) on delete cascade, url text, title text, price numeric, currency text, image text, data jsonb, fetched_at timestamptz default now());";
+
+const PARSE_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+
+// v121: полный набор браузерных заголовков (шаг 1 — не выглядеть ботом)
+const PARSE_HEADERS = {
+  'User-Agent': PARSE_UA,
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'es-ES,es;q=0.9,en;q=0.7',
+  'Accept-Encoding': 'gzip, deflate, br',
+  'Cache-Control': 'no-cache',
+  'Pragma': 'no-cache',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none',
+  'Sec-Fetch-User': '?1',
+  'Upgrade-Insecure-Requests': '1'
+};
+// v121: шаг 3 — rate limiting: пауза 2–3,5 с между запросами к одному сайту
+const parseSleep = (ms) => new Promise(r => setTimeout(r, ms));
+const parseDelay = () => parseSleep(1500 + Math.random() * 2000);
+const parseLastHit = new Map(); // host -> ts последнего запроса
+async function parseThrottle(url) {
+  let host = '';
+  try { host = new URL(url).hostname; } catch (_) { /* ignore */ }
+  const last = parseLastHit.get(host) || 0;
+  const wait = 2000 + Math.random() * 1500 - (Date.now() - last);
+  if (wait > 0) await parseSleep(wait);
+  parseLastHit.set(host, Date.now());
+}
+// v121: шаг 4 — прокси (env PARSE_PROXY=http://user:pass@host:port); https-proxy-agent опционален
+let HttpsProxyAgent = null;
+try { HttpsProxyAgent = require('https-proxy-agent').HttpsProxyAgent; } catch (_) { /* пакет не установлен */ }
+function parseAxiosOpts(url) {
+  const opts = { headers: PARSE_HEADERS, timeout: 45000, maxContentLength: 12 * 1024 * 1024, validateStatus: () => true };
+  const proxy = process.env.PARSE_PROXY || '';
+  if (proxy && HttpsProxyAgent) { opts.httpsAgent = new HttpsProxyAgent(proxy); opts.proxy = false; }
+  return opts;
+}
+
+// разбор robots.txt: правила для User-agent * + sitemaps + заблокированные UA
+function parseRobots(txt) {
+  const lines = String(txt || '').split('\n');
+  const groups = []; // {agents:[], rules:[{allow:bool, path}]}
+  let cur = null;
+  const sitemaps = [];
+  const blockedAgents = [];
+  for (const raw of lines) {
+    const line = raw.replace(/#.*$/, '').trim();
+    if (!line) continue;
+    const m = line.match(/^([A-Za-z-]+):\s*(.*)$/);
+    if (!m) continue;
+    const key = m[1].toLowerCase(), val = m[2].trim();
+    if (key === 'user-agent') {
+      if (cur && cur.rules.length) groups.push(cur);
+      if (!cur || cur.rules.length || cur.agentStarted) { cur = { agents: [], rules: [], agentStarted: true }; }
+      cur.agents.push(val.toLowerCase());
+    } else if (key === 'sitemap') { sitemaps.push(val); }
+    else if (cur && (key === 'disallow' || key === 'allow')) {
+      if (val) cur.rules.push({ allow: key === 'allow', path: val });
+    }
+  }
+  if (cur && cur.rules.length) groups.push(cur);
+  // агенты с полным запретом Disallow: /
+  for (const g of groups) {
+    if (g.agents.includes('*')) continue;
+    if (g.rules.some(r => !r.allow && r.path === '/')) blockedAgents.push(...g.agents);
+  }
+  const star = groups.filter(g => g.agents.includes('*'));
+  const rules = star.flatMap(g => g.rules);
+  const isAllowed = (urlPath) => {
+    let best = null;
+    for (const r of rules) {
+      const pat = r.path.replace(/\*.*$/, '').replace(/\$$/, '');
+      if (!urlPath.startsWith(pat)) continue;
+      if (!best || r.path.length > best.path.length) best = r;
+    }
+    return best ? best.allow : true;
+  };
+  return { rules, sitemaps, blockedAgents, isAllowed, groupsCount: groups.length };
+}
+
+app.get('/api/parse/sources', requireAuth, tabGuard('list'), async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin.from('parse_sources').select('*').order('created_at', { ascending: false });
+    if (error) {
+      if (/does not exist/i.test(error.message || '')) return res.status(500).json({ error: 'Нет таблиц парсинга. Выполните в Supabase SQL Editor: ' + PARSE_SQL });
+      throw error;
+    }
+    const out = [];
+    for (const src of (data || [])) {
+      const { data: last } = await supabaseAdmin.from('parse_results').select('title, price, currency, fetched_at').eq('source_id', src.id).order('fetched_at', { ascending: false }).limit(1);
+      out.push({ ...src, last: (last && last[0]) || null });
+    }
+    res.json({ sources: out });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/parse/sources', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const url = String((req.body && req.body.url) || '').trim();
+    if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'Нужен полный URL (https://…)' });
+    const u = new URL(url);
+    const name = String((req.body && req.body.name) || '').trim().slice(0, 120) || (u.hostname + u.pathname).slice(0, 120);
+    const kind = (req.body && req.body.kind) === 'sitemap' ? 'sitemap' : 'page';
+    const filter = String((req.body && req.body.filter) || '').trim().slice(0, 200);
+    const { data, error } = await supabaseAdmin.from('parse_sources')
+      .insert({ name, url, site: u.hostname, kind, filter, robots_ok: req.body.robots_ok !== false, robots_note: String(req.body.robots_note || '').slice(0, 300) })
+      .select().single();
+    if (error && /column.*(kind|filter)/i.test(error.message || '')) {
+      // колонок ещё нет — подсказать SQL
+      return res.status(500).json({ error: 'Обновите таблицу парсинга (выполните v119-парсинг.sql заново): alter table parse_sources add column if not exists kind text default \'page\', add column if not exists filter text;' });
+    }
+    if (error) throw error;
+    if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Добавлен источник', name, req);
+    res.json({ ok: true, source: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/parse/sources', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const id = String(req.query.id || '');
+    const { error } = await supabaseAdmin.from('parse_sources').delete().eq('id', id);
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/parse/results', requireAuth, tabGuard('list'), async (req, res) => {
+  try {
+    const sid = String(req.query.source || '');
+    let q = supabaseAdmin.from('parse_results').select('*').order('fetched_at', { ascending: false }).limit(50);
+    if (sid) q = q.eq('source_id', sid);
+    const { data, error } = await q;
+    if (error) throw error;
+    res.json({ results: data || [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// проверка URL по robots.txt домена
+app.post('/api/parse/robots', requireAuth, tabGuard('list'), async (req, res) => {
+  try {
+    const url = String((req.body && req.body.url) || '').trim();
+    if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'Нужен полный URL' });
+    const u = new URL(url);
+    const r = await axios.get(u.origin + '/robots.txt', { headers: { 'User-Agent': PARSE_UA }, timeout: 20000, validateStatus: () => true });
+    if (r.status >= 400) return res.json({ ok: true, found: false, allowed: true, note: 'robots.txt не найден (HTTP ' + r.status + ') — формально запретов нет' });
+    const rb = parseRobots(r.data);
+    const allowed = rb.isAllowed(u.pathname + u.search);
+    const note = allowed
+      ? 'Разрешено правилами robots.txt' + (rb.sitemaps.length ? ` · sitemap: ${rb.sitemaps.length} шт.` : '')
+      : 'ЗАПРЕЩЕНО правилом robots.txt для этого пути';
+    res.json({ ok: true, found: true, allowed, note, sitemaps: rb.sitemaps.slice(0, 12), rulesCount: rb.rules.length, blockedAgents: rb.blockedAgents.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v119.1: извлечение данных из HTML (JSON-LD Product + og:meta fallback) — общая функция
+function extractFromHtml(html) {
+  html = String(html || '');
+  const jsonlds = [];
+  const re = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    try {
+      const j = JSON.parse(m[1].trim());
+      const flat = Array.isArray(j) ? j : [j];
+      for (const it of flat) {
+        jsonlds.push(it);
+        if (it && Array.isArray(it['@graph'])) jsonlds.push(...it['@graph']);
+      }
+    } catch (_) { /* битый JSON-LD пропускаем */ }
+  }
+  const product = jsonlds.find(j => j && /Product/i.test(String(j['@type'] || '')));
+  let title = '', price = null, currency = '', image = '', extra = {};
+  if (product) {
+    title = String(product.name || '').trim();
+    const offers = Array.isArray(product.offers) ? product.offers[0] : product.offers;
+    if (offers) {
+      price = parseFloat(String(offers.price || offers.lowPrice || '').replace(',', '.'));
+      if (!isFinite(price)) price = null;
+      currency = String(offers.priceCurrency || '').trim();
+    }
+    image = Array.isArray(product.image) ? product.image[0] : String(product.image || '');
+    extra = { brand: (product.brand && (product.brand.name || product.brand)) || '', sku: product.sku || product.mpn || '', availability: offers ? String(offers.availability || '') : '', rating: product.aggregateRating ? product.aggregateRating.ratingValue : null };
+  } else {
+    const mt = html.match(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i) || html.match(/<title[^>]*>([^<]+)<\/title>/i);
+    title = mt ? mt[1].trim() : '';
+    const mp = html.match(/<meta[^>]*(?:property|name)=["'](?:product:price:amount|og:price:amount)["'][^>]*content=["']([0-9.,]+)["']/i);
+    if (mp) { price = parseFloat(mp[1].replace(',', '.')); if (!isFinite(price)) price = null; }
+    const mc = html.match(/<meta[^>]*(?:property|name)=["'](?:product:price:currency|og:price:currency)["'][^>]*content=["']([A-Z]{3})["']/i);
+    if (mc) currency = mc[1];
+  }
+  return { title, price, currency, image, extra, jsonldCount: jsonlds.length };
+}
+
+// v119.1: разбор XML-сайтмапа (DataDome не защищает статические XML) — список товаров по фильтру
+function parseSitemapXml(xml, filter, limit) {
+  const items = [];
+  const words = String(filter || '').toLowerCase().split(/\s+/).filter(Boolean);
+  const re = /<url>([\s\S]*?)<\/url>/gi;
+  let m;
+  while ((m = re.exec(xml)) !== null && items.length < limit) {
+    const block = m[1];
+    const lm = block.match(/<loc>([^<]+)<\/loc>/i);
+    if (!lm) continue;
+    const loc = lm[1].trim();
+    const slug = decodeURIComponent(loc.split('/').filter(Boolean).pop() || '').replace(/\.html?$/i, '').replace(/-/g, ' ');
+    const hay = (loc + ' ' + slug).toLowerCase();
+    if (words.length && !words.every(w => hay.includes(w))) continue;
+    const im = block.match(/<image:loc>([^<]*)<\/image:loc>/i);
+    const nameM = block.match(/<image:title>([^<]*)<\/image:title>/i);
+    items.push({ url: loc, name: (nameM ? nameM[1].trim() : slug) || loc, image: im ? im[1].trim() : '' });
+  }
+  return items;
+}
+
+// v119.1: вставка HTML вручную — обход DataDome: страницу сохраняет браузер пользователя, парсим мы
+app.post('/api/parse/paste', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const id = String((req.body && req.body.id) || '');
+    const html = String((req.body && req.body.html) || '');
+    if (html.length < 200) return res.status(400).json({ error: 'HTML слишком короткий — скопируйте исходник страницы целиком' });
+    const { data: src, error: se } = await supabaseAdmin.from('parse_sources').select('*').eq('id', id).maybeSingle();
+    if (se) throw se;
+    if (!src) return res.status(404).json({ error: 'Источник не найден' });
+    const ex = extractFromHtml(html);
+    const { data: saved, error: ie } = await supabaseAdmin.from('parse_results')
+      .insert({ source_id: id, url: src.url, title: ex.title.slice(0, 300), price: ex.price, currency: ex.currency, image: ex.image, data: { ...ex.extra, via: 'paste' } })
+      .select().single();
+    if (ie) throw ie;
+    if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Вставка HTML', (src.name || src.url) + (ex.price != null ? ' = ' + ex.price + ' ' + ex.currency : ''), req);
+    res.json({ ok: true, result: saved });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ================== v121: каталог товаров из sitemap (шаг 2) + цены с rate limiting ==================
+// Синк ОДНОГО sitemap XML → parse_products (url, name, image). Фронт вызывает для каждого файла по очереди.
+app.post('/api/parse/catalog/sync', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const url = String((req.body && req.body.url) || '').trim();
+    if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'Нужен URL sitemap XML' });
+    const site = new URL(url).hostname;
+    await parseThrottle(url);
+    const r = await axios.get(url, { ...parseAxiosOpts(url), maxContentLength: 40 * 1024 * 1024, responseType: 'text' });
+    if (r.status >= 400) throw new Error('HTTP ' + r.status + ' при загрузке sitemap');
+    const xml = String(r.data || '');
+    if (/<sitemapindex/i.test(xml)) {
+      const subs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/gi)].map(m => m[1].trim());
+      return res.json({ ok: true, isIndex: true, subs });
+    }
+    const items = parseSitemapXml(xml, '', 100000); // без фильтра — весь файл
+    let upserted = 0, errs = 0;
+    for (let i = 0; i < items.length; i += 500) {
+      const rows = items.slice(i, i + 500).map(it => {
+        const am = it.url.match(/-(\d{5,})\.html?/i); // v122: артикул = число перед .html
+        return { site, url: it.url, name: it.name.slice(0, 300), image: it.image, article: am ? am[1] : null, last_seen: new Date().toISOString() };
+      });
+      const { error } = await supabaseAdmin.from('parse_products').upsert(rows, { onConflict: 'site,url' });
+      if (error) {
+        if (/does not exist/i.test(error.message || '')) return res.status(500).json({ error: 'Нет таблицы parse_products — выполните v119-парсинг.sql повторно' });
+        errs++;
+      } else upserted += rows.length;
+    }
+    if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Синк каталога', `${site}: ${upserted} товаров`, req);
+    res.json({ ok: true, site, total: items.length, upserted, errs });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Поиск по каталогу
+// v126: дерево разделов каталога (пути вида «Productos > Herramientas > …»)
+app.get('/api/parse/catalog/categories', requireAuth, async (req, res) => {
+  try {
+    const site = String(req.query.site || '').trim();
+    let q = supabaseAdmin.from('parse_products').select('category').not('category', 'is', null).limit(30000);
+    if (site) q = q.eq('site', site);
+    const { data, error } = await q;
+    if (error) {
+      if (/does not exist/i.test(error.message || '')) return res.json({ categories: [], missing: true });
+      throw error;
+    }
+    const counts = {};
+    for (const r of (data || [])) if (r.category) counts[r.category] = (counts[r.category] || 0) + 1;
+    const categories = Object.entries(counts).map(([path, cnt]) => ({ path, count: cnt })).sort((a, b) => a.path.localeCompare(b.path));
+    res.json({ categories });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/parse/catalog', requireAuth, tabGuard('list'), async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const site = String(req.query.site || '').trim();
+    const priced = String(req.query.priced || '') === '1'; // v123.1: только товары с ценой
+    const category = String(req.query.category || '').trim(); // v126: фильтр по пути раздела (префикс)
+    const lim = Math.min(200, Math.max(10, parseInt(req.query.limit || '60', 10) || 60));
+    const off = Math.max(0, parseInt(req.query.offset || '0', 10) || 0); // v126: постранично
+    // v130: сортировка по любому столбцу (строгий whitelist)
+    const SORTABLE = { image: 'image', name: 'name', article: 'article', brand: 'brand', mpn: 'mpn', category: 'category', price: 'price', date: 'last_seen' };
+    const sortCol = SORTABLE[String(req.query.sort || '')] || null;
+    const sortAsc = String(req.query.dir || '') === 'asc';
+    let query = supabaseAdmin.from('parse_products').select('*', { count: 'exact' });
+    if (sortCol) query = query.order(sortCol, { ascending: sortAsc, nullsFirst: false });
+    else query = query.order(priced ? 'price_at' : 'last_seen', { ascending: false, nullsFirst: false });
+    query = query.range(off, off + lim - 1);
+    if (site) query = query.eq('site', site);
+    if (priced) query = query.not('price', 'is', null);
+    if (category) query = query.ilike('category', category.replace(/[%_]/g, ' ') + '%');
+    if (q) {
+      const words = q.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6);
+      if (words.length === 1 && /^\d{5,}$/.test(words[0])) query = query.eq('article', words[0]); // поиск по артикулу
+      else for (const w of words) query = query.ilike('name', '%' + w.replace(/[%_]/g, ' ') + '%');
+    }
+    const { data, error, count } = await query;
+    if (error) {
+      if (/does not exist/i.test(error.message || '')) return res.json({ products: [], total: 0, missing: true });
+      throw error;
+    }
+    // v123.1: сколько всего товаров уже с ценой (для бейджа «💶 С ценой: N»)
+    let pricedTotal = null;
+    try {
+      let pq = supabaseAdmin.from('parse_products').select('*', { count: 'exact', head: true }).not('price', 'is', null);
+      if (site) pq = pq.eq('site', site);
+      pricedTotal = (await pq).count || 0;
+    } catch (e) { /* колонок ещё нет — не критично */ }
+    res.json({ products: data || [], total: count || 0, pricedTotal });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v133: загрузка заполненного AI-файла обратно в базу — бренд + оригинальный номер, ключ = артикул
+app.post('/api/parse/catalog/import-brand-mpn', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const site = String((req.body && req.body.site) || 'www.leroymerlin.es');
+    const items = Array.isArray(req.body && req.body.items) ? req.body.items.slice(0, 500) : [];
+    if (!items.length) return res.status(400).json({ error: 'Передайте items: [{article, brand, mpn}] (до 500)' });
+    const byArt = {};
+    for (const it of items) {
+      const art = String(it.article || '').trim();
+      if (!/^\d{4,}$/.test(art)) continue;
+      const brand = String(it.brand || '').trim().slice(0, 120);
+      const mpn = String(it.mpn || '').trim().slice(0, 120);
+      if (brand || mpn) byArt[art] = { brand, mpn };
+    }
+    const arts = Object.keys(byArt);
+    if (!arts.length) return res.json({ ok: true, matched: 0, updated: 0, notFound: 0 });
+    // находим товары по артикулам (пачки по 100 для IN-запроса)
+    let matched = 0, updated = 0;
+    for (let i = 0; i < arts.length; i += 100) {
+      const chunk = arts.slice(i, i + 100);
+      const { data: found, error } = await supabaseAdmin.from('parse_products').select('id, article, brand, mpn').eq('site', site).in('article', chunk);
+      if (error) throw error;
+      for (const p of (found || [])) {
+        matched++;
+        const src = byArt[p.article];
+        const upd = {};
+        if (src.brand && src.brand !== p.brand) upd.brand = src.brand;
+        if (src.mpn && src.mpn !== p.mpn) upd.mpn = src.mpn;
+        if (!Object.keys(upd).length) continue;
+        const { error: ue } = await supabaseAdmin.from('parse_products').update(upd).eq('id', p.id);
+        if (ue) throw ue;
+        updated++;
+      }
+    }
+    res.json({ ok: true, matched, updated, notFound: arts.length - matched });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v131: выгрузка спарсенного каталога в CSV (Excel-friendly, BOM), с теми же фильтрами/сортировкой
+app.get('/api/parse/catalog/export', requireAuth, tabGuard('list'), async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const site = String(req.query.site || '').trim();
+    const priced = String(req.query.priced || '') === '1';
+    const category = String(req.query.category || '').trim();
+    const SORTABLE = { image: 'image', name: 'name', article: 'article', brand: 'brand', mpn: 'mpn', category: 'category', price: 'price', date: 'last_seen' };
+    const sortCol = SORTABLE[String(req.query.sort || '')] || null;
+    const sortAsc = String(req.query.dir || '') === 'asc';
+    let query = supabaseAdmin.from('parse_products').select('*').limit(50000);
+    if (sortCol) query = query.order(sortCol, { ascending: sortAsc, nullsFirst: false });
+    else query = query.order(priced ? 'price_at' : 'last_seen', { ascending: false, nullsFirst: false });
+    if (site) query = query.eq('site', site);
+    if (priced) query = query.not('price', 'is', null);
+    if (category) query = query.ilike('category', category.replace(/[%_]/g, ' ') + '%');
+    if (q) {
+      const words = q.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6);
+      if (words.length === 1 && /^\d{5,}$/.test(words[0])) query = query.eq('article', words[0]);
+      else for (const w of words) query = query.ilike('name', '%' + w.replace(/[%_]/g, ' ') + '%');
+    }
+    const { data, error } = await query;
+    if (error) throw error;
+    const esc = (v) => { v = v == null ? '' : String(v); return /[";\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    const fmtD = (d) => d ? new Date(d).toLocaleString('ru-RU') : '';
+    const head = ['Фото', 'Товар', 'Артикул', 'Производитель', 'Номер производителя', 'Раздел', 'Цена', 'Валюта', 'Источник цены', 'Дата парсинга', 'URL'];
+    const lines = [head.join(';')];
+    for (const p of (data || [])) {
+      lines.push([p.image, p.name, p.article, p.brand, p.mpn, p.category, p.price != null ? p.price : (p.price_estimate != null ? '~' + p.price_estimate : ''), p.currency || '', p.price_source || '', fmtD(p.last_seen), p.url].map(esc).join(';'));
+    }
+    const csv = '\uFEFF' + lines.join('\r\n');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="catalog-' + new Date().toISOString().slice(0, 10) + '.csv"');
+    res.send(csv);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Обновление цен выбранных товаров: последовательно, с паузами 2–3,5 с (шаг 3), через прокси если задан (шаг 4)
+app.post('/api/parse/catalog/prices', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids.slice(0, 20) : [];
+    if (!ids.length) return res.status(400).json({ error: 'Передайте ids (до 20 за раз)' });
+    const { data: products, error } = await supabaseAdmin.from('parse_products').select('*').in('id', ids);
+    if (error) throw error;
+    const out = [];
+    for (const p of (products || [])) {
+      const item = { id: p.id, url: p.url };
+      try {
+        await parseThrottle(p.url);
+        const r = await axios.get(p.url, parseAxiosOpts(p.url));
+        if (r.status === 403) throw new Error(process.env.PARSE_PROXY ? 'HTTP 403 даже через прокси' : 'HTTP 403 (DataDome) — нужен резидентский прокси: задайте PARSE_PROXY на сервере');
+        if (r.status >= 400) throw new Error('HTTP ' + r.status);
+        const ex = extractFromHtml(r.data);
+        item.title = ex.title; item.price = ex.price; item.currency = ex.currency; item.ok = true;
+        await supabaseAdmin.from('parse_products').update({ price: ex.price, currency: ex.currency, price_at: new Date().toISOString(), price_source: process.env.PARSE_PROXY ? 'direct-proxy' : 'direct', name: ex.title ? ex.title.slice(0, 300) : p.name, image: ex.image || p.image }).eq('id', p.id);
+      } catch (e2) { item.ok = false; item.error = e2.message; }
+      out.push(item);
+    }
+    res.json({ ok: true, results: out, proxy: !!process.env.PARSE_PROXY });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v122: разовое дозаполнение артикулов из URL (после alter table add article)
+app.post('/api/parse/catalog/backfill-articles', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    let updated = 0;
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin.from('parse_products').select('id, url').is('article', null).range(0, 999);
+      if (error) {
+        if (/column.*article/i.test(error.message || '')) return res.status(500).json({ error: 'Выполните v119-парсинг.sql повторно (alter table parse_products add column article …)' });
+        throw error;
+      }
+      if (!data || !data.length) break;
+      for (const p of data) {
+        const am = String(p.url || '').match(/-(\d{5,})\.html?/i);
+        if (am) {
+          const { error: ue } = await supabaseAdmin.from('parse_products').update({ article: am[1] }).eq('id', p.id);
+          if (!ue) updated++;
+        } else {
+          await supabaseAdmin.from('parse_products').update({ article: '' }).eq('id', p.id);
+        }
+      }
+      if (data.length < 1000) break;
+    }
+    res.json({ ok: true, updated });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v122.1: цена через AI — 2 попытки: (1) веб-поиск, (2) усиленный запрос с допуском приблизительной цены
+async function aiFindPrice(product) {
+  const cfg = OPENAI_COMPAT_PROVIDERS.kimi;
+  if (!cfg || !cfg.apiKey) throw new Error('Kimi API key not configured');
+  const ask = async (prompt, withSearch) => {
+    const body = {
+      model: cfg.defaultModel,
+      messages: [{ role: 'user', content: prompt }],
+      max_completion_tokens: 2048, reasoning_effort: 'low'
+    };
+    if (withSearch) body.tools = [{ type: 'builtin_function', function: { name: '$web_search' } }];
+    const r = await axios.post(`${cfg.baseURL}/chat/completions`, body, {
+      headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', ...cfg.extraHeaders },
+      timeout: 120000
+    });
+    return r.data?.choices?.[0]?.message?.content || '';
+  };
+  const parsePrice = (content) => {
+    let j = {};
+    try { j = JSON.parse(content); } catch (_) { const m = String(content).match(/\{[\s\S]*\}/); if (m) { try { j = JSON.parse(m[0]); } catch (_) { /* ignore */ } } }
+    let price = parseFloat(String(j.price == null ? '' : j.price).replace(',', '.'));
+    if (!isFinite(price) || price <= 0 || price > 100000) {
+      // запасной вариант: вытащить число рядом с €/EUR из произвольного текста
+      const m2 = String(content).match(/(\d+[.,]\d{2})\s*(?:€|EUR)/i);
+      if (m2) { price = parseFloat(m2[1].replace(',', '.')); if (!isFinite(price) || price <= 0) price = null; }
+      else price = null;
+    }
+    // v123: сверка — если AI сам НЕ подтвердил, что источник про этот артикул, цена считается оценкой
+    const approx = !!j.approx || j.match === false;
+    return { price, currency: String(j.currency || 'EUR').slice(0, 5), title: String(j.title || '').slice(0, 300), source: String(j.source || 'ai-search').slice(0, 200), approx, raw: String(content).slice(0, 300) };
+  };
+  const base = `Товар: ${product.name || ''}\nАртикул: ${product.article || '—'}\nURL: ${product.url}`;
+  // попытка 1: с веб-поиском
+  try {
+    const c1 = await ask(`Найди актуальную цену товара на leroymerlin.es.\n${base}\nИспользуй веб-поиск (запросы: артикул, название, site:leroymerlin.es, Google Shopping). Верни СТРОГО JSON: {"price": число или null, "currency": "EUR", "source": "откуда цена", "title": "точное название", "match": true/false — источник точно про ЭТОТ артикул?}. Никакого текста кроме JSON.`, true);
+    const p1 = parsePrice(c1);
+    if (p1.price != null) return { ...p1, approx: false };
+    var lastRaw = p1.raw;
+  } catch (e) { var lastRaw = 'attempt1: ' + e.message; }
+  // попытка 2: усиленная — допускаем приблизительную цену из любого источника
+  const c2 = await ask(`Найди цену товара Leroy Merlin.\n${base}\nИщи по артикулу и названию: leroymerlin.es, Google Shopping, кэши, агрегаторы. Если точной цены нет — верни ПРИБЛИЗИТЕЛЬНУЮ по похожим предложениям и укажи "approx": true. Верни СТРОГО JSON: {"price": число, "currency": "EUR", "approx": true/false, "match": true/false — источник точно про этот артикул?, "source": "откуда", "title": "название"}. Только JSON.`, true);
+  const p2 = parsePrice(c2);
+  if (p2.price == null) throw new Error('AI не нашёл цену. Ответ AI: ' + (p2.raw || lastRaw || '(пусто)').slice(0, 180));
+  return p2;
+}
+
+app.post('/api/parse/catalog/ai-prices', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids.slice(0, 10) : [];
+    if (!ids.length) return res.status(400).json({ error: 'Передайте ids (до 10 за раз)' });
+    const { data: products, error } = await supabaseAdmin.from('parse_products').select('*').in('id', ids);
+    if (error) throw error;
+    const out = [];
+    for (const p of (products || [])) {
+      const item = { id: p.id, url: p.url };
+      try {
+        const r = await aiFindPrice(p);
+        if (r.price == null) throw new Error('AI не нашёл цену');
+        item.ok = true; item.price = r.price; item.currency = r.currency; item.title = r.title || p.name; item.source = r.source; item.approx = !!r.approx;
+        // v123: оценка НЕ пишется в фактическую цену — только в price_estimate
+        if (r.approx) {
+          await supabaseAdmin.from('parse_products').update({ price_estimate: r.price, price_estimate_at: new Date().toISOString(), name: (r.title || p.name).slice(0, 300) }).eq('id', p.id);
+        } else {
+          await supabaseAdmin.from('parse_products').update({ price: r.price, currency: r.currency, price_at: new Date().toISOString(), price_source: 'ai-search', price_estimate: r.price, price_estimate_at: new Date().toISOString(), name: (r.title || p.name).slice(0, 300) }).eq('id', p.id);
+        }
+      } catch (e2) { item.ok = false; item.error = e2.message; }
+      out.push(item);
+    }
+    if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'AI-цены', `найдено ${out.filter(x => x.ok).length}/${out.length}`, req);
+    res.json({ ok: true, results: out });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v123 (Уровень 3): список товаров без фактической цены — для расширения браузера
+app.get('/api/parse/catalog/pending-prices', requireAuth, async (req, res) => {
+  try {
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '30', 10) || 30));
+    const site = String(req.query.site || '').trim();
+    // v124.1: не берём товары с 5+ неудачных попыток; в первую очередь — ещё не пробованные
+    let q = supabaseAdmin.from('parse_products').select('id, url, name, article, price_attempts', { count: 'exact' })
+      .is('price', null).or('price_attempts.is.null,price_attempts.lt.5')
+      .order('price_attempts', { ascending: true, nullsFirst: true }).order('last_seen', { ascending: false }).limit(limit);
+    if (site) q = q.eq('site', site);
+    const { data, error, count } = await q;
+    if (error) throw error;
+    res.json({ products: data || [], total: count || 0 });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v123 (Уровень 3): приём цены из расширения браузера (JSON-LD уже извлечён на странице)
+// v124: товары с устаревшей ценой (для переснятия расширением, режим «обновление»)
+app.get('/api/parse/catalog/stale-prices', requireAuth, async (req, res) => {
+  try {
+    const days = Math.min(90, Math.max(1, parseInt(req.query.days || '7', 10) || 7));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '30', 10) || 30));
+    const site = String(req.query.site || '').trim();
+    const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+    let q = supabaseAdmin.from('parse_products').select('id, url, name, article, price', { count: 'exact' })
+      .not('price', 'is', null).lt('price_at', cutoff).order('price_at', { ascending: true }).limit(limit);
+    if (site) q = q.eq('site', site);
+    const { data, error, count } = await q;
+    if (error) throw error;
+    res.json({ products: data || [], total: count || 0, days });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v125: массовый приём товаров из раздела сайта (расширение собирает карточки со списков)
+// v128: заполнить brand/mpn из названия (код в скобках или токен вида BEH710K-QS → MPN; первое слово КАПСОМ → бренд)
+app.post('/api/parse/catalog/backfill-brand-mpn', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const site = String(req.query.site || 'www.leroymerlin.es');
+    // v129: бренды из справочника parse_brands (если собран), иначе — встроенный список
+    let dbBrands = [];
+    try {
+      const { data: br } = await supabaseAdmin.from('parse_brands').select('name').eq('site', site).limit(1000);
+      dbBrands = (br || []).map(b => b.name);
+    } catch (e) { /* таблицы ещё нет */ }
+    // v130: чистка мусорных строк «Leroy Merlin» — имя из slug URL, логотип/бренд сбрасываем
+    let cleaned = 0;
+    try {
+      const { data: junk } = await supabaseAdmin.from('parse_products').select('id, url, image').eq('site', site).ilike('name', 'Leroy Merlin').limit(5000);
+      for (const j of (junk || [])) {
+        const sm = String(j.url || '').match(/\/([^/]+)-\d{5,}\.html?/i);
+        const fixedName = sm ? sm[1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).slice(0, 300) : null;
+        const upd = { brand: null, mpn: null };
+        if (fixedName) upd.name = fixedName;
+        if (j.image && /logo/i.test(j.image)) upd.image = null;
+        await supabaseAdmin.from('parse_products').update(upd).eq('id', j.id);
+        cleaned++;
+      }
+    } catch (e) { /* не критично */ }
+    let updated = 0, scanned = 0;
+    for (let batch = 0; batch < 40; batch++) {
+      const { data, error } = await supabaseAdmin.from('parse_products').select('id, name, brand, mpn').eq('site', site).or('brand.is.null,mpn.is.null').not('name', 'is', null).limit(500);
+      if (error) throw error;
+      if (!data || !data.length) break;
+      scanned += data.length;
+      // v128.1: известные бренды Leroy + усиленные правила MPN
+      const BUILTIN = ['BLACK+DECKER', 'BLACK & DECKER', 'DEWALT', 'MAKITA', 'BOSCH', 'EINHELL', 'STANLEY', 'DEXTER', 'WORX', 'RYOBI', 'MILWAUKEE', 'HILTI', 'METABO', 'AEG', 'FESTOOL', 'RUKO', 'PRACTYL', 'KARCHER', 'KÄRCHER', 'SKIL', 'WAGNER', 'RUBI', 'BELLOTA', 'STIHL', 'HUSQVARNA', 'GARDENA', 'WEBER', 'NORTON', 'WOLFPACK', 'COFAN', 'FACOM', 'BAHCO', 'IRWIN', 'TACKLIFE', 'OX', 'KRÜGER', 'KRUGER'];
+      const KNOWN_BRANDS = [...new Set([...(dbBrands.length ? dbBrands : []), ...BUILTIN])]; // справочник + встроенный
+      const CANON = {}; for (const b of KNOWN_BRANDS) CANON[b.toUpperCase()] = b;
+      const GENERIC_FIRST = /^(taladro|atornillador|sierra|juego|kit|set|pack|lijadora|amoladora|martillo|llave|cortadora|pulidora|destornillador|atornilladora|con|de|la|el|para|sin|conjunto|máquina|maquina|herramienta|caja|maletín|maletin|cable|escalera|silla|mesa|armario|estantería|estanteria|grifo|lámpara|lampara|ventilador|tiras|corindón|corindon)$/i;
+      for (const p of data) {
+        const name = String(p.name || '');
+        let mpn = null;
+        const par = name.match(/\(([A-Z0-9][A-Z0-9.\-]{4,})\)/);
+        if (par) mpn = par[1];
+        else {
+          // смешанный код с цифрой и буквой: BEH710K-QS, DTD172ZJ, 06039B5004, BCK24D2S-QW
+          const toks = name.split(/[\s,;]+/).filter(t => /^(?=.*\d)(?=.*[A-Z])[A-Z0-9][A-Z0-9.\-]{4,}$/.test(t) && !/^\d+(W|V|AH|L|NM|MM)$/i.test(t));
+          if (toks.length) mpn = toks[toks.length - 1];
+          else {
+            // чисто цифровой код производителя сразу после бренда: «EINHELL 4259825 - …»
+            const dm = name.match(/^[A-ZÁÉÍÓÚÜÑ&+\s]+?\s(\d{5,9})[\s\-–—]/);
+            if (dm) mpn = dm[1];
+          }
+        }
+        let brand = null;
+        const head = name.slice(0, 45).toUpperCase();
+        // длинные названия брендов проверяем первыми (BLACK+DECKER раньше BLACK)
+        for (const b of [...KNOWN_BRANDS].sort((x, y) => y.length - x.length)) {
+          if (head.includes(b.toUpperCase())) {
+            brand = (b === b.toUpperCase() && b.length > 3 && !/[+&]/.test(b)) ? b.charAt(0) + b.slice(1).toLowerCase() : b;
+            break;
+          }
+        }
+        if (!brand) {
+          const bw = name.split(/\s+/)[0] || '';
+          if (/^[A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑa-záéíóúüñ+]{1,20}$/.test(bw) && !GENERIC_FIRST.test(bw)) brand = bw.replace(/\+/g, ' ');
+        }
+        const upd = {};
+        if (mpn && !p.mpn) upd.mpn = mpn;
+        if (brand && !p.brand) upd.brand = brand;
+        if (Object.keys(upd).length) {
+          const { error: ue } = await supabaseAdmin.from('parse_products').update(upd).eq('id', p.id);
+          if (!ue) updated++;
+        }
+      }
+      if (data.length < 500) break;
+    }
+    res.json({ ok: true, scanned, updated, cleaned });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v129: приём справочника брендов из расширения (страница /productos/marcas/)
+// v129.2: сбор справочника брендов СЕРВЕРОМ из sitemap-searchdex (XML не защищён DataDome)
+app.post('/api/parse/brands/sync', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const files = [1, 2, 3].map(n => `https://www.leroymerlin.es/sitemap-searchdex${n}.xml`);
+    const seen = new Set(); const rows = [];
+    let filesOk = 0;
+    for (const f of files) {
+      const r = await axios.get(f, { headers: { 'User-Agent': PARSE_UA }, timeout: 120000, maxContentLength: 80 * 1024 * 1024, responseType: 'text', validateStatus: () => true });
+      if (r.status >= 400) continue;
+      filesOk++;
+      const xml = String(r.data || '');
+      for (const m of xml.matchAll(/<loc>(https?:\/\/[^<]*?\/productos\/marcas\/([^/<]+))\/?(?:[^<]*)<\/loc>/gi)) {
+        const slug = m[2];
+        if (!slug || slug.length > 60) continue;
+        const name = decodeURIComponent(slug).replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        const key = name.toUpperCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push({ site: 'www.leroymerlin.es', name, url: `https://www.leroymerlin.es/productos/marcas/${slug}/` });
+      }
+    }
+    if (!rows.length) return res.status(502).json({ error: 'Бренды не найдены в sitemap-searchdex (files ok: ' + filesOk + ')' });
+    for (let i = 0; i < rows.length; i += 200) {
+      const { error } = await supabaseAdmin.from('parse_brands').upsert(rows.slice(i, i + 200), { onConflict: 'site,name' });
+      if (error) {
+        if (/does not exist|schema cache|parse_brands/i.test(error.message || '')) return res.status(500).json({ error: 'Нет таблицы parse_brands — выполните v119-парсинг.sql повторно в Supabase' });
+        throw error;
+      }
+    }
+    res.json({ ok: true, total: rows.length, filesOk });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/parse/ext-brands', requireAuth, async (req, res) => {
+  try {
+    const items = Array.isArray(req.body && req.body.items) ? req.body.items.slice(0, 1000) : [];
+    if (!items.length) return res.status(400).json({ error: 'Передайте items' });
+    const rows = [];
+    for (const it of items) {
+      const name = String(it.name || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+      if (!name || name.length < 2) continue;
+      let host = 'www.leroymerlin.es';
+      const url = String(it.url || '').slice(0, 500);
+      if (url) { try { host = new URL(url).hostname; } catch (e) {} }
+      rows.push({ site: host, name, url: url || null });
+    }
+    if (!rows.length) return res.status(400).json({ error: 'Нет валидных брендов' });
+    const { error } = await supabaseAdmin.from('parse_brands').upsert(rows, { onConflict: 'site,name' });
+    if (error) {
+      if (/does not exist|schema cache|parse_brands/i.test(error.message || '')) return res.status(500).json({ error: 'Нет таблицы parse_brands — выполните v119-парсинг.sql повторно в Supabase (SQL Editor → Run)' });
+      throw error;
+    }
+    res.json({ ok: true, upserted: rows.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v129: справочник брендов (для UI и отладки)
+app.get('/api/parse/brands', requireAuth, async (req, res) => {
+  try {
+    const site = String(req.query.site || '').trim();
+    let q = supabaseAdmin.from('parse_brands').select('name, url', { count: 'exact' }).order('name').limit(1000);
+    if (site) q = q.eq('site', site);
+    const { data, error, count } = await q;
+    if (error) {
+      if (/does not exist/i.test(error.message || '')) return res.json({ brands: [], total: 0, missing: true });
+      throw error;
+    }
+    res.json({ brands: data || [], total: count || 0 });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v132: выгрузка справочника брендов в CSV (для локальной обработки каталога)
+app.get('/api/parse/brands/export', requireAuth, async (req, res) => {
+  try {
+    const site = String(req.query.site || 'www.leroymerlin.es');
+    const { data, error } = await supabaseAdmin.from('parse_brands').select('name, url').eq('site', site).order('name').limit(5000);
+    if (error) {
+      if (/does not exist|find the table/i.test(error.message || '')) return res.status(400).json({ error: 'Нет таблицы parse_brands — выполните v119-парсинг.sql в Supabase' });
+      throw error;
+    }
+    const esc = (v) => { v = v == null ? '' : String(v); return /[";\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    const lines = ['Бренд;URL'];
+    for (const b of (data || [])) lines.push([b.name, b.url].map(esc).join(';'));
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="brands-' + new Date().toISOString().slice(0, 10) + '.csv"');
+    res.send('\uFEFF' + lines.join('\r\n'));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/parse/ext-products', requireAuth, async (req, res) => {
+  try {
+    const items = Array.isArray(req.body && req.body.items) ? req.body.items.slice(0, 300) : [];
+    if (!items.length) return res.status(400).json({ error: 'Передайте items (до 300)' });
+    const now = new Date().toISOString();
+    const rows = [];
+    for (const it of items) {
+      const url = String(it.url || '').trim();
+      if (!/^https?:\/\//i.test(url)) continue;
+      let host; try { host = new URL(url).hostname; } catch (e) { continue; }
+      const am = url.match(/-(\d{5,})\.html?/i);
+      const art = String(it.article || '').trim();
+      // v127.2: пустые поля НЕ включаем — иначе upsert затирает картинки/названия, пришедшие из sitemap
+      const row = { site: host, url, last_seen: now };
+      let nm = String(it.name || '').slice(0, 300);
+      // v130: имя сайта вместо товара — восстанавливаем из slug URL
+      if (!nm || /^leroy\s*merlin$/i.test(nm.trim())) {
+        const sm = url.match(/\/([^/]+)-\d{5,}\.html?/i);
+        nm = sm ? sm[1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).slice(0, 300) : '';
+      }
+      if (nm && !/^leroy\s*merlin$/i.test(nm.trim())) row.name = nm;
+      let im = String(it.image || '').slice(0, 500);
+      if (im && /logo/i.test(im)) im = ''; // v130.1: режем ТОЛЬКО логотипы (CDN товаров — leroymerlin, слово «leroy» резать нельзя)
+      if (im) row.image = im;
+      const artOk = /^\d{4,}$/.test(art) ? art : (am ? am[1] : null); if (artOk) row.article = artOk;
+      const cg = String(it.category || req.body.category || '').slice(0, 300); if (cg) row.category = cg;
+      const br = String(it.brand || '').slice(0, 120); if (br) row.brand = br; // v128
+      const mp = String(it.mpn || '').slice(0, 120); if (mp) row.mpn = mp; // v128
+      // v126.1: цена прямо с витрины раздела (последняя «xx,xx €» в карточке)
+      const lp = it.price != null ? parseFloat(String(it.price).replace(',', '.')) : null;
+      if (lp != null && isFinite(lp) && lp > 0 && lp < 100000) {
+        row.price = lp; row.currency = String(it.currency || 'EUR').slice(0, 5);
+        row.price_at = now; row.price_source = 'extension-list';
+      }
+      rows.push(row);
+    }
+    if (!rows.length) return res.status(400).json({ error: 'Нет валидных товаров' });
+    let upserted = 0;
+    for (let i = 0; i < rows.length; i += 200) {
+      const { error } = await supabaseAdmin.from('parse_products').upsert(rows.slice(i, i + 200), { onConflict: 'site,url' });
+      if (error) throw error;
+      upserted += Math.min(200, rows.length - i);
+    }
+    res.json({ ok: true, upserted });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/parse/ext-price', requireAuth, async (req, res) => {
+  try {
+    const url = String((req.body && req.body.url) || '').trim();
+    if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'Нужен полный URL' });
+    let price = req.body.price != null ? parseFloat(String(req.body.price).replace(',', '.')) : null;
+    if (price != null && (!isFinite(price) || price <= 0 || price > 100000)) price = null;
+    const u = new URL(url);
+    const am = url.match(/-(\d{5,})\.html?/i);
+    const bodyArt = String((req.body && req.body.article) || '').trim(); // v125: Ref/sku прямо со страницы
+    const upd = {
+      site: u.hostname, url,
+      name: String(req.body.title || '').slice(0, 300) || undefined,
+      image: String(req.body.image || '').slice(0, 500) || undefined,
+      article: (/^\d{4,}$/.test(bodyArt) ? bodyArt : (am ? am[1] : undefined)),
+      last_seen: new Date().toISOString()
+    };
+    if (price != null) {
+      upd.price = price; upd.currency = String(req.body.currency || 'EUR').slice(0, 5);
+      upd.price_at = new Date().toISOString(); upd.price_source = 'extension';
+    }
+    const brandIn = String(req.body.brand || '').slice(0, 120); if (brandIn) upd.brand = brandIn; // v128
+    const mpnIn = String(req.body.mpn || '').slice(0, 120); if (mpnIn) upd.mpn = mpnIn; // v128
+    Object.keys(upd).forEach(k => upd[k] === undefined && delete upd[k]);
+    // v124: отслеживание изменения цены — запоминаем предыдущую
+    let changed = null;
+    if (price != null) {
+      try {
+        const { data: old0 } = await supabaseAdmin.from('parse_products').select('price').eq('site', u.hostname).eq('url', url).maybeSingle();
+        if (old0 && old0.price != null && Math.abs(Number(old0.price) - price) > 0.001) {
+          upd.price_prev = Number(old0.price); upd.price_changed_at = new Date().toISOString();
+          changed = { from: Number(old0.price), to: price };
+        }
+      } catch (e) { /* колонок ещё нет — работаем без истории */ }
+    }
+    // v124.1: расширение сообщает о неудаче — считаем попытки, чтобы не мучить товар бесконечно
+    if (req.body && req.body.fail === true) {
+      const reason = String(req.body.reason || 'no-price').slice(0, 60);
+      try {
+        const { data: ex } = await supabaseAdmin.from('parse_products').select('price_attempts').eq('site', u.hostname).eq('url', url).maybeSingle();
+        await supabaseAdmin.from('parse_products').update({
+          price_attempts: ((ex && ex.price_attempts) || 0) + 1,
+          price_attempt_at: new Date().toISOString(),
+          price_fail_reason: reason
+        }).eq('site', u.hostname).eq('url', url);
+      } catch (e) { /* колонок ещё нет */ }
+      return res.json({ ok: true, failed: true, reason });
+    }
+    // успех — сбрасываем счётчик неудач
+    try { await supabaseAdmin.from('parse_products').update({ price_attempts: 0, price_fail_reason: null }).eq('site', u.hostname).eq('url', url); } catch (e) { /* колонок ещё нет */ }
+    const { data, error } = await supabaseAdmin.from('parse_products').upsert(upd, { onConflict: 'site,url' }).select().single();
+    if (error) throw error;
+    res.json({ ok: true, product: data, changed });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v120: общая логика запуска парсера (используется кнопкой, автозапуском и paste-url)
+async function runParseSource(src) {
+  const kind = src.kind === 'sitemap' ? 'sitemap' : 'page';
+  if (kind === 'sitemap') {
+    const r = await axios.get(src.url, {
+      headers: { 'User-Agent': PARSE_UA, 'Accept': 'application/xml,text/xml,text/html;q=0.8' },
+      timeout: 60000, maxContentLength: 30 * 1024 * 1024, responseType: 'text', validateStatus: () => true
+    });
+    if (r.status >= 400) throw new Error('HTTP ' + r.status + ' при загрузке sitemap');
+    const xml = String(r.data || '');
+    if (/<sitemapindex/i.test(xml)) {
+      const subs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/gi)].map(m => m[1].trim()).slice(0, 50);
+      const { data: saved, error: ie } = await supabaseAdmin.from('parse_results')
+        .insert({ source_id: src.id, url: src.url, title: 'Sitemap-индекс: ' + subs.length + ' файлов', price: null, currency: '', image: '', data: { kind: 'sitemap-index', items: subs.map(u => ({ url: u, name: u.split('/').pop(), image: '' })) } })
+        .select().single();
+      if (ie) throw ie;
+      return saved;
+    }
+    const items = parseSitemapXml(xml, src.filter || '', 100);
+    const totalUrls = (xml.match(/<url>/gi) || []).length;
+    const { data: saved, error: ie } = await supabaseAdmin.from('parse_results')
+      .insert({ source_id: src.id, url: src.url, title: `Найдено ${items.length} из ${totalUrls} URL`, price: null, currency: '', image: '', data: { kind: 'sitemap', filter: src.filter || '', totalUrls, items } })
+      .select().single();
+    if (ie) throw ie;
+    return saved;
+  }
+  const r = await axios.get(src.url, {
+    headers: { 'User-Agent': PARSE_UA, 'Accept': 'text/html,application/xhtml+xml', 'Accept-Language': 'es-ES,es;q=0.9,ru;q=0.8' },
+    timeout: 30000, maxContentLength: 8 * 1024 * 1024, validateStatus: () => true
+  });
+  if (r.status === 403) throw new Error('HTTP 403 — сайт защищён антиботом (DataDome). Обход: кнопка «📋 HTML», букмарклет или Shortcut из «🔗 Авто».');
+  if (r.status >= 400) throw new Error('HTTP ' + r.status + ' при загрузке страницы');
+  const ex = extractFromHtml(r.data);
+  const { data: saved, error: ie } = await supabaseAdmin.from('parse_results')
+    .insert({ source_id: src.id, url: src.url, title: ex.title.slice(0, 300), price: ex.price, currency: ex.currency, image: ex.image, data: ex.extra })
+    .select().single();
+  if (ie) throw ie;
+  return saved;
+}
+
+// v120(C): сравнение цены с предыдущим снятием + отметка last_run_at/last_price/last_change
+async function recordParseOutcome(src, saved, via) {
+  try {
+    const upd = { last_run_at: new Date().toISOString() };
+    if (saved && saved.price != null) {
+      const { data: prevRows } = await supabaseAdmin.from('parse_results')
+        .select('price, currency').eq('source_id', src.id).not('price', 'is', null)
+        .order('fetched_at', { ascending: false }).range(1, 1); // предыдущая цена (0 — только что сохранённая)
+      const prev = prevRows && prevRows[0];
+      upd.last_price = saved.price;
+      if (prev && prev.price != null && Number(prev.price) !== Number(saved.price)) {
+        const diff = Number(saved.price) - Number(prev.price);
+        const pct = prev.price ? Math.round(diff / Number(prev.price) * 100) : 0;
+        upd.last_change = `${Number(prev.price)} → ${Number(saved.price)} ${saved.currency || prev.currency || '€'} (${diff > 0 ? '+' : ''}${pct}%) · ${via || ''}`;
+      } else if (!prev) {
+        upd.last_change = `первая цена: ${Number(saved.price)} ${saved.currency || '€'}`;
+      }
+    }
+    await supabaseAdmin.from('parse_sources').update(upd).eq('id', src.id);
+  } catch (_) { /* колонки появятся после alter — молча пропускаем */ }
+}
+
+// запуск парсинга одного источника (кнопка)
+app.post('/api/parse/run', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const id = String((req.body && req.body.id) || '');
+    const { data: src, error: se } = await supabaseAdmin.from('parse_sources').select('*').eq('id', id).maybeSingle();
+    if (se) throw se;
+    if (!src) return res.status(404).json({ error: 'Источник не найден' });
+    const saved = await runParseSource(src);
+    await recordParseOutcome(src, saved, 'вручную');
+    if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Запуск парсера', (src.name || src.url) + (saved && saved.price != null ? ' = ' + saved.price + ' ' + saved.currency : ''), req);
+    res.json({ ok: true, result: saved });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v120(B): «умная» вставка по URL — для букмарклета и iOS Shortcut: источник находится/создаётся по URL страницы
+app.post('/api/parse/paste-url', requireAuth, async (req, res) => {
+  try {
+    const url = String((req.body && req.body.url) || '').trim();
+    const html = String((req.body && req.body.html) || '');
+    if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'Нужен полный URL' });
+    if (html.length < 200) return res.status(400).json({ error: 'HTML слишком короткий' });
+    const u = new URL(url);
+    let { data: src } = await supabaseAdmin.from('parse_sources').select('*').eq('url', url).maybeSingle();
+    if (!src) {
+      const nm = decodeURIComponent(u.pathname.split('/').filter(Boolean).pop() || u.hostname).replace(/\.html?$/i, '').replace(/-/g, ' ').slice(0, 120);
+      const { data: created, error: ce } = await supabaseAdmin.from('parse_sources')
+        .insert({ name: nm, url, site: u.hostname, kind: 'page' }).select().single();
+      if (ce) throw ce;
+      src = created;
+    }
+    const ex = extractFromHtml(html);
+    const { data: saved, error: ie } = await supabaseAdmin.from('parse_results')
+      .insert({ source_id: src.id, url: src.url, title: ex.title.slice(0, 300), price: ex.price, currency: ex.currency, image: ex.image, data: { ...ex.extra, via: 'auto-send' } })
+      .select().single();
+    if (ie) throw ie;
+    await recordParseOutcome(src, saved, 'автоотправка');
+    if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Автоотправка HTML', (src.name || url) + (ex.price != null ? ' = ' + ex.price + ' ' + ex.currency : ''), req);
+    res.json({ ok: true, result: saved, source: { id: src.id, name: src.name }, created: !src.created_at || undefined });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v120(A): настройка автозапуска источника (каждые N часов; 0 = выкл)
+app.patch('/api/parse/sources', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const id = String((req.body && req.body.id) || '');
+    const hours = Math.max(0, Math.min(168, parseInt((req.body && req.body.auto_every_hours) || '0', 10) || 0));
+    const { data, error } = await supabaseAdmin.from('parse_sources').update({ auto_every_hours: hours }).eq('id', id).select().single();
+    if (error) {
+      if (/column.*auto_every_hours/i.test(error.message || '')) return res.status(500).json({ error: 'Обновите таблицу парсинга — выполните v119-парсинг.sql повторно (alter table … auto_every_hours …)' });
+      throw error;
+    }
+    res.json({ ok: true, source: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v120(A): планировщик — каждые 30 минут обходит источники с автозапуском
+async function parseAutoTick() {
+  try {
+    const { data, error } = await supabaseAdmin.from('parse_sources').select('*').gt('auto_every_hours', 0);
+    if (error) { if (!/does not exist|column/i.test(error.message || '')) console.error('[parse-auto]', error.message); return; }
+    const now = Date.now();
+    for (const src of (data || [])) {
+      const due = !src.last_run_at || (now - new Date(src.last_run_at).getTime()) >= src.auto_every_hours * 3600 * 1000;
+      if (!due) continue;
+      try {
+        const saved = await runParseSource(src);
+        await recordParseOutcome(src, saved, 'авто');
+        console.log('[parse-auto]', src.name || src.url, '→', saved && saved.price != null ? saved.price + ' ' + saved.currency : (saved && saved.title) || 'ok');
+      } catch (e) {
+        console.error('[parse-auto]', src.name || src.url, '—', e.message);
+        await supabaseAdmin.from('parse_sources').update({ last_run_at: new Date().toISOString() }).eq('id', src.id).catch(() => {});
+      }
+    }
+  } catch (e) { console.error('[parse-auto]', e.message); }
+}
+setInterval(parseAutoTick, 30 * 60 * 1000);
+setTimeout(parseAutoTick, 90 * 1000); // первый прогон через 1,5 минуты после старта
+
+// v112: дерево источников для визуального редактора области (объекты/типы/счета/контрагенты с количеством)
+app.get('/api/links/tree', requireAuth, tabGuard('list'), async (req, res) => {
+  try {
+    const objects = new Map(), docTypes = new Map(), cps = new Map();
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin.from('receipts').select('object, document_type, store_name').order('id').range(from, from + 999);
+      if (error) throw error;
+      for (const r of (data || [])) {
+        const o = r.object || 'other'; objects.set(o, (objects.get(o) || 0) + 1);
+        const t = r.document_type || 'other'; docTypes.set(t, (docTypes.get(t) || 0) + 1);
+        const c = String(r.store_name || '').trim(); if (c) cps.set(c, (cps.get(c) || 0) + 1);
+      }
+      if (!data || data.length < 1000) break;
+    }
+    const ibans = new Map();
+    try {
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await supabaseAdmin.from('bank_movements').select('iban').order('id').range(from, from + 999);
+        if (error) break;
+        for (const m of (data || [])) { const i = String(m.iban || '').trim() || '(без счёта)'; ibans.set(i, (ibans.get(i) || 0) + 1); }
+        if (!data || data.length < 1000) break;
+      }
+    } catch (_) { /* выписок может не быть */ }
+    const top = (mp, n) => [...mp.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([name, count]) => ({ name, count }));
+    res.json({ tree: { objects: top(objects, 50), docTypes: top(docTypes, 50), ibans: top(ibans, 50), counterparties: top(cps, 100) } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v111.3: очистка графа области (или всего графа при scope=all) — документы и выписки НЕ трогаются
+app.post('/api/links/clear', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const scopeId = String((req.body && req.body.scope) || 'all').trim();
+    const scoped = await hasScopeSupport();
+    const sid = scopeId === 'all' ? ZERO_SCOPE : scopeId;
+    const filt = (q) => (scoped && scopeId !== 'everything') ? q.eq('scope_id', sid) : q.not('doc_id', 'is', null);
+    // scope='everything' — полный снос ВСЕХ областей
+    const wipeAll = scopeId === 'everything';
+    const q1 = wipeAll ? supabaseAdmin.from('doc_links').delete().not('doc_a', 'is', null)
+      : scoped ? supabaseAdmin.from('doc_links').delete().eq('scope_id', sid) : supabaseAdmin.from('doc_links').delete().not('doc_a', 'is', null);
+    const { error: e1 } = await q1;
+    const q2 = wipeAll ? supabaseAdmin.from('entity_links').delete().not('entity_a', 'is', null)
+      : scoped ? supabaseAdmin.from('entity_links').delete().eq('scope_id', sid) : supabaseAdmin.from('entity_links').delete().not('entity_a', 'is', null);
+    const { error: e2 } = await q2;
+    const q3 = wipeAll ? supabaseAdmin.from('doc_entities').delete().not('doc_id', 'is', null)
+      : scoped ? supabaseAdmin.from('doc_entities').delete().eq('scope_id', sid) : supabaseAdmin.from('doc_entities').delete().not('doc_id', 'is', null);
+    const { error: e3 } = await q3;
+    const q4 = wipeAll ? supabaseAdmin.from('entities').delete().neq('scope_id', '00000000-0000-0000-0000-000000000001')
+      : scoped ? supabaseAdmin.from('entities').delete().eq('scope_id', sid) : supabaseAdmin.from('entities').delete().not('id', 'is', null);
+    const { error: e4 } = await q4;
+    const errs = [e1, e2, e3, e4].filter(Boolean).map(e => e.message);
+    res.json({ ok: errs.length === 0, errors: errs });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v113: «Мосты» — сущности, встречающиеся сразу в нескольких областях (контроль пересечений)
+app.get('/api/links/bridges', requireAuth, tabGuard('list'), async (req, res) => {
+  try {
+    if (!(await hasScopeSupport())) return res.json({ bridges: [], supported: false });
+    const ents = [];
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin.from('entities').select('type, value, label, scope_id').order('id').range(from, from + 999);
+      if (error) throw error;
+      ents.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
+    const groups = new Map(); // type|value -> {label, scopes:Set}
+    for (const e of ents) {
+      const k = e.type + '|' + e.value;
+      if (!groups.has(k)) groups.set(k, { type: e.type, label: e.label, scopes: new Set() });
+      groups.get(k).scopes.add(e.scope_id || ZERO_SCOPE);
+    }
+    const { data: sc } = await supabaseAdmin.from('graph_scopes').select('id, name');
+    const scopeNames = new Map((sc || []).map(x => [x.id, x.name]));
+    scopeNames.set(ZERO_SCOPE, 'Все документы');
+    const bridges = [...groups.values()]
+      .filter(g => g.scopes.size > 1)
+      .map(g => ({ type: g.type, typeLabel: ENTITY_TYPE_LABELS[g.type] || g.type, label: g.label, scopes: [...g.scopes].map(id => scopeNames.get(id) || 'Область') }))
+      .sort((a, b) => b.scopes.length - a.scopes.length)
+      .slice(0, 200);
+    res.json({ bridges, supported: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// v108: bank — банковское движение (узел графа), payment_of — прямая связь «движение оплатило фактуру»
+
+function normEnt(v) {
+  return String(v || '').toLowerCase().replace(/[.,\/\\()\[\]"'«»`;:]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// Детерминированное извлечение сущностей из карточки документа (без AI, без квоты)
+function extractDocEntities(r) {
+  const out = new Map();
+  const add = (type, value, label, role) => {
+    const nv = type === 'amount_date' ? String(value) : normEnt(value);
+    if (!nv || nv.length < 2 || nv.length > 120) return;
+    const k = type + '|' + nv;
+    if (!out.has(k)) out.set(k, { type, value: nv, label: String(label || value).slice(0, 200), role: role || 'mention' });
+  };
+  if (r.store_name) add('company', r.store_name, r.store_name, 'issuer');
+  if (r.counterparty) add('company', r.counterparty, r.counterparty, 'counterparty');
+  if (r.invoice_number) add('invoice_no', r.invoice_number, r.invoice_number, 'subject');
+  if (r.contract_number) add('contract_no', r.contract_number, r.contract_number, 'subject');
+  if (r.cups) add('cups', r.cups, r.cups, 'subject');
+  if (r.meter_number) add('meter', r.meter_number, r.meter_number, 'subject');
+  const text = String(r.raw_text || '').slice(0, 60000);
+  if (text) {
+    const ibans = text.match(/\b[A-Z]{2}\d{2}(?: ?[0-9A-Z]{4}){3,7}\b/g) || [];
+    for (const ib of new Set(ibans.map(x => x.replace(/\s/g, '')))) {
+      if (ib.length >= 15 && ib.length <= 34) add('iban', ib.toLowerCase(), ib, 'account');
+    }
+    const cifs = text.match(/\b[ABCDEFGHJNPQRSUVW]\d{7}[0-9A-J]\b/g) || [];
+    for (const c of new Set(cifs)) add('tax_id', c.toLowerCase(), c, 'tax_id');
+    const nifs = text.match(/\b\d{8}[A-Z]\b/g) || [];
+    for (const n of new Set(nifs)) add('tax_id', n.toLowerCase(), n, 'tax_id');
+    // v109: персоны — «D./Dña/Don/Doña/Sr./Sra. Имя Фамилия» (2–3 слова с заглавной)
+    const pers = text.match(/(?:\bD(?:ña|on)?\.?|\bDoña|\bDon|\bSr\.?|\bSra\.?)\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñü]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñü]+){1,2}/g) || [];
+    for (const p of new Set(pers.map(x => x.replace(/^(?:Dña|Don|Doña|D|Sr|Sra)\.?\s+/, '')))) add('person', p, p, 'person');
+    // v109: доверенность — «poder (notarial) núm. 1234/2023» / «доверенность № …»
+    const poas = text.match(/(?:poder(?:\s+notarial)?|доверенност\w*)\s*(?:n[úu]m\.?\s*(?:ero)?|n[ºo°]?|№)?\s*[:#]?\s*(\d{1,5}\s*\/\s*\d{2,4}|\d{3,8})/gi) || [];
+    for (const m of poas) {
+      const num = (m.match(/(\d{1,5}\s*\/\s*\d{2,4}|\d{3,8})/) || [])[1];
+      if (num) add('poa', num.replace(/\s/g, ''), num.replace(/\s/g, ''), 'subject');
+    }
+  }
+  if (r.total_amount != null && r.total_amount !== '' && r.receipt_date) {
+    const amt = Number(r.total_amount);
+    if (isFinite(amt)) add('amount_date', amt.toFixed(2) + '|' + String(r.currency || '').toLowerCase() + '|' + r.receipt_date,
+      amt + ' ' + (r.currency || '') + ' · ' + r.receipt_date, 'amount');
+  }
+  return [...out.values()];
+}
+
+// v108: сущности из банковского движения (выписка): контрагент, счёт, налоговые №, № фактур из концепта, сумма+дата
+function extractMovementEntities(mv) {
+  const out = new Map();
+  const add = (type, value, label, role) => {
+    const nv = type === 'amount_date' ? String(value) : normEnt(value);
+    if (!nv || nv.length < 2 || nv.length > 120) return;
+    const k = type + '|' + nv;
+    if (!out.has(k)) out.set(k, { type, value: nv, label: String(label || value).slice(0, 200), role: role || 'mention' });
+  };
+  if (mv.counterparty) add('company', mv.counterparty, mv.counterparty, 'counterparty');
+  if (mv.iban) add('iban', mv.iban, mv.iban, 'account');
+  const text = ((mv.concept || '') + ' ' + (mv.counterparty || '')).slice(0, 10000);
+  const ibans = text.match(/\b[A-Z]{2}\d{2}(?: ?[0-9A-Z]{4}){3,7}\b/g) || [];
+  for (const ib of new Set(ibans.map(x => x.replace(/\s/g, '')))) {
+    if (ib.length >= 15 && ib.length <= 34) add('iban', ib.toLowerCase(), ib, 'account');
+  }
+  const cifs = text.match(/\b[ABCDEFGHJNPQRSUVW]\d{7}[0-9A-J]\b/g) || [];
+  for (const c of new Set(cifs)) add('tax_id', c.toLowerCase(), c, 'tax_id');
+  const invs = text.match(/\b\d{1,4}\/\d{1,4}\b/g) || [];
+  for (const iv of new Set(invs)) add('invoice_no', iv, iv, 'subject');
+  if (mv.amount != null && mv.operation_date) {
+    const amt = Math.abs(Number(mv.amount));
+    if (isFinite(amt)) add('amount_date', amt.toFixed(2) + '||' + mv.operation_date, amt + ' · ' + mv.operation_date, 'amount');
+  }
+  return [...out.values()];
+}
+
+// v110/v114: AI-извлечение сущностей из текста документа (Kimi, текстовый вызов)
+// v114: динамическая схема — базовые типы + типы, открытые AI-архитектором (ai-discover)
+async function aiExtractEntitiesFromText(text, customTypes) {
+  const cfg = OPENAI_COMPAT_PROVIDERS.kimi;
+  if (!cfg || !cfg.apiKey) throw new Error('Kimi API key not configured');
+  const extra = Array.isArray(customTypes) ? customTypes.filter(t => t && t.type) : [];
+  const schemaKeys = ['persons', 'companies', 'tax_ids', 'ibans', 'invoice_numbers', 'contracts', 'poa_numbers', 'cups', 'meters', ...extra.map(t => t.type)];
+  const schemaJson = '{' + schemaKeys.map(k => '"' + k + '":[]').join(',') + '}';
+  const extraRules = extra.length
+    ? '\nДополнительные типы (найдены AI-разведкой в ЭТОЙ базе документов):\n' + extra.map(t => '- ' + t.type + ' — ' + (t.label || t.type) + (t.example ? ' (пример: ' + t.example + ')' : '')).join('\n')
+    : '';
+  const prompt = `Ты извлекаешь сущности из текста финансового/юридического документа (Испания: чек, фактура, банковская выписка, налоговая декларация, договор, доверенность).
+Верни СТРОГО JSON без markdown и пояснений:
+${schemaJson}
+Правила:
+- persons — полные имена людей (Имя Фамилия);
+- companies — юридические лица и автономо (с формой: S.L., SLU, S.A. и т.п., если есть);
+- tax_ids — CIF/NIF/NIE;
+- ibans — банковские счета IBAN;
+- invoice_numbers — номера фактур/счетов;
+- contracts — номера или точные названия договоров;
+- poa_numbers — номера нотариальных доверенностей (poder notarial);
+- cups — коды CUPS (электро/газ);
+- meters — номера счётчиков.
+Только значения, ЯВНО присутствующие в тексте. Ничего не выдумывай. Категории без значений — пустые массивы.${extraRules}
+
+Текст документа:
+` + String(text || '').slice(0, 12000);
+  const body = {
+    model: cfg.defaultModel,
+    messages: [{ role: 'user', content: prompt }],
+    max_completion_tokens: 4096,
+    reasoning_effort: 'low',
+    response_format: { type: 'json_object' }
+  };
+  const res = await axios.post(`${cfg.baseURL}/chat/completions`, body, {
+    headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', ...cfg.extraHeaders },
+    timeout: 120000
+  });
+  const content = res.data?.choices?.[0]?.message?.content || '{}';
+  try { return JSON.parse(content); } catch (_) {
+    const m = content.match(/\{[\s\S]*\}/);
+    if (m) { try { return JSON.parse(m[0]); } catch (_) { /* ignore */ } }
+    return {};
+  }
+}
+
+// v118: свободный режим — AI САМ придумывает типы сущностей и связей.
+// Реестр известных типов (память между батчами): базовые + из БД + накопленные за сессию.
+const aiFreeTypes = new Map(); // type -> label (сессионный кэш)
+const BASE_TYPE_LABELS = { person: 'Персона', company: 'Компания', tax_id: 'Налоговый №', iban: 'Счёт IBAN', invoice_no: '№ фактуры', contract_no: '№ договора', poa: 'Доверенность', cups: 'CUPS', meter: 'Счётчик' };
+async function getKnownFreeTypes() {
+  const known = new Map(Object.entries(BASE_TYPE_LABELS));
+  try {
+    const { data } = await supabaseAdmin.from('entities').select('type, label').limit(2000);
+    for (const r of (data || [])) {
+      const t = String(r.type || '');
+      if (t && !known.has(t)) known.set(t, ENTITY_TYPE_LABELS[t] || t);
+    }
+  } catch (_) { /* ignore */ }
+  for (const [t, l] of aiFreeTypes) known.set(t, l);
+  return known;
+}
+async function aiExtractEntitiesFree(text, knownTypes) {
+  const cfg = OPENAI_COMPAT_PROVIDERS.kimi;
+  if (!cfg || !cfg.apiKey) throw new Error('Kimi API key not configured');
+  const knownStr = [...knownTypes.entries()].map(([t, l]) => `${t} (${l})`).join(', ');
+  const prompt = `Ты — аналитик документов (Испания: чеки, фактуры, договоры, доверенности, банковские выписки, налоговые декларации). Твоя задача — САМОСТОЯТЕЛЬНО найти в тексте все значимые сущности и связи между ними.
+Верни СТРОГО JSON без markdown:
+{"entities":[{"type":"latin_snake_case","type_label":"Русское название типа","value":"нормализованное значение","label":"как в тексте"}],"relations":[{"from":"value сущности","to":"value сущности","relation":"краткое название связи по-русски"}]}
+Правила:
+- Только значения, ЯВНО присутствующие в тексте. Ничего не выдумывай.
+- Уже известные типы (используй их в первую очередь): ${knownStr}.
+- Новый тип создавай ТОЛЬКО если ни один известный не подходит; type — короткий snake_case на латинице.
+- relations — только между сущностями из твоего же списка entities (from/to = их value).
+- Не более 20 сущностей и 15 связей на документ.
+
+Текст документа:
+` + String(text || '').slice(0, 12000);
+  const body = {
+    model: cfg.defaultModel,
+    messages: [{ role: 'user', content: prompt }],
+    max_completion_tokens: 4096,
+    reasoning_effort: 'low',
+    response_format: { type: 'json_object' }
+  };
+  const res = await axios.post(`${cfg.baseURL}/chat/completions`, body, {
+    headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', ...cfg.extraHeaders },
+    timeout: 120000
+  });
+  const content = res.data?.choices?.[0]?.message?.content || '{}';
+  let j = {};
+  try { j = JSON.parse(content); } catch (_) { const m = content.match(/\{[\s\S]*\}/); if (m) { try { j = JSON.parse(m[0]); } catch (_) { /* ignore */ } } }
+  const cleanType = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
+  const entities = (Array.isArray(j.entities) ? j.entities : [])
+    .map(e => ({ type: cleanType(e && e.type), typeLabel: String((e && e.type_label) || '').slice(0, 60), value: String((e && e.value) || '').trim(), label: String((e && e.label) || (e && e.value) || '').slice(0, 200) }))
+    .filter(e => e.type.length >= 2 && e.value.length >= 2 && e.value.length <= 120)
+    .slice(0, 20);
+  const relations = (Array.isArray(j.relations) ? j.relations : [])
+    .map(r => ({ from: String((r && r.from) || '').trim(), to: String((r && r.to) || '').trim(), relation: String((r && r.relation) || 'связано').slice(0, 60) }))
+    .filter(r => r.from && r.to && r.from !== r.to)
+    .slice(0, 15);
+  return { entities, relations };
+}
+
+// v114 Фаза 1: AI-разведка — какие типы сущностей вообще есть в ЭТОЙ базе документов
+let aiDiscoveredTypes = []; // кэш процесса (переоткрывается кнопкой «AI-архитектор»)
+app.post('/api/links/ai-discover', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const cfg = OPENAI_COMPAT_PROVIDERS.kimi;
+    if (!cfg || !cfg.apiKey) throw new Error('Kimi API key not configured');
+    const { count } = await supabaseAdmin.from('receipts').select('id', { count: 'exact', head: true }).not('raw_text', 'is', null);
+    const total = count || 0;
+    if (!total) return res.json({ ok: true, entityTypes: [], clusters: [], sampled: 0, total: 0 });
+    // равномерная выборка ~30 документов по всей базе
+    const N = Math.min(30, total);
+    const docs = [];
+    for (let i = 0; i < N; i++) {
+      const off = Math.min(total - 1, Math.floor(i * total / N));
+      const { data } = await supabaseAdmin.from('receipts').select('id, store_name, document_type, raw_text').not('raw_text', 'is', null).order('id').range(off, off);
+      if (data && data[0]) docs.push(data[0]);
+    }
+    const sample = docs.map((d, i) => `--- Документ ${i + 1} (${d.document_type || 'doc'}: ${d.store_name || '—'}) ---\n${String(d.raw_text || '').slice(0, 800)}`).join('\n');
+    const prompt = `Проанализируй образцы текстов документов (Испания: чеки, фактуры, договоры, доверенности, банковские выписки, налоговые декларации).
+Эти типы сущностей УЖЕ извлекаются правилами: persons (имена), companies (компании), tax_ids (CIF/NIF), ibans, invoice_numbers, contracts, poa_numbers (доверенности), cups, meters.
+Найди ДОПОЛНИТЕЛЬНЫЕ типы сущностей, реально присутствующие в образцах и полезные для СВЯЗЫВАНИЯ документов между собой (например: нотариус, адрес/объект недвижимости, налоговая форма/modelo, период декларации, госорган, агентство, № протокола и т.п.).
+Верни СТРОГО JSON: {"entity_types":[{"type":"latin_snake_case","label":"Русское название","example":"пример из текста"}],"doc_clusters":[{"name":"название","what":"что входит"}]}
+Максимум 8 типов, только реально встречающиеся. Если дополнительных нет — пустой массив.
+
+Образцы:
+` + sample.slice(0, 24000);
+    const body = {
+      model: cfg.defaultModel,
+      messages: [{ role: 'user', content: prompt }],
+      max_completion_tokens: 4096, reasoning_effort: 'low', response_format: { type: 'json_object' }
+    };
+    const r = await axios.post(`${cfg.baseURL}/chat/completions`, body, {
+      headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', ...cfg.extraHeaders },
+      timeout: 180000
+    });
+    const content = r.data?.choices?.[0]?.message?.content || '{}';
+    let j = {};
+    try { j = JSON.parse(content); } catch (_) { const m = content.match(/\{[\s\S]*\}/); if (m) { try { j = JSON.parse(m[0]); } catch (_) { /* ignore */ } } }
+    aiDiscoveredTypes = (j.entity_types || [])
+      .filter(t => t && t.type && t.label)
+      .slice(0, 8)
+      .map(t => ({ type: String(t.type).replace(/[^a-z0-9_]/gi, '_').toLowerCase(), label: String(t.label).slice(0, 60), example: String(t.example || '').slice(0, 120) }));
+    if (typeof logActivity === 'function') logActivity(req.user, 'Связи', 'AI-разведка типов', `типов: ${aiDiscoveredTypes.length}, образцов: ${docs.length}`, req);
+    res.json({ ok: true, entityTypes: aiDiscoveredTypes, clusters: (j.doc_clusters || []).slice(0, 10), sampled: docs.length, total });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v117: AI сопоставляет кластер документов с реальными значениями дерева источников → фильтр области
+app.post('/api/links/ai-scope-filter', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const cfg = OPENAI_COMPAT_PROVIDERS.kimi;
+    if (!cfg || !cfg.apiKey) throw new Error('Kimi API key not configured');
+    const name = String((req.body && req.body.name) || '').trim().slice(0, 80);
+    const what = String((req.body && req.body.what) || '').trim().slice(0, 300);
+    if (!name) return res.status(400).json({ error: 'name required' });
+    // доступные значения (та же логика, что /api/links/tree)
+    const objects = new Map(), docTypes = new Map(), cps = new Map();
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabaseAdmin.from('receipts').select('object, document_type, store_name').order('id').range(from, from + 999);
+      if (error) throw error;
+      for (const r of (data || [])) {
+        const o = r.object || 'other'; objects.set(o, (objects.get(o) || 0) + 1);
+        const t = r.document_type || 'other'; docTypes.set(t, (docTypes.get(t) || 0) + 1);
+        const c = String(r.store_name || '').trim(); if (c) cps.set(c, (cps.get(c) || 0) + 1);
+      }
+      if (!data || data.length < 1000) break;
+    }
+    const ibans = new Map();
+    try {
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await supabaseAdmin.from('bank_movements').select('iban, counterparty').order('id').range(from, from + 999);
+        if (error) break;
+        for (const m of (data || [])) {
+          const i = String(m.iban || '').trim() || '(без счёта)'; ibans.set(i, (ibans.get(i) || 0) + 1);
+          const c = String(m.counterparty || '').trim(); if (c) cps.set(c, (cps.get(c) || 0) + 1);
+        }
+        if (!data || data.length < 1000) break;
+      }
+    } catch (_) { /* выписок может не быть */ }
+    const top = (mp, n) => [...mp.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([nm, cnt]) => `${nm} (${cnt})`);
+    const lists = {
+      objects: top(objects, 50), docTypes: top(docTypes, 50),
+      ibans: top(ibans, 50), counterparties: top(cps, 120)
+    };
+    const prompt = `Есть кластер документов: «${name}» — ${what || 'без описания'}.
+Ниже списки РЕАЛЬНЫХ значений из базы (название и кол-во документов в скобках). Выбери, что относится к этому кластеру.
+Правила: выбирай ТОЛЬКО значения из списков, копируй названия ТОЧНО как в списке (без количества в скобках). includeNames — контрагенты/имена, относящиеся к кластеру. Если к кластеру ничего не подходит в каком-то списке — пустой массив. Не выдумывай значения.
+Верни СТРОГО JSON: {"objects":[],"docTypes":[],"ibans":[],"includeNames":[]}
+
+ОБЪЕКТЫ: ${lists.objects.join('; ') || '—'}
+ТИПЫ ДОКУМЕНТОВ: ${lists.docTypes.join('; ') || '—'}
+СЧЕТА IBAN: ${lists.ibans.join('; ') || '—'}
+КОНТРАГЕНТЫ: ${lists.counterparties.join('; ') || '—'}`;
+    const body = {
+      model: cfg.defaultModel,
+      messages: [{ role: 'user', content: prompt }],
+      max_completion_tokens: 2048, reasoning_effort: 'low', response_format: { type: 'json_object' }
+    };
+    const r = await axios.post(`${cfg.baseURL}/chat/completions`, body, {
+      headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', ...cfg.extraHeaders },
+      timeout: 120000
+    });
+    const content = r.data?.choices?.[0]?.message?.content || '{}';
+    let j = {};
+    try { j = JSON.parse(content); } catch (_) { const m = content.match(/\{[\s\S]*\}/); if (m) { try { j = JSON.parse(m[0]); } catch (_) { /* ignore */ } } }
+    // валидация: оставляем только значения, реально есть в базе
+    const valid = {
+      objects: new Set([...objects.keys()]), docTypes: new Set([...docTypes.keys()]),
+      ibans: new Set([...ibans.keys()]), names: new Set([...cps.keys()].map(x => x.toLowerCase()))
+    };
+    const arr = (v) => Array.isArray(v) ? v.map(x => String(x).trim()).filter(Boolean) : [];
+    const filter = {
+      objects: arr(j.objects).filter(x => valid.objects.has(x)),
+      docTypes: arr(j.docTypes).filter(x => valid.docTypes.has(x)),
+      ibans: arr(j.ibans).filter(x => valid.ibans.has(x)),
+      includeNames: arr(j.includeNames).filter(x => valid.names.has(x.toLowerCase())).slice(0, 30),
+      excludeObjects: [], excludeDocTypes: [], excludeIbans: [], excludeNames: []
+    };
+    const picked = filter.objects.length + filter.docTypes.length + filter.ibans.length + filter.includeNames.length;
+    if (typeof logActivity === 'function') logActivity(req.user, 'Связи', 'AI-фильтр области', `${name}: выбрано ${picked}`, req);
+    res.json({ ok: true, filter, picked });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v110: пакетное AI-извлечение сущностей по документам с raw_text (offset/limit — фронт крутит цикл)
+app.post('/api/links/ai-extract', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const offset = Math.max(0, parseInt((req.body && req.body.offset) || '0', 10) || 0);
+    const limit = Math.min(8, Math.max(1, parseInt((req.body && req.body.limit) || '6', 10) || 6));
+    const scopeId = String((req.body && req.body.scope) || '').trim() || ZERO_SCOPE;
+    const scoped = await hasScopeSupport();
+    const scopeFilter = scoped ? await getScopeFilter(scopeId) : null;
+    // v114: типы из тела запроса (клиент после разведки) или из кэша разведки
+    const bodyTypes = (req.body && Array.isArray(req.body.extraTypes)) ? req.body.extraTypes : null;
+    const customTypes = (bodyTypes || aiDiscoveredTypes || []).filter(t => t && /^[a-z0-9_]{2,40}$/i.test(t.type || '')).slice(0, 8);
+    const freeMode = !!(req.body && req.body.freeMode); // v118: AI сам придумывает типы
+    const knownFree = freeMode ? await getKnownFreeTypes() : null;
+    const withScope = (row) => scoped ? { ...row, scope_id: scopeId } : row;
+    const ocEnt = scoped ? 'type,value,scope_id' : 'type,value';
+    const ocDocLink = scoped ? 'doc_a,doc_b,link_type,scope_id' : 'doc_a,doc_b,link_type';
+    const { data: docsRaw, error } = await supabaseAdmin.from('receipts')
+      .select('id, store_name, store_name_ru, receipt_date, raw_text, object, document_type')
+      .not('raw_text', 'is', null).order('id').range(offset, offset + limit - 1);
+    if (error) throw error;
+    const docs = scopeFilter ? (docsRaw || []).filter(r => receiptInScope(r, scopeFilter)) : docsRaw;
+    const { count } = await supabaseAdmin.from('receipts').select('id', { count: 'exact', head: true }).not('raw_text', 'is', null);
+
+    const stats = { processed: 0, entitiesAdded: 0, linksAdded: 0, newTypes: 0, relsAdded: 0, errors: [] };
+    const deRows = [];
+    const touchedEnts = new Map(); // entity_id -> type
+    const entLinkRows = []; // v118: свободные связи сущностей от AI
+    const ocEntLink = scoped ? 'entity_a,entity_b,link_type,scope_id' : 'entity_a,entity_b,link_type';
+    for (const d of (docs || [])) {
+      try {
+        let exRelations = [];
+        const items = [];
+        const seenV = new Set();
+        const push = (type, v) => {
+          const nv = normEnt(v);
+          if (!nv || nv.length < 2 || nv.length > 120) return;
+          const k = type + '|' + nv;
+          if (seenV.has(k)) return; seenV.add(k);
+          items.push({ type, value: nv, label: String(v).slice(0, 200) });
+        };
+        if (freeMode) {
+          // v118: свободный режим — AI сам определяет типы
+          const fr = await aiExtractEntitiesFree(d.raw_text, knownFree);
+          exRelations = fr.relations || [];
+          for (const e of (fr.entities || [])) {
+            if (!knownFree.has(e.type)) {
+              knownFree.set(e.type, e.typeLabel || e.type);
+              aiFreeTypes.set(e.type, e.typeLabel || e.type);
+              stats.newTypes++;
+            }
+            push(e.type, e.value);
+          }
+        } else {
+          const ex = await aiExtractEntitiesFromText(d.raw_text, customTypes);
+          (ex.persons || []).forEach(v => push('person', v));
+          (ex.companies || []).forEach(v => push('company', v));
+          (ex.tax_ids || []).forEach(v => push('tax_id', v));
+          (ex.ibans || []).forEach(v => push('iban', v));
+          (ex.invoice_numbers || []).forEach(v => push('invoice_no', v));
+          (ex.contracts || []).forEach(v => push('contract_no', v));
+          (ex.poa_numbers || []).forEach(v => push('poa', v));
+          (ex.cups || []).forEach(v => push('cups', v));
+          (ex.meters || []).forEach(v => push('meter', v));
+          for (const t of customTypes) (ex[t.type] || []).forEach(v => push(t.type, v)); // v114: AI-открытые типы
+        }
+        if (items.length) {
+          const { data: ups, error: ue } = await supabaseAdmin.from('entities')
+            .upsert(items.map(e => withScope({ type: e.type, value: e.value, label: e.label })), { onConflict: ocEnt })
+            .select('id, type, value');
+          // v118: свободные связи — по value сущностей этого документа
+          if (freeMode && exRelations.length && ups && ups.length) {
+            const byVal = new Map();
+            for (const e of ups) byVal.set(String(e.value || '').toLowerCase(), e.id);
+            for (const rel of exRelations) {
+              const a = byVal.get(rel.from.toLowerCase());
+              const b = byVal.get(rel.to.toLowerCase());
+              if (a && b && a !== b) {
+                entLinkRows.push(withScope({ entity_a: a, entity_b: b, link_type: rel.relation, confidence: 0.7, evidence: 'AI свободный режим', created_by: 'ai' }));
+              }
+            }
+          }
+          if (ue) throw ue;
+          const seenRow = new Set();
+          for (const e of (ups || [])) {
+            const k = String(d.id) + '|' + e.id;
+            if (seenRow.has(k)) continue; seenRow.add(k);
+            deRows.push(withScope({ doc_id: String(d.id), entity_id: e.id, role: 'ai' }));
+            touchedEnts.set(e.id, e.type);
+          }
+          stats.entitiesAdded += (ups || []).length;
+        }
+        stats.processed++;
+      } catch (de) { stats.errors.push('doc ' + d.id + ': ' + (de.message || 'AI error')); }
+    }
+    if (deRows.length) {
+      const { error: ie } = await supabaseAdmin.from('doc_entities').upsert(deRows, { onConflict: 'doc_id,entity_id,role' });
+      if (ie) stats.errors.push('doc_entities: ' + ie.message);
+    }
+    if (entLinkRows.length) { // v118
+      const lm = new Map();
+      for (const l of entLinkRows) { const k = [l.entity_a, l.entity_b].sort().join('|') + '|' + l.link_type; if (!lm.has(k)) lm.set(k, l); }
+      const dedup = [...lm.values()];
+      for (let i = 0; i < dedup.length; i += 500) {
+        const { error: le } = await supabaseAdmin.from('entity_links').upsert(dedup.slice(i, i + 500), { onConflict: ocEntLink });
+        if (le) { stats.errors.push('entity_links: ' + le.message); break; }
+      }
+      stats.relsAdded = dedup.length;
+    }
+    // AI-связи: документы, делящие AI-сущность, связываем (created_by='ai')
+    const linkRows = [];
+    for (const [entId, entType] of touchedEnts) {
+      const { data: de2 } = await supabaseAdmin.from('doc_entities').select('doc_id').eq('entity_id', entId).limit(60);
+      const arr = [...new Set((de2 || []).map(r => r.doc_id))];
+      if (arr.length < 2 || arr.length > 40) continue;
+      const lt = LINK_TYPE_BY_ENTITY[entType] || 'related';
+      for (let i = 0; i < arr.length; i++) {
+        for (let j = i + 1; j < arr.length; j++) {
+          linkRows.push(withScope({ doc_a: arr[i], doc_b: arr[j], link_type: lt, confidence: 0.75, evidence: 'AI-извлечение', created_by: 'ai' }));
+        }
+      }
+    }
+    if (linkRows.length) {
+      const lm = new Map();
+      for (const l of linkRows) { const k = l.doc_a + '|' + l.doc_b + '|' + l.link_type; if (!lm.has(k)) lm.set(k, l); }
+      const dedup = [...lm.values()];
+      for (let i = 0; i < dedup.length; i += 500) {
+        const { error: le } = await supabaseAdmin.from('doc_links').upsert(dedup.slice(i, i + 500), { onConflict: ocDocLink });
+        if (le) stats.errors.push('doc_links: ' + le.message);
+      }
+      stats.linksAdded = dedup.length;
+    }
+    res.json({ ok: true, offset, processed: stats.processed, nextOffset: offset + (docs || []).length, total: count != null ? count : null, done: (docs || []).length < limit, stats });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Построение/перестроение графа по всем документам
+app.post('/api/links/build', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const stats = { docs: 0, entitiesNew: 0, docEntities: 0, links: 0, errors: [] };
+    const { error: tErr } = await supabaseAdmin.from('entities').select('id').limit(1);
+    if (tErr) return res.status(500).json({ error: 'Нет таблиц графа. Выполните в Supabase SQL Editor: ' + LINKS_SQL });
+    // v111: область графа (?scope=<uuid>); без параметра — «Все документы» (ZERO_SCOPE, старое поведение)
+    const scopeId = String(req.query.scope || '').trim() || ZERO_SCOPE;
+    const scoped = await hasScopeSupport();
+    // v117.1: область запрошена, а graph_scopes недоступна — ошибка, а не молчаливая запись в «Все документы»
+    if (scopeId !== ZERO_SCOPE && !scoped) {
+      return res.status(500).json({ error: 'Области графа недоступны (нет таблицы graph_scopes). Граф НЕ построен, чтобы не смешать области. Выполните v111-области.sql и повторите.' });
+    }
+    const scopeFilter = scoped ? await getScopeFilter(scopeId) : null;
+    stats.scope = scopeId;
+    const ocEnt = scoped ? 'type,value,scope_id' : 'type,value';
+    const ocDocLink = scoped ? 'doc_a,doc_b,link_type,scope_id' : 'doc_a,doc_b,link_type';
+    const ocEntLink = scoped ? 'entity_a,entity_b,link_type,scope_id' : 'entity_a,entity_b,link_type';
+    const withScope = (row) => scoped ? { ...row, scope_id: scopeId } : row;
+
+    // v107.2: только реально существующие колонки (в receipts нет counterparty и т.п.)
+    const wantCols = ['id', 'store_name', 'store_name_ru', 'counterparty', 'invoice_number', 'contract_number', 'cups', 'meter_number', 'total_amount', 'currency', 'receipt_date', 'raw_text', 'object', 'document_type'];
+    let avail = wantCols;
+    try {
+      const existingCols = await getTableColumns();
+      if (Array.isArray(existingCols) && existingCols.length) avail = wantCols.filter(c => existingCols.includes(c));
+    } catch (_) { /* если не удалось определить — пробуем как есть */ }
+    if (!avail.includes('id')) avail.unshift('id');
+    const cols = avail.join(', ');
+    const all = [];
+    for (let from = 0; ; from += 500) {
+      const { data, error } = await supabaseAdmin.from('receipts').select(cols).order('id').range(from, from + 499);
+      if (error) throw error;
+      all.push(...(data || []));
+      if (!data || data.length < 500) break;
+    }
+    const scopeDocs = scopeFilter ? all.filter(r => receiptInScope(r, scopeFilter)) : all;
+    stats.docs = scopeDocs.length;
+
+    // v107.3: всё пакетно — иначе тысячи последовательных запросов рвут соединение (Failed to fetch)
+    const entKeys = new Map();   // 'type|value' -> {type,value,label}
+    const docEnts = new Map();   // docId -> [ent]
+
+    // v108: банковские движения — узлы графа «bm:<id>»
+    const paymentLinks = [];
+    stats.movements = 0;
+    try {
+      // v108.2: если в таблице нет какой-то колонки — откатываемся на select('*')
+      let mvCols = 'id, counterparty, concept, amount, operation_date, iban, matched_receipt_id';
+      let mvs = [];
+      for (let attempt = 0; attempt < 2; attempt++) {
+        mvs = [];
+        let failed = false;
+        for (let from = 0; ; from += 1000) {
+          const { data, error } = await supabaseAdmin.from('bank_movements')
+            .select(mvCols)
+            .order('id').range(from, from + 999);
+          if (error) {
+            if (attempt === 0 && /column|does not exist/i.test(error.message || '')) { failed = true; mvCols = '*'; break; }
+            throw error;
+          }
+          mvs.push(...(data || []));
+          if (!data || data.length < 1000) break;
+        }
+        if (!failed) break;
+      }
+      const scopeMvs = scopeFilter ? mvs.filter(mv => movementInScope(mv, scopeFilter)) : mvs;
+      stats.movements = scopeMvs.length;
+      for (const mv of scopeMvs) {
+        const bmId = 'bm:' + mv.id;
+        const ents = extractMovementEntities(mv);
+        docEnts.set(bmId, ents);
+        for (const e of ents) entKeys.set(e.type + '|' + e.value, e);
+        if (mv.matched_receipt_id) {
+          paymentLinks.push({ doc_a: bmId, doc_b: String(mv.matched_receipt_id), link_type: 'payment_of', confidence: 1, evidence: 'автопривязка выписки', created_by: 'rule' });
+        }
+      }
+    } catch (me) { stats.errors.push('bank_movements: ' + me.message); }
+    for (const r of scopeDocs) {
+      const ents = extractDocEntities(r);
+      docEnts.set(String(r.id), ents);
+      for (const e of ents) entKeys.set(e.type + '|' + e.value, e);
+    }
+
+    // 1) сущности — пакетный upsert по 500
+    const entArr = [...entKeys.values()];
+    for (let i = 0; i < entArr.length; i += 500) {
+      const { error: ue } = await supabaseAdmin.from('entities')
+        .upsert(entArr.slice(i, i + 500).map(e => withScope({ type: e.type, value: e.value, label: e.label })), { onConflict: ocEnt });
+      if (ue) stats.errors.push('entities: ' + ue.message);
+    }
+    const entAll = [];
+    for (let from = 0; ; from += 1000) {
+      let q = supabaseAdmin.from('entities').select('id, type, value, label').order('id').range(from, from + 999);
+      if (scoped) q = q.eq('scope_id', scopeId);
+      const { data, error } = await q;
+      if (error) { stats.errors.push('entities-read: ' + error.message); break; }
+      entAll.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
+    const entId = new Map(entAll.map(e => [e.type + '|' + e.value, e.id]));
+    const entMeta = new Map(entAll.map(e => [e.id, e]));
+
+    // 2) привязки документов — полная замена пакетами по 500
+    const deRows = [];
+    for (const [docId, ents] of docEnts) {
+      for (const e of ents) {
+        const id = entId.get(e.type + '|' + e.value);
+        if (id) deRows.push(withScope({ doc_id: docId, entity_id: id, role: e.role }));
+      }
+    }
+    // v110: AI-привязки (role='ai') не трогаем — их перестраивает отдельный AI-проход
+    // v111: чистим только текущую область
+    let delQ = supabaseAdmin.from('doc_entities').delete().neq('role', 'ai');
+    if (scoped) delQ = delQ.eq('scope_id', scopeId);
+    else delQ = delQ.not('doc_id', 'is', null);
+    const { error: delErr } = await delQ;
+    if (delErr) stats.errors.push('doc_entities-clear: ' + delErr.message);
+    for (let i = 0; i < deRows.length; i += 500) {
+      const { error: de } = await supabaseAdmin.from('doc_entities').insert(deRows.slice(i, i + 500));
+      if (de) stats.errors.push('doc_entities: ' + de.message);
+    }
+    stats.docEntities = deRows.length;
+    stats.entitiesNew = entArr.length; // все сущности графа (пакетный upsert не считает «новые» отдельно)
+
+    // 2b) v109: иерархия сущностей — атрибут belongs_to субъекту; персона represents компанию
+    try {
+      const elMap = new Map();
+      const pushEl = (a, b, lt, conf, ev) => {
+        if (!a || !b || a === b) return;
+        const k = a + '|' + b + '|' + lt;
+        if (!elMap.has(k)) elMap.set(k, withScope({ entity_a: a, entity_b: b, link_type: lt, confidence: conf, evidence: String(ev || '').slice(0, 200), created_by: 'rule' }));
+      };
+      for (const [, ents] of docEnts) {
+        const subjects = [], attrs = [], persons = [], companies = [];
+        for (const e of ents) {
+          const id = entId.get(e.type + '|' + e.value);
+          if (!id) continue;
+          if (SUBJECT_TYPES.has(e.type)) subjects.push({ id, e });
+          else if (ATTRIBUTE_TYPES.has(e.type)) attrs.push({ id, e });
+          if (e.type === 'person') persons.push({ id, e });
+          if (e.type === 'company') companies.push({ id, e });
+        }
+        for (const a of attrs) for (const sub of subjects.slice(0, 3)) pushEl(a.id, sub.id, 'belongs_to', 0.85, a.e.label);
+        for (const p of persons) for (const c of companies.slice(0, 3)) pushEl(p.id, c.id, 'represents', 0.6, p.e.label + ' ↔ ' + c.e.label);
+      }
+      const entLinkRows = [...elMap.values()];
+      let elcQ = supabaseAdmin.from('entity_links').delete().eq('created_by', 'rule');
+      if (scoped) elcQ = elcQ.eq('scope_id', scopeId);
+      const { error: elc } = await elcQ;
+      if (elc) {
+        if (/does not exist/i.test(elc.message || '')) stats.errors.push('entity_links: нет таблицы — выполните v109-иерархия.sql в Supabase');
+        else stats.errors.push('entity_links-clear: ' + elc.message);
+      } else {
+        for (let i = 0; i < entLinkRows.length; i += 500) {
+          const { error: eli } = await supabaseAdmin.from('entity_links').upsert(entLinkRows.slice(i, i + 500), { onConflict: ocEntLink });
+          if (eli) stats.errors.push('entity_links: ' + eli.message);
+        }
+      }
+      stats.entityLinks = entLinkRows.length;
+    } catch (ele) { stats.errors.push('entity_links: ' + ele.message); }
+
+    // 3) перестраиваем автоматические связи (created_by='rule') — только текущей области
+    let dlDel = supabaseAdmin.from('doc_links').delete().eq('created_by', 'rule');
+    if (scoped) dlDel = dlDel.eq('scope_id', scopeId);
+    await dlDel;
+    const byEnt = new Map();
+    for (const row of deRows) {
+      if (!byEnt.has(row.entity_id)) byEnt.set(row.entity_id, new Set());
+      byEnt.get(row.entity_id).add(row.doc_id);
+    }
+    const linkRows = [];
+    for (const [eid, docSet] of byEnt) {
+      const arr = [...docSet];
+      if (arr.length < 2 || arr.length > 100) continue; // защита от «сверхсвязных» сущностей
+      const meta = entMeta.get(eid) || {};
+      const lt = LINK_TYPE_BY_ENTITY[meta.type] || 'related';
+      for (let i = 0; i < arr.length; i++) {
+        for (let j = i + 1; j < arr.length; j++) {
+          linkRows.push(withScope({
+            doc_a: arr[i], doc_b: arr[j], link_type: lt,
+            confidence: meta.type === 'amount_date' ? 0.7 : 0.95,
+            evidence: String(meta.label || meta.value || '').slice(0, 200), created_by: 'rule'
+          }));
+        }
+      }
+    }
+    // v107.4: дедупликация — одна пара документов может делить НЕСКОЛЬКО сущностей одного типа
+    // (иначе в одном upsert-пакете две строки с одинаковым ключом → «ON CONFLICT cannot affect row a second time»)
+    linkRows.push(...paymentLinks.map(withScope));
+    const linkMap = new Map();
+    for (const l of linkRows) {
+      const k = l.doc_a + '|' + l.doc_b + '|' + l.link_type;
+      const prev = linkMap.get(k);
+      if (!prev || Number(l.confidence) > Number(prev.confidence)) linkMap.set(k, l);
+    }
+    const linkRowsDedup = [...linkMap.values()];
+    for (let i = 0; i < linkRowsDedup.length; i += 500) {
+      const { error: le } = await supabaseAdmin.from('doc_links')
+        .upsert(linkRowsDedup.slice(i, i + 500), { onConflict: ocDocLink });
+      if (le) stats.errors.push('doc_links: ' + le.message);
+    }
+    stats.links = linkMap.size;
+    if (typeof logActivity === 'function') logActivity(req.user, 'Связи', 'построение графа', `документов: ${stats.docs}, сущностей: ${entArr.length}, связей: ${stats.links}`, req);
+    res.json({ ok: true, stats });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Список сущностей с количеством документов
+app.get('/api/links/entities', requireAuth, tabGuard('list'), async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const type = String(req.query.type || '').trim();
+    const scopeId = String(req.query.scope || '').trim();
+    let query = supabaseAdmin.from('entities').select('id, type, value, label').order('created_at', { ascending: false }).limit(500);
+    if (type) query = query.eq('type', type);
+    if (scopeId && (await hasScopeSupport())) query = query.eq('scope_id', scopeId === 'all' ? ZERO_SCOPE : scopeId);
+    if (q) query = query.or('label.ilike.%' + q.replace(/[%,]/g, ' ') + '%,value.ilike.%' + q.replace(/[%,]/g, ' ') + '%');
+    const { data, error } = await query;
+    if (error) {
+      if (/does not exist/i.test(error.message || '')) return res.status(500).json({ error: 'Нет таблиц графа. Выполните в Supabase SQL Editor: ' + LINKS_SQL });
+      throw error;
+    }
+    const ids = (data || []).map(e => e.id);
+    const counts = {};
+    for (let i = 0; i < ids.length; i += 200) {
+      const { data: de } = await supabaseAdmin.from('doc_entities').select('entity_id').in('entity_id', ids.slice(i, i + 200));
+      for (const r of (de || [])) counts[r.entity_id] = (counts[r.entity_id] || 0) + 1;
+    }
+    const out = (data || []).map(e => ({ ...e, typeLabel: ENTITY_TYPE_LABELS[e.type] || e.type, docs: counts[e.id] || 0 }));
+    // v117.1: если в запрошенной области пусто — подскажем, есть ли сущности в других областях
+    let elsewhere = null;
+    if (!out.length && scopeId && (await hasScopeSupport())) {
+      const { count } = await supabaseAdmin.from('entities').select('id', { count: 'exact', head: true }).neq('scope_id', scopeId === 'all' ? ZERO_SCOPE : scopeId);
+      elsewhere = count || 0;
+    }
+    res.json({ entities: out, elsewhere });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Граф вокруг одной сущности: документы + связанные сущности + связи документов
+app.get('/api/links/graph', requireAuth, tabGuard('list'), async (req, res) => {
+  try {
+    const eid = String(req.query.entity || '');
+    if (!eid) return res.status(400).json({ error: 'Параметр entity обязателен' });
+    const { data: ent, error: ee } = await supabaseAdmin.from('entities').select('*').eq('id', eid).maybeSingle();
+    if (ee) throw ee;
+    if (!ent) return res.status(404).json({ error: 'Сущность не найдена' });
+
+    const { data: deRows } = await supabaseAdmin.from('doc_entities').select('doc_id, role').eq('entity_id', eid);
+    const docIds = (deRows || []).map(r => r.doc_id).slice(0, 80);
+    let docs = [];
+    const rIds = docIds.filter(x => !String(x).startsWith('bm:'));
+    const bmIds = docIds.filter(x => String(x).startsWith('bm:')).map(x => String(x).slice(3));
+    if (rIds.length) {
+      const { data: rds } = await supabaseAdmin.from('receipts')
+        .select('id, store_name, store_name_ru, receipt_date, total_amount, currency, document_type, image_url, invoice_number, contract_number')
+        .in('id', rIds);
+      docs = rds || [];
+    }
+    if (bmIds.length) {
+      const { data: bms } = await supabaseAdmin.from('bank_movements')
+        .select('id, counterparty, concept, amount, operation_date, iban')
+        .in('id', bmIds);
+      for (const mv of (bms || [])) {
+        docs.push({
+          id: 'bm:' + mv.id, document_type: 'bank',
+          store_name: mv.counterparty || mv.concept || 'Движение банка',
+          store_name_ru: null,
+          receipt_date: mv.operation_date, total_amount: Math.abs(Number(mv.amount) || 0),
+          currency: 'EUR', concept: mv.concept || '', iban: mv.iban || ''
+        });
+      }
+    }
+    const present = new Set(docs.map(d => String(d.id)));
+
+    let relEntities = [];
+    if (docIds.length) {
+      const { data: de2 } = await supabaseAdmin.from('doc_entities').select('entity_id, doc_id').in('doc_id', docIds);
+      const cnt = {};
+      for (const r of (de2 || [])) if (r.entity_id !== eid) cnt[r.entity_id] = (cnt[r.entity_id] || 0) + 1;
+      const rids = Object.keys(cnt);
+      for (let i = 0; i < rids.length; i += 200) {
+        const { data: ents2 } = await supabaseAdmin.from('entities').select('id, type, value, label').in('id', rids.slice(i, i + 200));
+        relEntities.push(...(ents2 || []).map(e => ({ ...e, typeLabel: ENTITY_TYPE_LABELS[e.type] || e.type, shared: cnt[e.id] })));
+      }
+      relEntities.sort((a, b) => b.shared - a.shared);
+      relEntities = relEntities.slice(0, 60);
+    }
+
+    let links = [];
+    if (present.size) {
+      const idList = [...present].join(',');
+      let lq = supabaseAdmin.from('doc_links')
+        .select('doc_a, doc_b, link_type, confidence, evidence, created_by')
+        .or('doc_a.in.(' + idList + '),doc_b.in.(' + idList + ')');
+      if (ent.scope_id && (await hasScopeSupport())) lq = lq.eq('scope_id', ent.scope_id);
+      const { data: ls } = await lq;
+      links = (ls || []).filter(l => present.has(String(l.doc_a)) && present.has(String(l.doc_b)));
+    }
+    // v109: иерархия — связи сущности с другими сущностями (belongs_to / represents)
+    let entLinks = [];
+    try {
+      let elq = supabaseAdmin.from('entity_links')
+        .select('entity_a, entity_b, link_type, confidence, evidence')
+        .or('entity_a.eq.' + eid + ',entity_b.eq.' + eid);
+      if (ent.scope_id && (await hasScopeSupport())) elq = elq.eq('scope_id', ent.scope_id);
+      const { data: el } = await elq;
+      const otherIds = new Set();
+      for (const l of (el || [])) { otherIds.add(l.entity_a); otherIds.add(l.entity_b); }
+      otherIds.delete(eid);
+      const omap = new Map();
+      const oids = [...otherIds];
+      for (let i = 0; i < oids.length; i += 200) {
+        const { data: oe } = await supabaseAdmin.from('entities').select('id, type, value, label').in('id', oids.slice(i, i + 200));
+        for (const e of (oe || [])) omap.set(e.id, { ...e, typeLabel: ENTITY_TYPE_LABELS[e.type] || e.type });
+      }
+      entLinks = (el || [])
+        .map(l => ({ ...l, typeLabel: ENT_LINK_LABELS[l.link_type] || l.link_type, a: omap.get(l.entity_a), b: omap.get(l.entity_b) }))
+        .filter(l => l.a && l.b);
+    } catch (_) { /* таблицы entity_links может ещё не быть — иерархия появится после v109 SQL */ }
+    res.json({ entity: { ...ent, typeLabel: ENTITY_TYPE_LABELS[ent.type] || ent.type }, docs, relEntities, links, entLinks });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/receipts', requireAuth, tabGuard('list'), async (req, res) => {
   try {
     const user = req.user;
@@ -6468,44 +8462,58 @@ async function checkOpenAICompatProvider(key) {
     }));
   }
 
+  return mapWithConcurrency(ids.slice(0, 10), 3, (id) => pingOpenAICompatModel(key, id));
+}
+
+// v105: пинг ОДНОЙ OpenAI-совместимой модели (общий код для полной и одиночной проверки)
+async function pingOpenAICompatModel(key, id) {
+  const cfg = OPENAI_COMPAT_PROVIDERS[key];
+  const provider = cfg.displayName;
+  const displayName = prettifyModelName(id.replace(':free', ' (Free)'));
+  if (!cfg.apiKey) {
+    return { name: `${key}-${id}`, displayName, provider, active: false, ms: null, error: `${provider} API key не задан` };
+  }
   let tinyB64 = null;
   try {
     tinyB64 = (await sharp({ create: { width: 80, height: 30, channels: 3, background: '#ffffff' } }).jpeg({ quality: 70 }).toBuffer()).toString('base64');
   } catch (e) {}
-
-  return mapWithConcurrency(ids.slice(0, 10), 3, async (id) => {
-    const t0 = Date.now();
-    const displayName = prettifyModelName(id.replace(':free', ' (Free)'));
-    try {
-      const content = [
-        { type: 'text', text: 'Describe this image in one word.' }
-      ];
-      if (tinyB64) content.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${tinyB64}` } });
-      await withTimeout(axios.post(`${cfg.baseURL}/chat/completions`, {
-        model: id,
-        messages: [{ role: 'user', content }],
-        max_tokens: 8
-      }, {
-        headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', ...cfg.extraHeaders },
-        timeout: 25000
-      }), 30000);
-      return { name: `${key}-${id}`, displayName, provider, active: true, ms: Date.now() - t0, error: null };
-    } catch (e) {
-      let msg = String(e.response?.data?.error?.message || e.message || 'error');
-      // Человекочитаемые подсказки для типовых ошибок
-      if (/suspended due to insufficient balance/i.test(msg)) {
-        msg = `Недостаточно средств: пополните баланс на platform.moonshot.ai (Billing → Recharge)`;
-      } else if (/requires terms acceptance/i.test(msg)) {
-        msg = `Требуется принять условия модели в консоли провайдера`;
-      } else if (/invalid api key|incorrect api key|unauthorized/i.test(msg)) {
-        msg = `Неверный API ключ ${provider} — проверьте переменную в Railway`;
-      }
-      return { name: `${key}-${id}`, displayName, provider, active: false, ms: null, error: msg.slice(0, 140) };
+  const t0 = Date.now();
+  try {
+    const content = [
+      { type: 'text', text: 'Describe this image in one word.' }
+    ];
+    if (tinyB64) content.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${tinyB64}` } });
+    await withTimeout(axios.post(`${cfg.baseURL}/chat/completions`, {
+      model: id,
+      messages: [{ role: 'user', content }],
+      max_tokens: 8
+    }, {
+      headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', ...cfg.extraHeaders },
+      timeout: 25000
+    }), 30000);
+    return { name: `${key}-${id}`, displayName, provider, active: true, ms: Date.now() - t0, error: null };
+  } catch (e) {
+    let msg = String(e.response?.data?.error?.message || e.message || 'error');
+    // Человекочитаемые подсказки для типовых ошибок
+    if (/suspended due to insufficient balance/i.test(msg)) {
+      msg = `Недостаточно средств: пополните баланс на platform.moonshot.ai (Billing → Recharge)`;
+    } else if (/requires terms acceptance/i.test(msg)) {
+      msg = `Требуется принять условия модели в консоли провайдера`;
+    } else if (/invalid api key|incorrect api key|unauthorized/i.test(msg)) {
+      msg = `Неверный API ключ ${provider} — проверьте переменную в Railway`;
     }
-  });
+    return { name: `${key}-${id}`, displayName, provider, active: false, ms: null, error: msg.slice(0, 140) };
+  }
 }
 
-app.get('/api/check-models', async (req, res) => {
+// v105: кэш статусов моделей — фоновая проверка раз в 3 часа; модалка читает кэш мгновенно
+// и НЕ тратит дневные квоты бесплатных моделей на каждое открытие.
+let modelStatusCache = { checked_at: null, models: [] };
+let modelCheckRunning = false;
+
+async function runFullModelCheck() {
+  if (modelCheckRunning) return modelStatusCache;
+  modelCheckRunning = true;
   try {
     const [geminiModels, groqModels, ocrModels, openrouterModels, githubModels, mistralModels, kimiModels] = await Promise.all([
       checkGeminiModels().catch(() => []),
@@ -6520,7 +8528,7 @@ app.get('/api/check-models', async (req, res) => {
     const sortModels = arr => [...arr].sort((a, b) =>
       ((b.active === true) - (a.active === true)) || a.name.localeCompare(b.name)
     );
-    res.json({
+    modelStatusCache = {
       checked_at: new Date().toISOString(),
       models: [
         ...sortModels(ocrModels),
@@ -6531,7 +8539,81 @@ app.get('/api/check-models', async (req, res) => {
         ...sortModels(mistralModels),
         ...sortModels(kimiModels)
       ]
-    });
+    };
+    const act = modelStatusCache.models.filter(m => m.active).length;
+    console.log(`[models] фоновая проверка: активны ${act}/${modelStatusCache.models.length}`);
+  } finally {
+    modelCheckRunning = false;
+  }
+  return modelStatusCache;
+}
+
+// Обновить/добавить одну запись в кэше статусов
+function upsertModelStatus(entry) {
+  const i = modelStatusCache.models.findIndex(m => m.name === entry.name);
+  if (i >= 0) modelStatusCache.models[i] = entry;
+  else modelStatusCache.models.push(entry);
+}
+
+app.get('/api/check-models', async (req, res) => {
+  try {
+    const force = String(req.query.refresh || '') === '1';
+    if (!force && modelStatusCache.models.length) {
+      return res.json({ ...modelStatusCache, cached: true });
+    }
+    const data = await runFullModelCheck();
+    res.json({ ...data, cached: false });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// v105: одиночная проверка модели по кнопке 🔍 — не жжёт квоту остальных
+app.get('/api/check-model', async (req, res) => {
+  const name = String(req.query.name || '');
+  if (!name) return res.status(400).json({ error: 'Параметр name обязателен' });
+  try {
+    const t0 = Date.now();
+    let entry = null;
+    const key = ['openrouter', 'github', 'mistral', 'kimi'].find(k => name.startsWith(k + '-'));
+    if (key) {
+      entry = await pingOpenAICompatModel(key, name.slice(key.length + 1));
+    } else if (name.startsWith('groq-')) {
+      const id = name.slice(5);
+      const dn = prettifyModelName(id);
+      if (!groq) {
+        entry = { name, displayName: dn, provider: 'Groq', active: false, ms: null, error: 'GROQ_API_KEY не задан' };
+      } else {
+        try {
+          await withTimeout(groq.chat.completions.create({ model: id, messages: [{ role: 'user', content: 'Reply with OK' }], max_tokens: 8 }), 20000);
+          entry = { name, displayName: dn, provider: 'Groq', active: true, ms: Date.now() - t0, error: null };
+        } catch (e) {
+          entry = { name, displayName: dn, provider: 'Groq', active: false, ms: null, error: String(e.message || 'error').slice(0, 140) };
+        }
+      }
+    } else if (/^ocr/i.test(name)) {
+      // OCR.space: движки проверяются пакетно (лимит у них большой), обновляем все записи провайдера
+      const arr = await checkOCRSpaceModels();
+      arr.forEach(upsertModelStatus);
+      entry = arr.find(m => m.name === name) || null;
+    } else {
+      // Gemini (имя вида gemini-*)
+      const dn = prettifyModelName(name);
+      if (!genAI) {
+        entry = { name, displayName: dn, provider: 'Gemini', active: false, ms: null, error: 'GEMINI_API_KEY не задан' };
+      } else {
+        try {
+          const model = genAI.getGenerativeModel({ model: name, generationConfig: { maxOutputTokens: 8 } });
+          await withTimeout(model.generateContent('Reply with OK'), 12000);
+          entry = { name, displayName: dn, provider: 'Gemini', active: true, ms: Date.now() - t0, error: null };
+        } catch (e) {
+          entry = { name, displayName: dn, provider: 'Gemini', active: false, ms: null, error: String(e.message || 'error').slice(0, 140) };
+        }
+      }
+    }
+    if (!entry) return res.status(404).json({ error: 'Модель не найдена' });
+    upsertModelStatus(entry);
+    res.json({ checked_at: new Date().toISOString(), model: entry });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -6555,6 +8637,11 @@ if (r2Configured()) {
   setTimeout(dailyBackup, 10 * 60 * 1000);
   setInterval(dailyBackup, 24 * 60 * 60 * 1000);
   console.log('Auto-backup to R2: every 24h (first run in 10 min), keep last 14');
+
+// v105: фоновая проверка AI-моделей — раз в 3 часа (первый запуск через 2 мин после старта)
+setTimeout(() => { runFullModelCheck().catch(e => console.error('[models] фоновая проверка:', e.message)); }, 2 * 60 * 1000);
+setInterval(() => { runFullModelCheck().catch(e => console.error('[models] фоновая проверка:', e.message)); }, 3 * 60 * 60 * 1000);
+console.log('Model status monitor: every 3h (first run in 2 min)');
 
 // v94: ротация журнала действий — удалять записи старше 90 дней
 const cleanActivityLog = async () => {
