@@ -160,16 +160,23 @@ function extractLinksOnPage() {
     // v1.8.2: отсекаем ТОЛЬКО логотипы (фото товаров лежат на CDN leroymerlin — слово «leroy» резать нельзя!)
     const imgs = [...card.querySelectorAll('img')].filter(im => !/logo/i.test(String(im.alt || '') + ' ' + String(im.src || '')));
     const img = imgs[0] || null;
-    let imgSrc = '';
+    // v1.8.3: lazy-load — img.src там лоадер (loader-v2.svg); сначала data-* атрибуты, лоадеры/свг отсекаем
+    const BAD_IMG = /loader|placeholder|blank|spinner|\.gif($|\?)|\.svg($|\?)/i;
     const srcOf = (el) => {
       if (!el) return '';
-      let v = String(el.currentSrc || el.src || el.getAttribute('data-src') || el.getAttribute('data-lazy-src') || el.getAttribute('data-original') || '');
-      if (!v || /placeholder|blank|\.gif$/i.test(v)) { const ss = String(el.getAttribute('srcset') || el.getAttribute('data-srcset') || ''); v = ss.split(',').pop().trim().split(' ')[0] || ''; }
-      return v;
+      const cands = [el.getAttribute('data-src'), el.getAttribute('data-lazy-src'), el.getAttribute('data-original'), el.getAttribute('data-srcset'), el.getAttribute('srcset'), el.currentSrc, el.src];
+      for (let c of cands) {
+        if (!c) continue;
+        c = String(c).trim();
+        if (c.includes(',')) c = c.split(',').pop().trim().split(' ')[0]; // srcset: берём самый большой
+        else c = c.split(' ')[0];
+        if (c && !BAD_IMG.test(c)) return c;
+      }
+      return '';
     };
-    imgSrc = srcOf(img) || srcOf(card.querySelector('picture source')) || srcOf(card.querySelector('[data-src]'));
+    let imgSrc = srcOf(img) || srcOf(card.querySelector('picture source')) || srcOf(card.querySelector('[data-src]')) || srcOf(card.querySelector('[data-lazy-src]'));
     if (imgSrc && !/^https?:/i.test(imgSrc)) { try { imgSrc = new URL(imgSrc, location.href).href; } catch (e) { imgSrc = ''; } }
-    if (/placeholder|blank\.gif/i.test(imgSrc)) imgSrc = '';
+    if (BAD_IMG.test(imgSrc)) imgSrc = '';
     // v1.8.1: имя — из текста/aria-label ссылки в первую очередь; логотипное «Leroy Merlin» отсекаем
     let name = String(a.getAttribute('aria-label') || a.textContent || '').replace(/\s+/g, ' ').trim();
     if (name.length < 10 && img) name = String(img.alt || '').replace(/\s+/g, ' ').trim();

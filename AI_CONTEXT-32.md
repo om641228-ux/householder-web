@@ -2508,3 +2508,7 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 
 ## Локальная загрузка brand/MPN в Supabase (2026-09-06)
 - загрузить-в-supabase.py: CSV (Артикул/Производитель/Номер производителя) → REST Supabase напрямую (без деплоя). env SUPABASE_URL + SUPABASE_KEY (service_role). Пачки по 100 артикулов, PATCH только при изменении, статистика. Дублирует веб-кнопку «⇪ В базу» (v133) для локального сценария.
+
+## v133.1 + расширение v1.8.3 (2026-09-07) — фикс lazy-load фото
+- Причина «нет фото»: img.src в карточках = лоадер loader-v2.svg, реальный URL в data-src/srcset. srcOf переписан: сначала data-src/data-lazy-src/data-original/data-srcset/srcset, потом currentSrc/src; отсев BAD_IMG (loader|placeholder|blank|spinner|gif|svg).
+- Сервер ext-products: отсев image с loader/placeholder/svg. Backfill-чистка: image с %.svg/%loader%/%placeholder% → NULL.

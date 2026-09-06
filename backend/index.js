@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v133-2026-09-06', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v133.1-2026-09-07', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4779,6 +4779,12 @@ app.post('/api/parse/catalog/backfill-brand-mpn', requireAuth, requireRole('admi
         await supabaseAdmin.from('parse_products').update(upd).eq('id', j.id);
         cleaned++;
       }
+      // v133.1: вычищаем lazy-load лоадеры, попавшие в image вместо фото
+      const { data: loaders } = await supabaseAdmin.from('parse_products').select('id').eq('site', site).or('image.ilike.%loader%,image.ilike.%.svg,image.ilike.%placeholder%').limit(10000);
+      for (const j of (loaders || [])) {
+        await supabaseAdmin.from('parse_products').update({ image: null }).eq('id', j.id);
+        cleaned++;
+      }
     } catch (e) { /* не критично */ }
     let updated = 0, scanned = 0;
     for (let batch = 0; batch < 40; batch++) {
@@ -4945,7 +4951,7 @@ app.post('/api/parse/ext-products', requireAuth, async (req, res) => {
       }
       if (nm && !/^leroy\s*merlin$/i.test(nm.trim())) row.name = nm;
       let im = String(it.image || '').slice(0, 500);
-      if (im && /logo/i.test(im)) im = ''; // v130.1: режем ТОЛЬКО логотипы (CDN товаров — leroymerlin, слово «leroy» резать нельзя)
+      if (im && /logo|loader|placeholder|spinner|\.svg($|\?)/i.test(im)) im = ''; // v133.1: режем логотипы и lazy-load лоадеры (loader-v2.svg и т.п.)
       if (im) row.image = im;
       const artOk = /^\d{4,}$/.test(art) ? art : (am ? am[1] : null); if (artOk) row.article = artOk;
       const cg = String(it.category || req.body.category || '').slice(0, 300); if (cg) row.category = cg;
