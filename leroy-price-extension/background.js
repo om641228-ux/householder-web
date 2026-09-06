@@ -157,7 +157,8 @@ function extractLinksOnPage() {
     let card = a.closest('li, article, [data-testid*="product" i], [class*="product-card" i]') || a;
     if (card !== a && String(card.innerText || '').length > 600) card = a; // слишком большой — это не карточка
     if (card === a) { const p = a.parentElement; if (p && String(p.innerText || '').length < 600 && p.querySelectorAll('a[href*=".html"]').length <= 2) card = p; }
-    const imgs = [...card.querySelectorAll('img')].filter(im => !/logo|leroy/i.test(String(im.alt || '') + ' ' + String(im.src || '')));
+    // v1.8.2: отсекаем ТОЛЬКО логотипы (фото товаров лежат на CDN leroymerlin — слово «leroy» резать нельзя!)
+    const imgs = [...card.querySelectorAll('img')].filter(im => !/logo/i.test(String(im.alt || '') + ' ' + String(im.src || '')));
     const img = imgs[0] || null;
     let imgSrc = '';
     const srcOf = (el) => {

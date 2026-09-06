@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v130-2026-09-06', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v130.1-2026-09-06', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4700,7 +4700,7 @@ app.post('/api/parse/catalog/backfill-brand-mpn', requireAuth, requireRole('admi
         const fixedName = sm ? sm[1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).slice(0, 300) : null;
         const upd = { brand: null, mpn: null };
         if (fixedName) upd.name = fixedName;
-        if (j.image && /logo|leroy[\s-]?merlin/i.test(j.image)) upd.image = null;
+        if (j.image && /logo/i.test(j.image)) upd.image = null;
         await supabaseAdmin.from('parse_products').update(upd).eq('id', j.id);
         cleaned++;
       }
@@ -4852,7 +4852,7 @@ app.post('/api/parse/ext-products', requireAuth, async (req, res) => {
       }
       if (nm && !/^leroy\s*merlin$/i.test(nm.trim())) row.name = nm;
       let im = String(it.image || '').slice(0, 500);
-      if (im && /logo|leroy[\s-]?merlin/i.test(im)) im = ''; // v130: логотип — не фото товара
+      if (im && /logo/i.test(im)) im = ''; // v130.1: режем ТОЛЬКО логотипы (CDN товаров — leroymerlin, слово «leroy» резать нельзя)
       if (im) row.image = im;
       const artOk = /^\d{4,}$/.test(art) ? art : (am ? am[1] : null); if (artOk) row.article = artOk;
       const cg = String(it.category || req.body.category || '').slice(0, 300); if (cg) row.category = cg;
