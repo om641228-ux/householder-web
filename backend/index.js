@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v130.1-2026-09-06', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v132-2026-09-06', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4523,6 +4523,43 @@ app.get('/api/parse/catalog', requireAuth, tabGuard('list'), async (req, res) =>
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// v131: выгрузка спарсенного каталога в CSV (Excel-friendly, BOM), с теми же фильтрами/сортировкой
+app.get('/api/parse/catalog/export', requireAuth, tabGuard('list'), async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const site = String(req.query.site || '').trim();
+    const priced = String(req.query.priced || '') === '1';
+    const category = String(req.query.category || '').trim();
+    const SORTABLE = { image: 'image', name: 'name', article: 'article', brand: 'brand', mpn: 'mpn', category: 'category', price: 'price', date: 'last_seen' };
+    const sortCol = SORTABLE[String(req.query.sort || '')] || null;
+    const sortAsc = String(req.query.dir || '') === 'asc';
+    let query = supabaseAdmin.from('parse_products').select('*').limit(50000);
+    if (sortCol) query = query.order(sortCol, { ascending: sortAsc, nullsFirst: false });
+    else query = query.order(priced ? 'price_at' : 'last_seen', { ascending: false, nullsFirst: false });
+    if (site) query = query.eq('site', site);
+    if (priced) query = query.not('price', 'is', null);
+    if (category) query = query.ilike('category', category.replace(/[%_]/g, ' ') + '%');
+    if (q) {
+      const words = q.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6);
+      if (words.length === 1 && /^\d{5,}$/.test(words[0])) query = query.eq('article', words[0]);
+      else for (const w of words) query = query.ilike('name', '%' + w.replace(/[%_]/g, ' ') + '%');
+    }
+    const { data, error } = await query;
+    if (error) throw error;
+    const esc = (v) => { v = v == null ? '' : String(v); return /[";\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    const fmtD = (d) => d ? new Date(d).toLocaleString('ru-RU') : '';
+    const head = ['Фото', 'Товар', 'Артикул', 'Производитель', 'Номер производителя', 'Раздел', 'Цена', 'Валюта', 'Источник цены', 'Дата парсинга', 'URL'];
+    const lines = [head.join(';')];
+    for (const p of (data || [])) {
+      lines.push([p.image, p.name, p.article, p.brand, p.mpn, p.category, p.price != null ? p.price : (p.price_estimate != null ? '~' + p.price_estimate : ''), p.currency || '', p.price_source || '', fmtD(p.last_seen), p.url].map(esc).join(';'));
+    }
+    const csv = '\uFEFF' + lines.join('\r\n');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="catalog-' + new Date().toISOString().slice(0, 10) + '.csv"');
+    res.send(csv);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Обновление цен выбранных товаров: последовательно, с паузами 2–3,5 с (шаг 3), через прокси если задан (шаг 4)
 app.post('/api/parse/catalog/prices', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
   try {
@@ -4827,6 +4864,24 @@ app.get('/api/parse/brands', requireAuth, async (req, res) => {
       throw error;
     }
     res.json({ brands: data || [], total: count || 0 });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v132: выгрузка справочника брендов в CSV (для локальной обработки каталога)
+app.get('/api/parse/brands/export', requireAuth, async (req, res) => {
+  try {
+    const site = String(req.query.site || 'www.leroymerlin.es');
+    const { data, error } = await supabaseAdmin.from('parse_brands').select('name, url').eq('site', site).order('name').limit(5000);
+    if (error) {
+      if (/does not exist|find the table/i.test(error.message || '')) return res.status(400).json({ error: 'Нет таблицы parse_brands — выполните v119-парсинг.sql в Supabase' });
+      throw error;
+    }
+    const esc = (v) => { v = v == null ? '' : String(v); return /[";\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    const lines = ['Бренд;URL'];
+    for (const b of (data || [])) lines.push([b.name, b.url].map(esc).join(';'));
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="brands-' + new Date().toISOString().slice(0, 10) + '.csv"');
+    res.send('\uFEFF' + lines.join('\r\n'));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

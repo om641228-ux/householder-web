@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v130.1 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v132 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -3058,6 +3058,11 @@ function ParseTab({ token, isMobileView, canRun }) {
               title="Собрать справочник брендов сервером из sitemap-searchdex (без расширения)"
               style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #0e7490', background: '#ecfeff', color: '#0e7490', fontSize: 12, cursor: 'pointer' }}>{brandsBusy ? '⏳' : '⇪ Справочник'}</button>
           )}
+          {brandsTotal > 0 && (
+            <button onClick={() => window.open(`${API_URL}/api/parse/brands/export?token=${token}&site=www.leroymerlin.es`, '_blank')}
+              title="Скачать справочник брендов файлом CSV — для локального скрипта распознавания"
+              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #1e7e34', background: '#e8f5e9', color: '#1e7e34', fontSize: 12, cursor: 'pointer' }}>⬇ Бренды</button>
+          )}
         </div>
         {catItems && (
           <div style={{ marginTop: 8 }}>
@@ -3071,6 +3076,12 @@ function ParseTab({ token, isMobileView, canRun }) {
               <PageBar page={catPage + 1} totalPages={Math.max(1, Math.ceil(catTotal / catLimit))} onGo={(p) => { const pg = p - 1; setCatPage(pg); catSearch({ page: pg }); }} />
               <button onClick={() => { catSearch(); loadCatTree(); }} title="Обновить (список сам обновляется каждые 15 с)"
                 style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>🔄</button>
+              <button onClick={() => { // v131: выгрузка спарсенного каталога в CSV на компьютер (с текущими фильтрами/сортировкой)
+                const p = catParamsRef.current || {};
+                const u = `${API_URL}/api/parse/catalog/export?token=${token}&q=${encodeURIComponent(p.q || '')}&site=www.leroymerlin.es${p.pr ? '&priced=1' : ''}${p.cc ? '&category=' + encodeURIComponent(p.cc) : ''}${p.so && p.so.key ? '&sort=' + p.so.key + '&dir=' + p.so.dir : ''}`;
+                window.open(u, '_blank');
+              }} title="Скачать спарсенный каталог файлом CSV (открывается в Excel) — учитываются текущий поиск, раздел и сортировка"
+                style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #1e7e34', background: '#e8f5e9', color: '#1e7e34', fontSize: 12, cursor: 'pointer' }}>⬇ Скачать</button>
             </div>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
@@ -9128,7 +9139,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-06 · v130.1 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-06 · v132 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9141,7 +9152,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-06 · v130.1</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-06 · v132</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">
