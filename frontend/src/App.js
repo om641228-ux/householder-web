@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v134 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v135 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -3077,12 +3077,23 @@ function ParseTab({ token, isMobileView, canRun }) {
           <div style={{ marginTop: 10, border: '1px solid #f0f0f2', borderRadius: 10, padding: 8, maxHeight: 240, overflowY: 'auto' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
               <span style={{ fontSize: 12, fontWeight: 700 }}>🌳 Разделы каталога</span>
+              <span style={{ fontSize: 11, color: '#1e7e34', background: '#e8f8ef', borderRadius: 8, padding: '2px 8px' }}>✅ спарсено путей: {catTree.length}</span>
               {catCat && <button onClick={() => { setCatCat(''); setCatPage(0); catSearch({ category: '', page: 0 }); }}
                 title="Сбросить фильтр по разделу"
                 style={{ fontSize: 11, border: '1px solid #e74c3c', color: '#e74c3c', background: '#fdecea', borderRadius: 8, padding: '2px 8px', cursor: 'pointer' }}>✕ {catCat}</button>}
               {!catCat && <span style={{ fontSize: 11, color: '#8e8e93' }}>клик по разделу — товары этого раздела, ▸ — раскрыть вложенные</span>}
             </div>
             {renderCatLevel('', 0)}
+            {/* v135: уже спарсенные разделы верхнего уровня — чипы с количеством товаров */}
+            <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 8, borderTop: '1px solid #f0f0f2', paddingTop: 8 }}>
+              <span style={{ fontSize: 11, color: '#8e8e93', alignSelf: 'center' }}>📂 Что уже спарсено:</span>
+              {catChildrenOf('').map(([seg, cnt]) => (
+                <button key={seg} onClick={() => pickCat(seg)} title={`Открыть товары раздела «${seg}»`}
+                  style={{ fontSize: 11, padding: '2px 9px', borderRadius: 999, border: catCat === seg ? 'none' : '1px solid #d0d0d5', background: catCat === seg ? '#0071e3' : '#f5f5f7', color: catCat === seg ? '#fff' : '#333', cursor: 'pointer' }}>
+                  {seg} <b>{cnt}</b>
+                </button>
+              ))}
+            </div>
           </div>
         )}
         <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
@@ -3095,26 +3106,17 @@ function ParseTab({ token, isMobileView, canRun }) {
             title="Показать только товары с фактической ценой (последние обновлённые первыми)"
             style={{ padding: '8px 14px', borderRadius: 8, border: catPriced ? 'none' : '1px solid #34c759', background: catPriced ? '#34c759' : '#e8f8ef', color: catPriced ? '#fff' : '#1e7e34', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>💶 С ценой{catPricedTotal != null ? `: ${catPricedTotal}` : ''}</button>
           {catItems && catItems.length > 0 && canRun && (
-            <button onClick={() => fetchPrices(catItems.slice(0, 10).map(p => p.id))} title="Прямые цены со страниц (403 без прокси, паузы 2–3,5 с)"
-              style={{ padding: '8px 14px', borderRadius: 8, border: '1px solid #34c759', background: '#e8f8ef', color: '#1e7e34', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>💶 ×10</button>
-          )}
-          {catItems && catItems.length > 0 && canRun && (
             <button onClick={() => fetchAiPrices(catItems.slice(0, 10).map(p => p.id))} title="AI с веб-поиском находит цены по артикулу — без 403"
               style={{ padding: '8px 14px', borderRadius: 8, border: 'none', background: '#7c3aed', color: '#fff', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>🤖 AI-цены ×10</button>
           )}
           {canRun && (
-            <button onClick={backfillArticles} title="Извлечь артикулы из URL для уже загруженного каталога"
-              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>🔢 Артикулы</button>
-          )}
-          {canRun && (
-            <button onClick={backfillBrands} title="Заполнить производителя и № производителя из названий (справочник брендов + эвристика, быстро)"
+            <button onClick={backfillBrands} title="Заполнить производителя и № производителя из названий + почистить мусорные фото (лоадеры/этикетки)"
               style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>🏷 Бренды</button>
           )}
-          {brandsTotal != null && <span style={{ fontSize: 11, color: '#8e8e93', alignSelf: 'center' }} title="Справочник брендов">справочник: {brandsTotal} брендов</span>}
           {canRun && (
             <button onClick={syncBrands} disabled={brandsBusy}
               title="Собрать справочник брендов сервером из sitemap-searchdex (без расширения)"
-              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #0e7490', background: '#ecfeff', color: '#0e7490', fontSize: 12, cursor: 'pointer' }}>{brandsBusy ? '⏳' : '⇪ Справочник'}</button>
+              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #0e7490', background: '#ecfeff', color: '#0e7490', fontSize: 12, cursor: 'pointer' }}>{brandsBusy ? '⏳' : `⇪ Справочник${brandsTotal != null ? ` (${brandsTotal})` : ''}`}</button>
           )}
           {brandsTotal > 0 && (
             <button onClick={() => window.open(`${API_URL}/api/parse/brands/export?token=${token}&site=www.leroymerlin.es`, '_blank')}
@@ -9209,7 +9211,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-07 · v134 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-07 · v135 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9222,7 +9224,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-07 · v134</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-07 · v135</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">

@@ -66,9 +66,22 @@ async function collectOne(api, token, p) {
         if (id === tab.id && ch.status === 'complete') { clearTimeout(to); chrome.tabs.onUpdated.removeListener(f); res(); }
       });
     });
-    await sleep(1000); // даём дорендериться JSON-LD/цене
-    const [inj] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractOnPage });
-    const d = (inj && inj.result) || {};
+    // v1.11: «пока нет цены и фото — не идём дальше»: до 3 попыток с ожиданием и прокруткой
+    let d = {};
+    for (let att = 1; att <= 3; att++) {
+      await sleep(att === 1 ? 1000 : 2500); // даём дорендериться JSON-LD/цене/фото
+      if (att > 1) {
+        try { await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => { window.scrollTo(0, document.body.scrollHeight / 2); window.scrollTo(0, 0); } }); } catch (e) {}
+        await sleep(1200);
+      }
+      try {
+        const [inj] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractOnPage });
+        const nd = (inj && inj.result) || {};
+        d = { ...d, ...Object.fromEntries(Object.entries(nd).filter(([, v]) => v != null && v !== '')) };
+      } catch (e) {}
+      if (d.price != null && d.image) break; // есть и цена, и фото — переходим к следующему
+      if (d.captcha) break;                  // капчу ретраить бессмысленно
+    }
     if (d.price != null) {
       const rr = await fetch(`${api}/api/parse/ext-price?token=${encodeURIComponent(token)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -266,8 +279,41 @@ async function runSectionOnce(api, token, startUrl) {
         } catch (e) { /* нет доступа к MAIN — работаем по DOM */ }
         // v1.10: добиваем MPN из строки товара, если из JSON не пришёл
         for (const l of links) { if (!l.mpn) { const d = deriveMpn(l.name, l.brand); if (d) l.mpn = d; } }
+        // v1.11: «пока нет цены и фото — не переходим»: до 3 проходов по странице (дозагрузка lazy-load)
+        for (let pass = 2; pass <= 3 && links.length; pass++) {
+          const noPhoto = links.filter(l => !l.image).length;
+          const noPrice = links.filter(l => l.price == null).length;
+          if (noPhoto <= links.length * 0.2 && noPrice <= links.length * 0.2) break; // ≥80% полных — идём дальше
+          progress(`⏳ Стр. ${page}: фото нет у ${noPhoto}/${links.length}, цены нет у ${noPrice} — догружаю (проход ${pass})…`);
+          try {
+            await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => new Promise((res) => { let y = 0; const t = setInterval(() => { y += 400; window.scrollTo(0, y); if (y >= document.body.scrollHeight) { clearInterval(t); window.scrollTo(0, 0); res(); } }, 250); }) });
+          } catch (e) {}
+          await sleep(2000);
+          let again = [];
+          try {
+            const [inj2] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractLinksOnPage });
+            again = (inj2 && inj2.result) || [];
+          } catch (e) {}
+          try {
+            const [st2] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: 'MAIN', func: collectStateProducts });
+            again = again.concat((st2 && st2.result) || []);
+          } catch (e) {}
+          const byU = new Map(links.map(l => [l.url, l]));
+          for (const a of again) {
+            const ex = byU.get(a.url);
+            if (!ex) continue;
+            if (!ex.image && a.image) ex.image = a.image;
+            if (ex.price == null && a.price != null) { ex.price = a.price; ex.currency = a.currency || 'EUR'; }
+            if (!ex.brand && a.brand) ex.brand = a.brand;
+            if (!ex.mpn && a.mpn) ex.mpn = a.mpn;
+          }
+        }
       } catch (e) { progress('⚠️ Стр. ' + page + ': не загрузилась — ' + e.message); }
       if (tab) try { await chrome.tabs.remove(tab.id); } catch (e) {}
+      if (links.length) {
+        const wp = links.filter(l => l.price != null).length, wi = links.filter(l => l.image).length, wb = links.filter(l => l.brand).length;
+        progress(`📦 Стр. ${page}: ${links.length} товаров · 💶 с ценой ${wp} · 📷 с фото ${wi} · 🏷 с брендом ${wb} · отправлено всего ${totalSent}`);
+      }
       const fresh = links.filter(l => !known.has(l.url));
       if (!fresh.length) { progress(`✅ Раздел собран до конца: ${page - 1} стр., товаров отправлено ${totalSent}`); break; }
       fresh.forEach(l => known.add(l.url));
