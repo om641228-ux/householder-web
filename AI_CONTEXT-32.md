@@ -2467,3 +2467,15 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Бренды есть в НЕзащищённом sitemap-searchdex1..3.xml как /productos/marcas/<slug>/… — расширение не нужно.
 - Бэкенд: POST /api/parse/brands/sync (axios, ≤80МБ, upsert parse_brands, humanize slug); канонизация ALL-CAPS → Title Case (METABO→Metabo, BLACK+DECKER сохраняется); MPN ≥5 символов и отсев единиц (710W, 18V, 3.0AH). build v129.2-2026-09-05.
 - Фронт: кнопка «⇪ Справочник» рядом со счётчиком брендов.
+
+## v1.8 расширение (2026-09-05) — очередь разделов из файла
+- runSectionOnce (тело) + runSection (обёртка-флаги) + runSectionQueue: popup принимает .txt (URL на строку, # комментарии, дедуп), кнопка «📂 Парсить разделы из файла»; разделы идут по очереди с паузой 4–7 с, прогресс «Раздел N/M», общий стоп работает.
+
+## v1.8.1 расширение (2026-09-06) — фикс «Leroy Merlin» вместо товара при парсинге из файла
+- extractLinksOnPage: карточка = ближайший компактный контейнер (li/article/[data-testid*=product]/[class*=product-card]); если innerText > 600 — берём саму ссылку/родителя (защита от захвата шапки); img фильтруется по logo/leroy; имя: aria-label/text ссылки → img.alt; «Leroy Merlin» отсекается; fallback — slug из URL.
+
+## v130 (2026-09-06) — столбцы Фото/Дата, сортировка, серверный отсев мусора
+- Каталог: новые столбцы «Фото» (отдельно от названия) и «Дата» (last_seen; в title — first_seen/price_at); сортировка кликом по ЛЮБОМУ заголовку (▲/▼), серверная через sort/dir (whitelist: image,name,article,brand,mpn,category,price,date); сортировка сохраняется в catParamsRef и при автообновлении.
+- ext-products: серверный отсев мусора витрины — имя «Leroy Merlin» заменяется читаемым slug из URL, изображения с logo/leroy-merlin отбрасываются (защита даже от старой версии расширения).
+- backfill-brand-mpn: пред-чистка строк name='Leroy Merlin' (до 5000) — имя из slug, logo-image → NULL, brand/mpn сброшены и пересчитаны; ответ включает cleaned, alert показывает.
+- build: 'v130-2026-09-06'.

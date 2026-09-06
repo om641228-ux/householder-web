@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v129.2 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v130 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2695,6 +2695,7 @@ function ParseTab({ token, isMobileView, canRun }) {
   const LM_SITEMAPS = [1, 2, 3, 4].map(n => `https://www.leroymerlin.es/sitemap-productos${n}.xml`);
   const [catSync, setCatSync] = useState({}); // url -> {status:'run'|'ok'|'err', msg}
   const [catQ, setCatQ] = useState('');
+  const [catSort, setCatSort] = useState({ key: '', dir: 'desc' }); // v130: сортировка каталога
   const [catItems, setCatItems] = useState(null); // null = не искали
   const [catTotal, setCatTotal] = useState(0);
   const [catPriced, setCatPriced] = useState(false); // v123.1: показывать только с ценой
@@ -2837,10 +2838,11 @@ function ParseTab({ token, isMobileView, canRun }) {
     const pg = over.page !== undefined ? over.page : catPage;
     const lim = over.limit !== undefined ? over.limit : catLimit;
     const cc = over.category !== undefined ? over.category : catCat;
-    catParamsRef.current = { q, pr, pg, lim, cc };
+    const so = over.sort !== undefined ? over.sort : catSort; // v130
+    catParamsRef.current = { q, pr, pg, lim, cc, so };
     if (!over.silent) { setCatBusy(true); setErr(''); }
     try {
-      const r = await fetch(`${API_URL}/api/parse/catalog?token=${token}&q=${encodeURIComponent(q)}&site=www.leroymerlin.es${pr ? '&priced=1' : ''}${cc ? '&category=' + encodeURIComponent(cc) : ''}&limit=${lim}&offset=${pg * lim}`);
+      const r = await fetch(`${API_URL}/api/parse/catalog?token=${token}&q=${encodeURIComponent(q)}&site=www.leroymerlin.es${pr ? '&priced=1' : ''}${cc ? '&category=' + encodeURIComponent(cc) : ''}${so.key ? '&sort=' + so.key + '&dir=' + so.dir : ''}&limit=${lim}&offset=${pg * lim}`);
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
       if (j.missing) setErr('Нет таблицы parse_products — выполните v119-парсинг.sql повторно в Supabase');
@@ -2876,6 +2878,14 @@ function ParseTab({ token, isMobileView, canRun }) {
     return Object.entries(agg).sort((a, b) => b[1] - a[1]);
   };
   const pickCat = (full) => { setCatCat(full); setCatPage(0); catSearch({ category: full, page: 0 }); };
+  // v130: кликабельный заголовок сортировки
+  const catTh = (key, label, extra) => (
+    <th onClick={() => { const nd = catSort.key === key && catSort.dir === 'desc' ? 'asc' : 'desc'; const ns = { key, dir: nd }; setCatSort(ns); setCatPage(0); catSearch({ sort: ns, page: 0 }); }}
+      title="Нажмите для сортировки"
+      style={{ padding: '6px 8px', cursor: 'pointer', userSelect: 'none', color: catSort.key === key ? '#0071e3' : undefined, ...(extra || {}) }}>
+      {label}{catSort.key === key ? (catSort.dir === 'asc' ? ' \u25b2' : ' \u25bc') : ''}
+    </th>
+  );
   const renderCatLevel = (prefix, depth) => catChildrenOf(prefix).map(([seg, cnt]) => {
     const full = prefix ? prefix + ' > ' + seg : seg;
     const hasKids = catTree.some(c => c.path.startsWith(full + ' > '));
@@ -2902,7 +2912,7 @@ function ParseTab({ token, isMobileView, canRun }) {
     const iv = setInterval(() => {
       if (document.visibilityState === 'visible') {
         const p = catParamsRef.current || {};
-        catSearch({ q: p.q || '', priced: !!p.pr, page: p.pg || 0, limit: p.lim || 60, category: p.cc || '', silent: true });
+        catSearch({ q: p.q || '', priced: !!p.pr, page: p.pg || 0, limit: p.lim || 60, category: p.cc || '', sort: p.so || { key: '', dir: 'desc' }, silent: true });
         loadCatTree();
       }
     }, 15000);
@@ -2963,7 +2973,7 @@ function ParseTab({ token, isMobileView, canRun }) {
       if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
       setErr('');
       catSearch();
-      alert(`Готово: проверено ${j.scanned}, заполнено ${j.updated} (производитель/№ производителя)`);
+      alert(`Готово: проверено ${j.scanned}, заполнено ${j.updated} (производитель/№ производителя)` + (j.cleaned ? `\n🧹 Почищено мусорных строк «Leroy Merlin»: ${j.cleaned}` : ''));
     } catch (e) { setErr(e.message); }
   };
   const backfillArticles = async () => {
@@ -3066,22 +3076,26 @@ function ParseTab({ token, isMobileView, canRun }) {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
                   <tr style={{ textAlign: 'left', color: '#8e8e93', borderBottom: '2px solid #f0f0f2' }}>
-                    <th style={{ padding: '6px 8px' }}>Товар</th>
-                    <th style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>Артикул</th>
-                    <th style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>Производитель</th>
-                    <th style={{ padding: '6px 8px' }}>Раздел</th>
-                    <th style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>Цена</th>
+                    {catTh('image', 'Фото')}
+                    {catTh('name', 'Товар')}
+                    {catTh('article', 'Артикул', { whiteSpace: 'nowrap' })}
+                    {catTh('brand', 'Производитель', { whiteSpace: 'nowrap' })}
+                    {catTh('category', 'Раздел')}
+                    {catTh('price', 'Цена', { whiteSpace: 'nowrap' })}
+                    {catTh('date', 'Дата', { whiteSpace: 'nowrap' })}
                     {canRun && <th style={{ padding: '6px 8px' }}></th>}
                   </tr>
                 </thead>
                 <tbody>
                   {catItems.map(p => (
                     <tr key={p.id} style={{ borderBottom: '1px solid #f5f5f7' }}>
-                      <td style={{ padding: '6px 8px' }}>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 220 }}>
-                          {p.image && <img src={p.image} alt="" loading="lazy" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 6, flexShrink: 0 }} />}
-                          <a href={p.url} target="_blank" rel="noreferrer" style={{ color: '#0071e3', textDecoration: 'none' }}>{p.name || p.url}</a>
-                        </div>
+                      <td style={{ padding: '6px 8px', width: 52 }}>
+                        {p.image
+                          ? <img src={p.image} alt="" loading="lazy" style={{ width: 44, height: 44, objectFit: 'contain', borderRadius: 6, background: '#fafafa' }} />
+                          : <span style={{ color: '#e5e5ea', fontSize: 11 }}>—</span>}
+                      </td>
+                      <td style={{ padding: '6px 8px', minWidth: 200 }}>
+                        <a href={p.url} target="_blank" rel="noreferrer" style={{ color: '#0071e3', textDecoration: 'none' }}>{p.name || p.url}</a>
                       </td>
                       <td style={{ padding: '6px 8px', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{p.article || '—'}</td>
                       <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
@@ -3099,6 +3113,10 @@ function ParseTab({ token, isMobileView, canRun }) {
                         {(p.price_source === 'extension' || p.price_source === 'extension-list') && <span title={p.price_source === 'extension-list' ? 'Цена снята расширением с витрины раздела' : 'Цена собрана расширением со страницы товара'} style={{ fontSize: 10, color: '#16a34a', marginLeft: 4 }}>🧩</span>}
                         {p.price_estimate != null && <span title="Есть оценка AI (price_estimate), не путать с фактической ценой" style={{ fontSize: 10, color: '#94a3b8', marginLeft: 4 }}>🤖≈</span>}
                         {p.price_prev != null && p.price != null && Math.abs(p.price - p.price_prev) > 0.001 && <span title={`Было ${p.price_prev} ${p.currency || '€'}`} style={{ fontSize: 10, marginLeft: 4, color: p.price > p.price_prev ? '#e67e22' : '#1e7e34' }}>{p.price > p.price_prev ? '📈' : '📉'} было {p.price_prev}</span>}
+                      </td>
+                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontSize: 11, color: '#8e8e93' }}
+                        title={p.last_seen ? ('Дата парсинга: ' + new Date(p.last_seen).toLocaleString('ru-RU') + (p.first_seen ? ' · впервые: ' + new Date(p.first_seen).toLocaleString('ru-RU') : '') + (p.price_at ? ' · цена: ' + new Date(p.price_at).toLocaleString('ru-RU') : '')) : ''}>
+                        {p.last_seen ? new Date(p.last_seen).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }) + ' ' + new Date(p.last_seen).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '—'}
                       </td>
                       {canRun && (
                         <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
@@ -9110,7 +9128,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-05 · v129.2 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-06 · v130 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9123,7 +9141,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-05 · v129.2</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-06 · v130</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">

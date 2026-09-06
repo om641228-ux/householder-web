@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v129.2-2026-09-05', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v130-2026-09-06', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4491,7 +4491,14 @@ app.get('/api/parse/catalog', requireAuth, tabGuard('list'), async (req, res) =>
     const category = String(req.query.category || '').trim(); // v126: фильтр по пути раздела (префикс)
     const lim = Math.min(200, Math.max(10, parseInt(req.query.limit || '60', 10) || 60));
     const off = Math.max(0, parseInt(req.query.offset || '0', 10) || 0); // v126: постранично
-    let query = supabaseAdmin.from('parse_products').select('*', { count: 'exact' }).order(priced ? 'price_at' : 'last_seen', { ascending: false, nullsFirst: false }).range(off, off + lim - 1);
+    // v130: сортировка по любому столбцу (строгий whitelist)
+    const SORTABLE = { image: 'image', name: 'name', article: 'article', brand: 'brand', mpn: 'mpn', category: 'category', price: 'price', date: 'last_seen' };
+    const sortCol = SORTABLE[String(req.query.sort || '')] || null;
+    const sortAsc = String(req.query.dir || '') === 'asc';
+    let query = supabaseAdmin.from('parse_products').select('*', { count: 'exact' });
+    if (sortCol) query = query.order(sortCol, { ascending: sortAsc, nullsFirst: false });
+    else query = query.order(priced ? 'price_at' : 'last_seen', { ascending: false, nullsFirst: false });
+    query = query.range(off, off + lim - 1);
     if (site) query = query.eq('site', site);
     if (priced) query = query.not('price', 'is', null);
     if (category) query = query.ilike('category', category.replace(/[%_]/g, ' ') + '%');
@@ -4684,6 +4691,20 @@ app.post('/api/parse/catalog/backfill-brand-mpn', requireAuth, requireRole('admi
       const { data: br } = await supabaseAdmin.from('parse_brands').select('name').eq('site', site).limit(1000);
       dbBrands = (br || []).map(b => b.name);
     } catch (e) { /* таблицы ещё нет */ }
+    // v130: чистка мусорных строк «Leroy Merlin» — имя из slug URL, логотип/бренд сбрасываем
+    let cleaned = 0;
+    try {
+      const { data: junk } = await supabaseAdmin.from('parse_products').select('id, url, image').eq('site', site).ilike('name', 'Leroy Merlin').limit(5000);
+      for (const j of (junk || [])) {
+        const sm = String(j.url || '').match(/\/([^/]+)-\d{5,}\.html?/i);
+        const fixedName = sm ? sm[1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).slice(0, 300) : null;
+        const upd = { brand: null, mpn: null };
+        if (fixedName) upd.name = fixedName;
+        if (j.image && /logo|leroy[\s-]?merlin/i.test(j.image)) upd.image = null;
+        await supabaseAdmin.from('parse_products').update(upd).eq('id', j.id);
+        cleaned++;
+      }
+    } catch (e) { /* не критично */ }
     let updated = 0, scanned = 0;
     for (let batch = 0; batch < 40; batch++) {
       const { data, error } = await supabaseAdmin.from('parse_products').select('id, name, brand, mpn').eq('site', site).or('brand.is.null,mpn.is.null').not('name', 'is', null).limit(500);
@@ -4733,7 +4754,7 @@ app.post('/api/parse/catalog/backfill-brand-mpn', requireAuth, requireRole('admi
       }
       if (data.length < 500) break;
     }
-    res.json({ ok: true, scanned, updated });
+    res.json({ ok: true, scanned, updated, cleaned });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -4823,8 +4844,16 @@ app.post('/api/parse/ext-products', requireAuth, async (req, res) => {
       const art = String(it.article || '').trim();
       // v127.2: пустые поля НЕ включаем — иначе upsert затирает картинки/названия, пришедшие из sitemap
       const row = { site: host, url, last_seen: now };
-      const nm = String(it.name || '').slice(0, 300); if (nm) row.name = nm;
-      const im = String(it.image || '').slice(0, 500); if (im) row.image = im;
+      let nm = String(it.name || '').slice(0, 300);
+      // v130: имя сайта вместо товара — восстанавливаем из slug URL
+      if (!nm || /^leroy\s*merlin$/i.test(nm.trim())) {
+        const sm = url.match(/\/([^/]+)-\d{5,}\.html?/i);
+        nm = sm ? sm[1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()).slice(0, 300) : '';
+      }
+      if (nm && !/^leroy\s*merlin$/i.test(nm.trim())) row.name = nm;
+      let im = String(it.image || '').slice(0, 500);
+      if (im && /logo|leroy[\s-]?merlin/i.test(im)) im = ''; // v130: логотип — не фото товара
+      if (im) row.image = im;
       const artOk = /^\d{4,}$/.test(art) ? art : (am ? am[1] : null); if (artOk) row.article = artOk;
       const cg = String(it.category || req.body.category || '').slice(0, 300); if (cg) row.category = cg;
       const br = String(it.brand || '').slice(0, 120); if (br) row.brand = br; // v128

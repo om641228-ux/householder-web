@@ -153,9 +153,12 @@ function extractLinksOnPage() {
     if (!/-\d{5,}\.html?$/i.test(href)) continue;
     if (seen.has(href)) continue;
     seen.add(href);
-    // v1.5: фото и цена — из всей карточки товара, не только из ссылки
-    const card = a.closest('li, article, [class*="product" i], [class*="card" i]') || a.parentElement || a;
-    const img = card.querySelector('img') || a.querySelector('img');
+    // v1.8.1: карточка = ближайший КОМПАКТНЫЙ контейнер (иначе хватается шапка сайта с логотипом)
+    let card = a.closest('li, article, [data-testid*="product" i], [class*="product-card" i]') || a;
+    if (card !== a && String(card.innerText || '').length > 600) card = a; // слишком большой — это не карточка
+    if (card === a) { const p = a.parentElement; if (p && String(p.innerText || '').length < 600 && p.querySelectorAll('a[href*=".html"]').length <= 2) card = p; }
+    const imgs = [...card.querySelectorAll('img')].filter(im => !/logo|leroy/i.test(String(im.alt || '') + ' ' + String(im.src || '')));
+    const img = imgs[0] || null;
     let imgSrc = '';
     const srcOf = (el) => {
       if (!el) return '';
@@ -166,13 +169,20 @@ function extractLinksOnPage() {
     imgSrc = srcOf(img) || srcOf(card.querySelector('picture source')) || srcOf(card.querySelector('[data-src]'));
     if (imgSrc && !/^https?:/i.test(imgSrc)) { try { imgSrc = new URL(imgSrc, location.href).href; } catch (e) { imgSrc = ''; } }
     if (/placeholder|blank\.gif/i.test(imgSrc)) imgSrc = '';
-    let name = String((img && img.alt) || a.getAttribute('aria-label') || a.textContent || '').replace(/\s+/g, ' ').trim();
+    // v1.8.1: имя — из текста/aria-label ссылки в первую очередь; логотипное «Leroy Merlin» отсекаем
+    let name = String(a.getAttribute('aria-label') || a.textContent || '').replace(/\s+/g, ' ').trim();
+    if (name.length < 10 && img) name = String(img.alt || '').replace(/\s+/g, ' ').trim();
+    if (/^leroy\s*merlin$/i.test(name)) name = '';
     if (name.length > 300) name = name.slice(0, 300);
     // цена в карточке: берём ПОСЛЕДНЮю «xx,xx €» (первая бывает зачёркнутой старой)
     let price = null, currency = '';
     const txt = String(card.innerText || '');
     const matches = [...txt.matchAll(/(\d{1,5}[.,]\d{2})\s*(€|EUR)/g)];
     if (matches.length) { price = parseFloat(matches[matches.length - 1][1].replace(',', '.')); currency = 'EUR'; }
+    if (!name) {
+      const sm = href.match(/\/([^/]+)-\d{5,}\.html?$/i);
+      if (sm) name = sm[1].replace(/-/g, ' ').slice(0, 300);
+    }
     out.push({ url: href, name, image: imgSrc, category, price, currency });
   }
   return out;
@@ -182,6 +192,11 @@ function extractLinksOnPage() {
 async function runSection(api, token, startUrl) {
   if (running) return;
   running = true; stopped = false;
+  await runSectionOnce(api, token, startUrl);
+  running = false;
+}
+
+async function runSectionOnce(api, token, startUrl) {
   const known = new Set();
   let totalSent = 0;
   try {
@@ -223,7 +238,6 @@ async function runSection(api, token, startUrl) {
       await sleep(2500 + Math.random() * 1500); // вежливая пауза между страницами
     }
   } catch (e) { progress('❌ ' + e.message); }
-  running = false;
 }
 
 // v1.7: извлечение брендов со страницы /productos/marcas/
@@ -278,8 +292,27 @@ async function runBrands(api, token) {
   running = false;
 }
 
+// v1.8: очередь разделов из файла (по одному URL на строку, # — комментарий)
+async function runSectionQueue(api, token, urls) {
+  if (running) return;
+  running = true; stopped = false;
+  let done = 0;
+  try {
+    for (const u of urls) {
+      if (stopped) { progress(`⏹ Очередь остановлена: ${done}/${urls.length} разделов`); break; }
+      progress(`🗂 Раздел ${done + 1}/${urls.length}: ${u}`);
+      await runSectionOnce(api, token, u);
+      done++;
+      await sleep(4000 + Math.random() * 3000); // пауза между разделами 4–7 с
+    }
+    if (!stopped) progress(`✅ Все разделы обработаны: ${done}/${urls.length}`);
+  } catch (e) { progress('❌ ' + e.message); }
+  running = false;
+}
+
 chrome.runtime.onMessage.addListener((m) => {
   if (m.type === 'section' && !running) runSection(m.api, m.token, m.url);
+  if (m.type === 'sections' && !running) runSectionQueue(m.api, m.token, m.urls || []);
   if (m.type === 'brands' && !running) runBrands(m.api, m.token);
   if (m.type === 'start' && !running) run(m.api, m.token, m.batch, m.mode, m.staleDays, !!m.continuous);
   if (m.type === 'stop') stopped = true;
