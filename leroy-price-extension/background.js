@@ -4,6 +4,65 @@ const progress = (text) => chrome.runtime.sendMessage({ type: 'progress', text }
 
 // извлечение JSON-LD Product на странице товара
 function extractOnPage() {
+  // v1.12: визуальный разбор блока цены LM — текущая (красная крупная) / зачёркнутая / скидка (%, €)
+  const __num = (s) => { // «2.999»→2999, «10,99»→10.99, «1.234,56»→1234.56
+    s = String(s).replace(/[\s\u00a0]/g, '');
+    if (/^\d{1,3}(\.\d{3})+(,\d{1,2})?$/.test(s)) s = s.replace(/\./g, '').replace(',', '.');
+    else s = s.replace(',', '.');
+    const n = parseFloat(s);
+    return (isFinite(n) && n > 0 && n < 100000) ? n : null;
+  };
+  const __struck = (el) => {
+    for (let e = el; e && e.nodeType === 1; e = e.parentElement) {
+      if (e.tagName === 'DEL' || e.tagName === 'S' || e.tagName === 'STRIKE') return true;
+      const cn = String(typeof e.className === 'string' ? e.className : '');
+      if (/tachad|strike|line-through|old[-_ ]?price|antes|was[-_ ]?price|previous|regular[-_ ]?price|original[-_ ]?price/i.test(cn)) return true;
+      try { const td = (getComputedStyle(e).textDecorationLine || '') + ' ' + (getComputedStyle(e).textDecoration || ''); if (/line-through/i.test(td)) return true; } catch (err) {}
+    }
+    return false;
+  };
+  const __visualPrice = (root) => {
+    const res = { price: null, price_original: null, discount_pct: null, discount_abs: null };
+    if (!root || !root.querySelectorAll) return res;
+    let bestFs = -1;
+    for (const el of root.querySelectorAll('span,div,p,strong,b,em,s,del,strike,sup,h2,h3,h4')) {
+      if (el.childElementCount > 2) continue;
+      let t = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!t || t.length > 40) continue;
+      if (t.indexOf('\u20ac') < 0) { // цена разбита: «2.999» + <sup>€</sup>
+        const nx = el.nextElementSibling, pv = el.previousElementSibling;
+        if (/^\d{1,3}([ .]\d{3})*(,\d{1,2})?$/.test(t) && nx && /^\s*\u20ac\s*$/.test(String(nx.textContent || ''))) t = t + ' \u20ac';
+      }
+      let m = t.match(/^[\-\u2212\u2013]\s*(\d+(?:[.,]\d+)?)\s*%/); // бейдж «-59 %»
+      if (m) { const v = parseFloat(m[1].replace(',', '.')); if (v > 0 && v < 100) res.discount_pct = v; continue; }
+      m = t.match(/^[\-\u2212\u2013]\s*([\d.,\s\u00a0]+?)\s*\u20ac/); // бейдж «-1.991 €»
+      if (m) { const v = __num(m[1]); if (v != null) res.discount_abs = v; continue; }
+      if (t.indexOf('\u20ac') < 0) continue;
+      if (/\u20ac\s*\/|\/(kg|m\u00b2|m2|l|ud|unidad)s?\b/i.test(t)) continue; // цена за единицу
+      const pm = t.match(/(\d{1,3}(?:[ .\u00a0]\d{3})+(?:,\d{1,2})?|\d{1,6}[.,]\d{2}|\d{1,6})(?=\s*\u20ac)/);
+      if (!pm) continue;
+      const n = __num(pm[1]);
+      if (n == null) continue;
+      if (__struck(el)) { if (res.price_original == null || n > res.price_original) res.price_original = n; }
+      else {
+        let fs = 10;
+        try { fs = parseFloat(getComputedStyle(el).fontSize) || 10; } catch (err) {}
+        if (fs > bestFs || (fs === bestFs && res.price == null)) { bestFs = fs; res.price = n; }
+      }
+    }
+    if (res.price != null && res.price_original != null && res.price_original > res.price) {
+      if (res.discount_abs == null) res.discount_abs = Math.round((res.price_original - res.price) * 100) / 100;
+      if (res.discount_pct == null) res.discount_pct = Math.round((res.price_original - res.price) / res.price_original * 1000) / 10;
+    } else if (res.price != null && res.price_original == null && res.discount_abs != null) {
+      res.price_original = Math.round((res.price + res.discount_abs) * 100) / 100;
+      if (res.discount_pct == null) res.discount_pct = Math.round(res.discount_abs / res.price_original * 1000) / 10;
+    } else if (res.price != null && res.price_original == null && res.discount_pct != null) {
+      res.price_original = Math.round(res.price / (1 - res.discount_pct / 100) * 100) / 100;
+      res.discount_abs = Math.round((res.price_original - res.price) * 100) / 100;
+    }
+    if (res.price_original != null && res.price != null && res.price_original <= res.price) { res.price_original = null; res.discount_pct = null; res.discount_abs = null; }
+    return res;
+  };
   const out = { title: '', price: null, currency: '', image: '' };
   for (const sc of document.querySelectorAll('script[type="application/ld+json"]')) {
     try {
@@ -32,6 +91,14 @@ function extractOnPage() {
     const mp = document.querySelector('meta[property="product:price:amount"],meta[name="og:price:amount"]');
     if (mp) out.price = parseFloat(mp.content.replace(',', '.')) || null;
   }
+  // v1.12: визуальный блок цены — главный источник (JSON-LD бывает без скидки/устаревшим)
+  try {
+    const vp = __visualPrice(document.body || document.documentElement);
+    if (vp.price != null) { out.price = vp.price; out.currency = out.currency || 'EUR'; }
+    if (vp.price_original != null) out.price_original = vp.price_original;
+    if (vp.discount_pct != null) out.discount_pct = vp.discount_pct;
+    if (vp.discount_abs != null) out.discount_abs = vp.discount_abs;
+  } catch (e) {}
   // v1.2: распознаём антибот-страницу DataDome, чтобы не считать её «нет цены»
   out.captcha = !!document.querySelector('iframe[src*="captcha"], #captcha-delivery, .captcha-delivery')
     || /captcha|are you a robot|vérif/i.test(String(document.title || ''));
@@ -85,7 +152,7 @@ async function collectOne(api, token, p) {
     if (d.price != null) {
       const rr = await fetch(`${api}/api/parse/ext-price?token=${encodeURIComponent(token)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: p.url, price: d.price, currency: d.currency, title: d.title, image: d.image, article: d.article || undefined, brand: d.brand || undefined, mpn: d.mpn || undefined })
+        body: JSON.stringify({ url: p.url, price: d.price, currency: d.currency, title: d.title, image: d.image, article: d.article || undefined, brand: d.brand || undefined, mpn: d.mpn || undefined, price_original: d.price_original, discount_pct: d.discount_pct, discount_abs: d.discount_abs })
       });
       if (rr.ok) { saved = true; const jj = await rr.json().catch(() => ({})); chg = jj.changed || null; }
     } else {
@@ -145,6 +212,65 @@ async function run(api, token, batch, mode, staleDays, continuous) {
 
 // v1.3: извлечение карточек товаров со страницы раздела/списка
 function extractLinksOnPage() {
+  // v1.12: визуальный разбор блока цены LM — текущая (красная крупная) / зачёркнутая / скидка (%, €)
+  const __num = (s) => { // «2.999»→2999, «10,99»→10.99, «1.234,56»→1234.56
+    s = String(s).replace(/[\s\u00a0]/g, '');
+    if (/^\d{1,3}(\.\d{3})+(,\d{1,2})?$/.test(s)) s = s.replace(/\./g, '').replace(',', '.');
+    else s = s.replace(',', '.');
+    const n = parseFloat(s);
+    return (isFinite(n) && n > 0 && n < 100000) ? n : null;
+  };
+  const __struck = (el) => {
+    for (let e = el; e && e.nodeType === 1; e = e.parentElement) {
+      if (e.tagName === 'DEL' || e.tagName === 'S' || e.tagName === 'STRIKE') return true;
+      const cn = String(typeof e.className === 'string' ? e.className : '');
+      if (/tachad|strike|line-through|old[-_ ]?price|antes|was[-_ ]?price|previous|regular[-_ ]?price|original[-_ ]?price/i.test(cn)) return true;
+      try { const td = (getComputedStyle(e).textDecorationLine || '') + ' ' + (getComputedStyle(e).textDecoration || ''); if (/line-through/i.test(td)) return true; } catch (err) {}
+    }
+    return false;
+  };
+  const __visualPrice = (root) => {
+    const res = { price: null, price_original: null, discount_pct: null, discount_abs: null };
+    if (!root || !root.querySelectorAll) return res;
+    let bestFs = -1;
+    for (const el of root.querySelectorAll('span,div,p,strong,b,em,s,del,strike,sup,h2,h3,h4')) {
+      if (el.childElementCount > 2) continue;
+      let t = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!t || t.length > 40) continue;
+      if (t.indexOf('\u20ac') < 0) { // цена разбита: «2.999» + <sup>€</sup>
+        const nx = el.nextElementSibling, pv = el.previousElementSibling;
+        if (/^\d{1,3}([ .]\d{3})*(,\d{1,2})?$/.test(t) && nx && /^\s*\u20ac\s*$/.test(String(nx.textContent || ''))) t = t + ' \u20ac';
+      }
+      let m = t.match(/^[\-\u2212\u2013]\s*(\d+(?:[.,]\d+)?)\s*%/); // бейдж «-59 %»
+      if (m) { const v = parseFloat(m[1].replace(',', '.')); if (v > 0 && v < 100) res.discount_pct = v; continue; }
+      m = t.match(/^[\-\u2212\u2013]\s*([\d.,\s\u00a0]+?)\s*\u20ac/); // бейдж «-1.991 €»
+      if (m) { const v = __num(m[1]); if (v != null) res.discount_abs = v; continue; }
+      if (t.indexOf('\u20ac') < 0) continue;
+      if (/\u20ac\s*\/|\/(kg|m\u00b2|m2|l|ud|unidad)s?\b/i.test(t)) continue; // цена за единицу
+      const pm = t.match(/(\d{1,3}(?:[ .\u00a0]\d{3})+(?:,\d{1,2})?|\d{1,6}[.,]\d{2}|\d{1,6})(?=\s*\u20ac)/);
+      if (!pm) continue;
+      const n = __num(pm[1]);
+      if (n == null) continue;
+      if (__struck(el)) { if (res.price_original == null || n > res.price_original) res.price_original = n; }
+      else {
+        let fs = 10;
+        try { fs = parseFloat(getComputedStyle(el).fontSize) || 10; } catch (err) {}
+        if (fs > bestFs || (fs === bestFs && res.price == null)) { bestFs = fs; res.price = n; }
+      }
+    }
+    if (res.price != null && res.price_original != null && res.price_original > res.price) {
+      if (res.discount_abs == null) res.discount_abs = Math.round((res.price_original - res.price) * 100) / 100;
+      if (res.discount_pct == null) res.discount_pct = Math.round((res.price_original - res.price) / res.price_original * 1000) / 10;
+    } else if (res.price != null && res.price_original == null && res.discount_abs != null) {
+      res.price_original = Math.round((res.price + res.discount_abs) * 100) / 100;
+      if (res.discount_pct == null) res.discount_pct = Math.round(res.discount_abs / res.price_original * 1000) / 10;
+    } else if (res.price != null && res.price_original == null && res.discount_pct != null) {
+      res.price_original = Math.round(res.price / (1 - res.discount_pct / 100) * 100) / 100;
+      res.discount_abs = Math.round((res.price_original - res.price) * 100) / 100;
+    }
+    if (res.price_original != null && res.price != null && res.price_original <= res.price) { res.price_original = null; res.discount_pct = null; res.discount_abs = null; }
+    return res;
+  };
   const out = [];
   const seen = new Set();
   // v1.4: путь раздела из хлебных крошек («Productos > Herramientas > …»), fallback — заголовок H1
@@ -196,27 +322,21 @@ function extractLinksOnPage() {
     if (name.length < 10 && img) name = String(img.alt || '').replace(/\s+/g, ' ').trim();
     if (/^leroy\s*merlin$/i.test(name)) name = '';
     if (name.length > 300) name = name.slice(0, 300);
-    // v1.9.1: цена — «xx,xx €», БЕЗ цен за единицу (€/kg, €/m²); если в карточке нет — поднимаемся по родителям
-    let price = null, currency = '';
-    const findPrice = (t) => {
-      const ms = [...String(t || '').matchAll(/(\d{1,5}[.,]\d{2})\s*(€|EUR)(?!\s*\/)/g)];
-      if (!ms.length) return null;
-      return parseFloat(ms[ms.length - 1][1].replace(',', '.')); // последняя — актуальная (первая бывает зачёркнутой)
-    };
-    price = findPrice(card.innerText);
-    if (price == null) { // карточка схлопнулась до ссылки — ищем цену у компактных предков
+    // v1.12: визуальный разбор цены карточки — текущая/зачёркнутая/скидка; без цен за единицу
+    let pv = __visualPrice(card);
+    if (pv.price == null) { // карточка схлопнулась до ссылки — ищем у компактных предков
       let el = card;
-      for (let up = 0; up < 3 && el && price == null; up++) {
+      for (let up = 0; up < 3 && el && pv.price == null; up++) {
         el = el.parentElement;
-        if (el && String(el.innerText || '').length < 1200 && (el.querySelectorAll('a[href*=".html"]').length <= 4)) price = findPrice(el.innerText);
+        if (el && String(el.innerText || '').length < 1200 && (el.querySelectorAll('a[href*=".html"]').length <= 4)) pv = __visualPrice(el);
       }
     }
-    if (price != null) currency = 'EUR';
+    const price = pv.price, currency = price != null ? 'EUR' : '';
     if (!name) {
       const sm = href.match(/\/([^/]+)-\d{5,}\.html?$/i);
       if (sm) name = sm[1].replace(/-/g, ' ').slice(0, 300);
     }
-    out.push({ url: href, name, image: imgSrc, category, price, currency });
+    out.push({ url: href, name, image: imgSrc, category, price, currency, price_original: pv.price_original, discount_pct: pv.discount_pct, discount_abs: pv.discount_abs });
   }
   return out;
 }
@@ -267,6 +387,9 @@ async function runSectionOnce(api, token, startUrl) {
               if (ex) {
                 if (sp.image) ex.image = sp.image;
                 if (sp.price != null) { ex.price = sp.price; ex.currency = sp.currency || 'EUR'; }
+                if (sp.price_original != null) ex.price_original = sp.price_original;
+                if (sp.discount_pct != null) ex.discount_pct = sp.discount_pct;
+                if (sp.discount_abs != null) ex.discount_abs = sp.discount_abs;
                 if (sp.brand) ex.brand = sp.brand;
                 if (sp.mpn) ex.mpn = sp.mpn;
                 if ((!ex.name || ex.name.length < 10) && sp.name) ex.name = sp.name;
@@ -304,6 +427,9 @@ async function runSectionOnce(api, token, startUrl) {
             if (!ex) continue;
             if (!ex.image && a.image) ex.image = a.image;
             if (ex.price == null && a.price != null) { ex.price = a.price; ex.currency = a.currency || 'EUR'; }
+            if (ex.price_original == null && a.price_original != null) ex.price_original = a.price_original;
+            if (ex.discount_pct == null && a.discount_pct != null) ex.discount_pct = a.discount_pct;
+            if (ex.discount_abs == null && a.discount_abs != null) ex.discount_abs = a.discount_abs;
             if (!ex.brand && a.brand) ex.brand = a.brand;
             if (!ex.mpn && a.mpn) ex.mpn = a.mpn;
           }
@@ -411,9 +537,17 @@ function collectStateProducts() {
           if (!image) { const one = pickStr(o, ['image', 'imageUrl', 'imageURL', 'img', 'thumbnail', 'picture', 'mediaUrl', 'mainImage', 'defaultImage', 'visual']); if (one && !BAD_PHOTO.test(one)) image = one; }
           if (image) { image = abs(image); if (BAD_PHOTO.test(image)) image = ''; }
           const price = pickNum(o.price, 0) ?? pickNum(o.currentPrice, 0) ?? pickNum(o.sellingPrice, 0) ?? pickNum(o.pricing, 0) ?? pickNum(o.priceData, 0) ?? pickNum(o.offers, 0) ?? pickNum(o.prices, 0);
+          // v1.12: цена без скидки и скидка из состояния
+          let priceOriginal = pickNum(o.originalPrice, 0) ?? pickNum(o.listPrice, 0) ?? pickNum(o.pvp, 0) ?? pickNum(o.pvpPrice, 0) ?? pickNum(o.regularPrice, 0) ?? pickNum(o.previousPrice, 0) ?? pickNum(o.priceBeforeDiscount, 0) ?? pickNum(o.crossedPrice, 0) ?? pickNum(o.wasPrice, 0);
+          let discountPct = pickNum(o.discountPercentage, 0) ?? pickNum(o.discountPercent, 0);
+          let discountAbs = null;
+          if (price != null && priceOriginal != null && priceOriginal > price) {
+            discountAbs = Math.round((priceOriginal - price) * 100) / 100;
+            if (discountPct == null) discountPct = Math.round((priceOriginal - price) / priceOriginal * 1000) / 10;
+          } else if (priceOriginal != null && price != null && priceOriginal <= price) priceOriginal = null;
           let brand = pickStr(o, ['brandName', 'marca', 'manufacturer']); if (!brand && o.brand) brand = typeof o.brand === 'string' ? o.brand : pickStr(o.brand, ['name', 'label']);
           const mpn = pickStr(o, ['mpn', 'reference', 'manufacturerReference', 'supplierReference', 'model', 'ref']);
-          if (!out.has(url)) out.set(url, { url, name: name.slice(0, 300), image, price: price != null ? price : null, currency: 'EUR', brand: String(brand || '').slice(0, 120), mpn: String(mpn || '').slice(0, 120) });
+          if (!out.has(url)) out.set(url, { url, name: name.slice(0, 300), image, price: price != null ? price : null, currency: 'EUR', brand: String(brand || '').slice(0, 120), mpn: String(mpn || '').slice(0, 120), price_original: priceOriginal, discount_pct: discountPct, discount_abs: discountAbs });
         }
       }
     }

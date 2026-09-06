@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v136-2026-09-07', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v136.1-2026-09-07', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -5001,8 +5001,16 @@ app.post('/api/parse/ext-products', requireAuth, async (req, res) => {
     }
     if (!rows.length) return res.status(400).json({ error: 'Нет валидных товаров' });
     let upserted = 0;
+    let stripDisc = false;
     for (let i = 0; i < rows.length; i += 200) {
-      const { error } = await supabaseAdmin.from('parse_products').upsert(rows.slice(i, i + 200), { onConflict: 'site,url' });
+      let batch = rows.slice(i, i + 200);
+      if (stripDisc) batch = batch.map(r => { const c = { ...r }; delete c.price_original; delete c.discount_pct; delete c.discount_abs; return c; });
+      let { error } = await supabaseAdmin.from('parse_products').upsert(batch, { onConflict: 'site,url' });
+      if (error && /price_original|discount_pct|discount_abs/i.test(error.message || '')) { // v136.1: миграция v136 ещё не выполнена
+        stripDisc = true;
+        batch = batch.map(r => { const c = { ...r }; delete c.price_original; delete c.discount_pct; delete c.discount_abs; return c; });
+        ({ error } = await supabaseAdmin.from('parse_products').upsert(batch, { onConflict: 'site,url' }));
+      }
       if (error) throw error;
       upserted += Math.min(200, rows.length - i);
     }
@@ -5075,7 +5083,11 @@ app.post('/api/parse/ext-price', requireAuth, async (req, res) => {
     }
     // успех — сбрасываем счётчик неудач
     try { await supabaseAdmin.from('parse_products').update({ price_attempts: 0, price_fail_reason: null }).eq('site', u.hostname).eq('url', url); } catch (e) { /* колонок ещё нет */ }
-    const { data, error } = await supabaseAdmin.from('parse_products').upsert(upd, { onConflict: 'site,url' }).select().single();
+    let { data, error } = await supabaseAdmin.from('parse_products').upsert(upd, { onConflict: 'site,url' }).select().single();
+    if (error && /price_original|discount_pct|discount_abs/i.test(error.message || '')) { // v136.1: миграция v136 ещё не выполнена — сохраняем без колонок скидки
+      delete upd.price_original; delete upd.discount_pct; delete upd.discount_abs;
+      ({ data, error } = await supabaseAdmin.from('parse_products').upsert(upd, { onConflict: 'site,url' }).select().single());
+    }
     if (error) throw error;
     res.json({ ok: true, product: data, changed });
   } catch (e) { res.status(500).json({ error: e.message }); }
