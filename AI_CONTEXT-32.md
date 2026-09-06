@@ -2512,3 +2512,11 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 ## v133.1 + расширение v1.8.3 (2026-09-07) — фикс lazy-load фото
 - Причина «нет фото»: img.src в карточках = лоадер loader-v2.svg, реальный URL в data-src/srcset. srcOf переписан: сначала data-src/data-lazy-src/data-original/data-srcset/srcset, потом currentSrc/src; отсев BAD_IMG (loader|placeholder|blank|spinner|gif|svg).
 - Сервер ext-products: отсев image с loader/placeholder/svg. Backfill-чистка: image с %.svg/%loader%/%placeholder% → NULL.
+
+## Расширение v1.9 (2026-09-07) — «раз и навсегда»: MAIN-world JSON-состояние
+- Причина вечных сбоев фото/цен: DOM-скрапинг + lazy-load. Решение: collectStateProducts() запускается с world:'MAIN' и обходит весь граф состояния страницы (__NEXT_DATA__/__PRELOADED_STATE__/__APOLLO_STATE__/__NUXT__/любые window.*state*/JSON-LD), ищет «товароподобные» объекты (URL с -NNNNN.html + name≥8), вытаскивает image (включая images[]/media[]), price (price/currentPrice/pricing… рекурсивно ≤3), brand, mpn/reference. Мерж по URL: состояние приоритетнее DOM (фото/цена/бренд/mpn перезаписывают), DOM-only товары остаются. Бюджет 300k узлов, WeakSet от циклов.
+
+## Расширение v1.9.1 + backend v133.2 (2026-09-07) — фото товара, не этикетка
+- collectStateProducts: фото = ПЕРВОЕ из images[]/media[] (раньше бралось поле image = этикетка энергоэффективности); BAD_PHOTO банит etiqueta/energetic/energy/efficien/clase-ener/eeli/svg; цена + offers/массивы/lowPrice.
+- DOM: бан энергоэтикеток по alt/src/data-src; цена — без «€/ед» (€/kg, €/m²), подъём по ≤3 компактным предкам если в карточке нет.
+- Сервер: тот же бан в ext-products; backfill-чистка обнуляет image с etiqueta/energetic/efficien/eeli.

@@ -157,8 +157,9 @@ function extractLinksOnPage() {
     let card = a.closest('li, article, [data-testid*="product" i], [class*="product-card" i]') || a;
     if (card !== a && String(card.innerText || '').length > 600) card = a; // слишком большой — это не карточка
     if (card === a) { const p = a.parentElement; if (p && String(p.innerText || '').length < 600 && p.querySelectorAll('a[href*=".html"]').length <= 2) card = p; }
-    // v1.8.2: отсекаем ТОЛЬКО логотипы (фото товаров лежат на CDN leroymerlin — слово «leroy» резать нельзя!)
-    const imgs = [...card.querySelectorAll('img')].filter(im => !/logo/i.test(String(im.alt || '') + ' ' + String(im.src || '')));
+    // v1.9.1: отсекаем логотипы И этикетки энергоэффективности (A++/A+ бейджи — не фото товара!)
+    const BAD_IMG_DOM = /logo|etiqueta|energetic|energy[-_ ]?label|efficien|clase[-_ ]?ener|eeli/i;
+    const imgs = [...card.querySelectorAll('img')].filter(im => !BAD_IMG_DOM.test(String(im.alt || '') + ' ' + String(im.src || '') + ' ' + String(im.getAttribute('data-src') || '')));
     const img = imgs[0] || null;
     // v1.8.3: lazy-load — img.src там лоадер (loader-v2.svg); сначала data-* атрибуты, лоадеры/свг отсекаем
     const BAD_IMG = /loader|placeholder|blank|spinner|\.gif($|\?)|\.svg($|\?)/i;
@@ -182,11 +183,22 @@ function extractLinksOnPage() {
     if (name.length < 10 && img) name = String(img.alt || '').replace(/\s+/g, ' ').trim();
     if (/^leroy\s*merlin$/i.test(name)) name = '';
     if (name.length > 300) name = name.slice(0, 300);
-    // цена в карточке: берём ПОСЛЕДНЮю «xx,xx €» (первая бывает зачёркнутой старой)
+    // v1.9.1: цена — «xx,xx €», БЕЗ цен за единицу (€/kg, €/m²); если в карточке нет — поднимаемся по родителям
     let price = null, currency = '';
-    const txt = String(card.innerText || '');
-    const matches = [...txt.matchAll(/(\d{1,5}[.,]\d{2})\s*(€|EUR)/g)];
-    if (matches.length) { price = parseFloat(matches[matches.length - 1][1].replace(',', '.')); currency = 'EUR'; }
+    const findPrice = (t) => {
+      const ms = [...String(t || '').matchAll(/(\d{1,5}[.,]\d{2})\s*(€|EUR)(?!\s*\/)/g)];
+      if (!ms.length) return null;
+      return parseFloat(ms[ms.length - 1][1].replace(',', '.')); // последняя — актуальная (первая бывает зачёркнутой)
+    };
+    price = findPrice(card.innerText);
+    if (price == null) { // карточка схлопнулась до ссылки — ищем цену у компактных предков
+      let el = card;
+      for (let up = 0; up < 3 && el && price == null; up++) {
+        el = el.parentElement;
+        if (el && String(el.innerText || '').length < 1200 && (el.querySelectorAll('a[href*=".html"]').length <= 4)) price = findPrice(el.innerText);
+      }
+    }
+    if (price != null) currency = 'EUR';
     if (!name) {
       const sm = href.match(/\/([^/]+)-\d{5,}\.html?$/i);
       if (sm) name = sm[1].replace(/-/g, ' ').slice(0, 300);
@@ -231,6 +243,27 @@ async function runSectionOnce(api, token, startUrl) {
         await sleep(800);
         const [inj] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractLinksOnPage });
         links = (inj && inj.result) || [];
+        // v1.9: MAIN-world JSON-состояние страницы — надёжный источник фото/цены/бренда (мерж по URL, состояние приоритетнее)
+        try {
+          const [st] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: 'MAIN', func: collectStateProducts });
+          const stateItems = (st && st.result) || [];
+          if (stateItems.length) {
+            const byUrl = new Map(links.map(l => [l.url, l]));
+            for (const sp of stateItems) {
+              const ex = byUrl.get(sp.url);
+              if (ex) {
+                if (sp.image) ex.image = sp.image;
+                if (sp.price != null) { ex.price = sp.price; ex.currency = sp.currency || 'EUR'; }
+                if (sp.brand) ex.brand = sp.brand;
+                if (sp.mpn) ex.mpn = sp.mpn;
+                if ((!ex.name || ex.name.length < 10) && sp.name) ex.name = sp.name;
+              } else {
+                byUrl.set(sp.url, { ...sp, category: (links[0] && links[0].category) || '' });
+              }
+            }
+            links = [...byUrl.values()];
+          }
+        } catch (e) { /* нет доступа к MAIN — работаем по DOM */ }
       } catch (e) { progress('⚠️ Стр. ' + page + ': не загрузилась — ' + e.message); }
       if (tab) try { await chrome.tabs.remove(tab.id); } catch (e) {}
       const fresh = links.filter(l => !known.has(l.url));
@@ -246,6 +279,86 @@ async function runSectionOnce(api, token, startUrl) {
       await sleep(2500 + Math.random() * 1500); // вежливая пауза между страницами
     }
   } catch (e) { progress('❌ ' + e.message); }
+}
+
+// v1.9: извлечение товаров из JSON-состояния страницы (MAIN world) — __NEXT_DATA__/__PRELOADED_STATE__/JSON-LD.
+// Устойчиво к lazy-load и вёрстке: ищем «товароподобные» объекты {url с -NNNNN.html, name, price?, image?} во всём графе.
+function collectStateProducts() {
+  const out = new Map();
+  const visited = new WeakSet();
+  let budget = 300000; // страховка от гигантских графов
+  const abs = (u) => { try { return new URL(u, location.href).href; } catch (e) { return ''; } };
+  const pickStr = (o, keys) => {
+    for (const k of keys) {
+      const v = o[k];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        if (typeof v.url === 'string' && v.url) return v.url;
+        if (typeof v.src === 'string' && v.src) return v.src;
+        if (typeof v.name === 'string' && v.name) return v.name;
+      }
+    }
+    return '';
+  };
+  const pickNum = (v, d) => {
+    if (d > 3 || v == null) return null;
+    if (Array.isArray(v)) { for (const it of v) { const n = pickNum(it, d + 1); if (n != null) return n; } return null; }
+    if (typeof v === 'number' && isFinite(v) && v > 0 && v < 100000) return v;
+    if (typeof v === 'string') { const n = parseFloat(v.replace(/\s/g, '').replace(',', '.')); return (isFinite(n) && n > 0 && n < 100000) ? n : null; }
+    if (typeof v === 'object') {
+      for (const k of ['value', 'current', 'currentPrice', 'sellingPrice', 'finalPrice', 'priceWithTax', 'price', 'amount', 'now', 'sale', 'lowPrice', 'highPrice', '0']) {
+        const n = pickNum(v[k], d + 1); if (n != null) return n;
+      }
+    }
+    return null;
+  };
+  const walk = (o, depth) => {
+    if (!o || typeof o !== 'object' || depth > 14 || visited.has(o) || budget-- <= 0) return;
+    visited.add(o);
+    if (Array.isArray(o)) { for (const v of o) walk(v, depth + 1); return; }
+    const urlRaw = pickStr(o, ['url', 'href', 'link', 'seoUrl', 'seoURL', 'canonicalUrl', 'productUrl', 'path']);
+    if (urlRaw) {
+      const url = abs(urlRaw.split('#')[0]);
+      if (/-\d{5,}\.html?/i.test(url)) {
+        const name = pickStr(o, ['name', 'title', 'label', 'productName', 'displayName', 'shortName']);
+        if (name && name.length >= 8 && !/^leroy\s*merlin$/i.test(name)) {
+          // v1.9.1: фото ТОВАРА — ПЕРВОЕ из images[]/media[]; этикетки энергоэффективности в бан
+          const BAD_PHOTO = /etiqueta|energetic|energy|efficien|clase[-_ ]?ener|eeli|label|loader|placeholder|\.svg($|\?)/i;
+          const imgFromArr = (arr) => {
+            for (const it of arr) {
+              const u = typeof it === 'string' ? it : pickStr(it, ['url', 'src', 'path']);
+              if (u && !BAD_PHOTO.test(u)) return u;
+            }
+            return '';
+          };
+          let image = '';
+          if (Array.isArray(o.images) && o.images.length) image = imgFromArr(o.images);
+          if (!image && Array.isArray(o.media) && o.media.length) image = imgFromArr(o.media);
+          if (!image) { const one = pickStr(o, ['image', 'imageUrl', 'imageURL', 'img', 'thumbnail', 'picture', 'mediaUrl', 'mainImage', 'defaultImage', 'visual']); if (one && !BAD_PHOTO.test(one)) image = one; }
+          if (image) { image = abs(image); if (BAD_PHOTO.test(image)) image = ''; }
+          const price = pickNum(o.price, 0) ?? pickNum(o.currentPrice, 0) ?? pickNum(o.sellingPrice, 0) ?? pickNum(o.pricing, 0) ?? pickNum(o.priceData, 0) ?? pickNum(o.offers, 0) ?? pickNum(o.prices, 0);
+          let brand = pickStr(o, ['brandName', 'marca', 'manufacturer']); if (!brand && o.brand) brand = typeof o.brand === 'string' ? o.brand : pickStr(o.brand, ['name', 'label']);
+          const mpn = pickStr(o, ['mpn', 'reference', 'manufacturerReference', 'supplierReference', 'model', 'ref']);
+          if (!out.has(url)) out.set(url, { url, name: name.slice(0, 300), image, price: price != null ? price : null, currency: 'EUR', brand: String(brand || '').slice(0, 120), mpn: String(mpn || '').slice(0, 120) });
+        }
+      }
+    }
+    for (const k of Object.keys(o)) { const v = o[k]; if (v && typeof v === 'object') walk(v, depth + 1); }
+  };
+  const roots = [];
+  for (const k of ['__NEXT_DATA__', '__PRELOADED_STATE__', '__INITIAL_STATE__', '__APOLLO_STATE__', '__NUXT__', '__STATE__', '__INITIAL_DATA__', '__APP_DATA__']) {
+    try { if (window[k]) roots.push(window[k]); } catch (e) {}
+  }
+  try {
+    for (const k of Object.getOwnPropertyNames(window)) {
+      if (/state|data|store|preload|initial|apollo|next|nuxt|redux/i.test(k)) {
+        try { const v = window[k]; if (v && typeof v === 'object' && !visited.has(v)) roots.push(v); } catch (e) {}
+      }
+    }
+  } catch (e) {}
+  document.querySelectorAll('script[type="application/ld+json"]').forEach((sc) => { try { roots.push(JSON.parse(sc.textContent)); } catch (e) {} });
+  for (const r of roots) walk(r, 0);
+  return [...out.values()];
 }
 
 // v1.7: извлечение брендов со страницы /productos/marcas/
