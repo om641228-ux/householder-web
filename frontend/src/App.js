@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v145 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v146 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -8877,19 +8877,36 @@ ${bodyHtml}
     } catch (e) { console.error(e); }
   };
 
+  // v146: прогресс-бар пакетного перераспознавания
+  const [reprocessProg, setReprocessProg] = useState(null); // {total, done, ok, failed, currentName, startedAt, finished, lastError}
+
   const bulkReprocess = async () => {
     if (!window.confirm(`Перераспознать ${selectedReceiptIds.size} чеков?`)) return;
     setLoading(true);
     const ids = Array.from(selectedReceiptIds);
-    for (const id of ids) {
+    const nameOf = (id) => {
+      const r = receipts.find(x => x.id === id);
+      if (!r) return `#${id}`;
+      const dt = r.receipt_date ? new Date(r.receipt_date).toLocaleDateString('ru-RU') : '';
+      return `${r.store_name || 'Документ'}${dt ? ' · ' + dt : ''}`;
+    };
+    setReprocessProg({ total: ids.length, done: 0, ok: 0, failed: 0, currentName: nameOf(ids[0]), startedAt: Date.now(), finished: false, lastError: '' });
+    let ok = 0, failed = 0, lastError = '';
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      setReprocessProg(pr => pr ? { ...pr, currentName: nameOf(id), done: i } : pr);
       try {
-        await fetch(`${API_URL}/api/reprocess-receipt?token=${token}`, {
+        const res = await fetch(`${API_URL}/api/reprocess-receipt?token=${token}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ receiptId: id, model: selectedModel })
         });
-      } catch (e) { console.error('Reprocess error', e); }
+        if (res.ok) { ok++; }
+        else { failed++; const d = await res.json().catch(() => ({})); lastError = d.error || `HTTP ${res.status}`; }
+      } catch (e) { failed++; lastError = e.message; console.error('Reprocess error', e); }
+      setReprocessProg(pr => pr ? { ...pr, done: i + 1, ok, failed, lastError } : pr);
     }
+    setReprocessProg(pr => pr ? { ...pr, finished: true, currentName: '' } : pr);
     setSelectedReceiptIds(new Set());
     loadReceipts();
     setLoading(false);
@@ -9362,7 +9379,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-08 · v145 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-08 · v146 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9375,7 +9392,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-08 · v145</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-08 · v146</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
@@ -10767,6 +10784,34 @@ ${bodyHtml}
                   </React.Fragment>
                 )}
               </div>
+
+              {/* v146: прогресс пакетного перераспознавания */}
+              {reprocessProg && (
+                <div style={{ flexBasis: '100%', background: 'linear-gradient(180deg,#ffffff,#f4f4f8)', border: '1px solid #d5d5da', borderRadius: 12, padding: '10px 14px', marginTop: 8, fontSize: 13, color: '#1d1d1f' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
+                    <strong>{reprocessProg.finished ? '✅ Перераспознавание завершено' : '🔄 Перераспознавание…'}</strong>
+                    <span style={{ color: '#6e6e73' }}>{reprocessProg.done} / {reprocessProg.total}</span>
+                    <span style={{ color: '#0a7d00' }}>✔ {reprocessProg.ok}</span>
+                    {reprocessProg.failed > 0 && <span style={{ color: '#d70015' }}>✖ {reprocessProg.failed}</span>}
+                    <button onClick={() => setReprocessProg(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', fontSize: 15, cursor: 'pointer', color: '#8e8e93' }}>✕</button>
+                  </div>
+                  <div style={{ height: 8, borderRadius: 4, background: '#e5e5ea', overflow: 'hidden', marginBottom: 6 }}>
+                    <div style={{ height: '100%', width: `${reprocessProg.total ? Math.round(reprocessProg.done / reprocessProg.total * 100) : 0}%`, background: reprocessProg.failed > 0 ? 'linear-gradient(90deg,#5856d6,#ff9500)' : '#5856d6', transition: 'width .3s' }} />
+                  </div>
+                  {!reprocessProg.finished && (
+                    <div style={{ color: '#6e6e73', fontSize: 12.5 }}>
+                      Сейчас: <b>{reprocessProg.currentName}</b> — OCR → распознавание AI → сохранение в базу. Чеки обрабатываются по одному, страницу можно не закрывать.
+                    </div>
+                  )}
+                  {reprocessProg.finished && (
+                    <div style={{ color: '#6e6e73', fontSize: 12.5 }}>
+                      Готово: {reprocessProg.ok} из {reprocessProg.total}
+                      {reprocessProg.failed > 0 ? `, ошибок: ${reprocessProg.failed}${reprocessProg.lastError ? ' (последняя: ' + reprocessProg.lastError + ')' : ''}` : ''}.
+                      {' '}Заняло {Math.max(1, Math.round((Date.now() - reprocessProg.startedAt) / 1000))} c. Список обновлён.
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Нижняя строка — Сменить... во всю ширину */}
               <div className="bulk-actions-row bulk-actions-row-full" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
