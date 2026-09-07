@@ -913,7 +913,7 @@ const fmtDocDate = (iso) => iso ? iso.split('-').reverse().join('.') : '';
 // v74: вкладка «👥 Пользователи» (только admin) — управление доступом: роли, разделы документов, объекты
 function UsersTab({ token, objectsList }) {
   const SEC_LABELS = { home: '🏠 Дома', auto: '🚗 Авто', personal: '👤 Личное' };
-  const TAB_LABELS = { upload: '📤 Загрузка', list: '🧾 Чеки/документы', links: '🔗 Связи', parse: '🌐 Парсинг', analysis: '📊 Анализ', taxes: '🧾 Налоги', cash: '💵 Cash', crm: '🤝 CRM', docs: '📁 Документы', chat: '💬 Чат', log: '📋 Журнал' };
+  const TAB_LABELS = { upload: '📤 Загрузка', list: '🧾 Чеки/документы', links: '🔗 Связи', parse: '🌐 Парсинг', analysis: '📊 Анализ', taxes: '🧾 Налоги', cash: '💵 Cash', crm: '🤝 CRM', docs: '📁 Документы', compare: '⚖️ Цены', chat: '💬 Чат', log: '📋 Журнал' };
   const [list, setList] = useState([]);
   const [err, setErr] = useState('');
   const [edit, setEdit] = useState(null); // {id,name,password,role,sections[],objects[],disabled,isNew}
@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v140 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v141 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -9360,7 +9360,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-07 · v140 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-07 · v141 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9373,7 +9373,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-07 · v140</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-07 · v141</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
@@ -9425,6 +9425,12 @@ ${bodyHtml}
             {tabAllowed('parse') && (
               <button className={activeTab === 'parse' ? 'active' : ''} onClick={() => setActiveTab('parse')}>
                 🌐 Парсинг
+              </button>
+            )}
+            {/* v141: вкладка «Цены» — сравнение чеков/фактур со спарсенным каталогом */}
+            {tabAllowed('compare') && (
+              <button className={activeTab === 'compare' ? 'active' : ''} onClick={() => setActiveTab('compare')}>
+                ⚖️ Цены
               </button>
             )}
             {/* v83: чат с бейджем непрочитанных */}
@@ -12174,6 +12180,10 @@ ${bodyHtml}
         <LinksTab token={token} isMobileView={isMobileView} canBuild={user?.role === 'admin' || user?.role === 'manager'}
           onOpenDoc={(id) => { const r = receipts.find(x => String(x.id) === String(id)); if (r) setViewModal(r); else { alert('Документ не загружен в список — откройте вкладку «Фактуры» и найдите его там.'); } }} />
       )}
+      {activeTab === 'compare' && tabAllowed('compare') && (
+        <CompareLmTab API_URL={API_URL} token={token} />
+      )}
+
       {activeTab === 'parse' && tabAllowed('parse') && (
         <ParseTab token={token} isMobileView={isMobileView} canRun={user?.role === 'admin' || user?.role === 'manager'} />
       )}
@@ -12459,3 +12469,145 @@ ${bodyHtml}
 }
 
 export default App;
+
+// ========== v141: вкладка «⚖️ Цены» — сравнение позиций чеков/фактур со спарсенным каталогом ==========
+function CompareLmTab({ API_URL, token }) {
+  const [store, setStore] = useState('leroy');
+  const [days, setDays] = useState(365);
+  const [busy, setBusy] = useState(false);
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState('');
+  const [flt, setFlt] = useState('all');
+
+  const run = async () => {
+    setBusy(true); setErr(''); setData(null);
+    try {
+      const r = await fetch(`${API_URL}/api/compare/lm?token=${token}&store=${encodeURIComponent(store)}&days=${days}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setData(j);
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+
+  const verdict = (r) => {
+    if (!r.match) return <span style={{ fontSize: 10.5, color: '#8e8e93', background: '#f5f5f7', borderRadius: 8, padding: '2px 8px' }}>❓ не найдено</span>;
+    if (r.diff == null) return <span style={{ fontSize: 10.5, color: '#8e8e93', background: '#f5f5f7', borderRadius: 8, padding: '2px 8px' }}>— нет цены</span>;
+    if (Math.abs(r.diff) < 0.011) return <span style={{ fontSize: 10.5, color: '#1e7e34', background: '#e8f8ef', borderRadius: 8, padding: '2px 8px' }}>✅ цена та же</span>;
+    if (r.diff > 0) return <span style={{ fontSize: 10.5, color: '#d70015', background: '#fdecea', borderRadius: 8, padding: '2px 8px' }}>🔻 в чеке дороже на {r.diff}</span>;
+    return <span style={{ fontSize: 10.5, color: '#0e7490', background: '#ecfeff', borderRadius: 8, padding: '2px 8px' }}>🔺 в чеке дешевле на {-r.diff}</span>;
+  };
+
+  const rows = (data && data.rows ? data.rows : []).filter(r => {
+    if (flt === 'over') return r.diff != null && r.diff > 0.01;
+    if (flt === 'under') return r.diff != null && r.diff < -0.01;
+    if (flt === 'same') return r.diff != null && Math.abs(r.diff) <= 0.01;
+    if (flt === 'none') return !r.match;
+    return true;
+  });
+
+  const exportCsv = () => {
+    const esc = (v) => { v = v == null ? '' : String(v); return /[";\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    const head = ['Дата', 'Чек', 'Товар из чека', 'Кол-во', 'Цена в чеке', 'Товар в каталоге', 'Артикул', 'Цена каталога', 'Без скидки', 'Δ ед.', 'Δ %', 'Совпадение', 'URL'];
+    const lines = [head.join(';')];
+    for (const r of rows) lines.push([r.date, r.receipt_id, r.name, r.qty, r.price_paid, r.match ? r.match.name : '', r.match ? r.match.article : '', r.match ? r.match.price : '', r.match && r.match.price_original != null ? r.match.price_original : '', r.diff != null ? r.diff : '', r.diff_pct != null ? r.diff_pct : '', r.match ? r.match.method + ' ' + r.match.score + '%' : '', r.match ? r.match.url : ''].map(esc).join(';'));
+    const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'сравнение-цен.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  const sm = data && data.summary;
+  return (
+    <div style={{ padding: '6px 15px 20px' }}>
+      <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: 12, marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>⚖️ Сравнение цен чеков/фактур со спарсенным каталогом Leroy Merlin</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <input value={store} onChange={e => setStore(e.target.value)} placeholder="Магазин (store_name), напр. leroy"
+            style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13, width: 240 }} />
+          <select value={days} onChange={e => setDays(parseInt(e.target.value, 10))}
+            style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }}>
+            <option value={30}>за 30 дней</option>
+            <option value={90}>за 90 дней</option>
+            <option value={180}>за 180 дней</option>
+            <option value={365}>за год</option>
+            <option value={1095}>за 3 года</option>
+          </select>
+          <button onClick={run} disabled={busy}
+            style={{ padding: '8px 18px', borderRadius: 8, border: 'none', background: '#0071e3', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>{busy ? '⏳ Сопоставляю…' : '⚖️ Сравнить'}</button>
+          {data && <button onClick={exportCsv}
+            style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #1e7e34', background: '#e8f5e9', color: '#1e7e34', fontSize: 12, cursor: 'pointer' }}>⬇ CSV</button>}
+        </div>
+        {err && <div style={{ marginTop: 8, fontSize: 12, color: '#d70015' }}>❌ {err}</div>}
+        {sm && (
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 10 }}>
+            <div style={{ background: '#f5f5f7', borderRadius: 10, padding: '8px 14px', fontSize: 12 }}>Позиций: <b>{sm.items}</b></div>
+            <div style={{ background: '#e8f8ef', borderRadius: 10, padding: '8px 14px', fontSize: 12, color: '#1e7e34' }}>Найдено в каталоге: <b>{sm.matched}</b></div>
+            <div style={{ background: '#f5f5f7', borderRadius: 10, padding: '8px 14px', fontSize: 12 }}>Потрачено: <b>{sm.spent} €</b></div>
+            <div style={{ background: '#f5f5f7', borderRadius: 10, padding: '8px 14px', fontSize: 12 }}>По текущим ценам каталога: <b>{sm.catalog} €</b></div>
+            <div style={{ background: sm.delta > 0 ? '#fdecea' : '#ecfeff', borderRadius: 10, padding: '8px 14px', fontSize: 12, color: sm.delta > 0 ? '#d70015' : '#0e7490' }}>
+              {sm.delta > 0 ? 'Переплата vs каталог' : 'Экономия vs каталог'}: <b>{sm.delta > 0 ? '+' : ''}{sm.delta} €</b>
+            </div>
+          </div>
+        )}
+        {sm && (
+          <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap', fontSize: 12 }}>
+            {[['all', 'Все'], ['over', '🔻 Дороже'], ['under', '🔺 Дешевле'], ['same', '✅ Та же цена'], ['none', '❓ Не найдено']].map(([k, l]) => (
+              <button key={k} onClick={() => setFlt(k)}
+                style={{ padding: '4px 12px', borderRadius: 999, border: flt === k ? 'none' : '1px solid #d0d0d5', background: flt === k ? '#0071e3' : '#f5f5f7', color: flt === k ? '#fff' : '#333', fontSize: 12, cursor: 'pointer' }}>{l}</button>
+            ))}
+          </div>
+        )}
+      </div>
+      {data && (
+        <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: 12, overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ textAlign: 'left', color: '#8e8e93', borderBottom: '2px solid #f0f0f2' }}>
+                <th style={{ padding: '6px 8px' }}>Дата</th>
+                <th style={{ padding: '6px 8px' }}>Товар из чека</th>
+                <th style={{ padding: '6px 8px' }}>Кол-во</th>
+                <th style={{ padding: '6px 8px' }}>Цена в чеке</th>
+                <th style={{ padding: '6px 8px' }}>Товар в каталоге</th>
+                <th style={{ padding: '6px 8px' }}>Цена каталога</th>
+                <th style={{ padding: '6px 8px' }}>Δ</th>
+                <th style={{ padding: '6px 8px' }}>Совпадение</th>
+                <th style={{ padding: '6px 8px' }}>Итог</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i} style={{ borderBottom: '1px solid #f5f5f7' }}>
+                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', color: '#8e8e93' }}>{r.date || '—'}</td>
+                  <td style={{ padding: '6px 8px', minWidth: 180 }}>{r.name}</td>
+                  <td style={{ padding: '6px 8px' }}>{r.qty}</td>
+                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}><b>{r.price_paid} €</b></td>
+                  <td style={{ padding: '6px 8px', minWidth: 180 }}>
+                    {r.match
+                      ? <a href={r.match.url} target="_blank" rel="noreferrer" style={{ color: '#0071e3', textDecoration: 'none' }}>{r.match.name}</a>
+                      : <span style={{ color: '#c7c7cc' }}>—</span>}
+                  </td>
+                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
+                    {r.match && r.match.price != null ? <b>{r.match.price} €</b> : '—'}
+                    {r.match && r.match.price_original != null && <span style={{ marginLeft: 5, fontSize: 10.5, color: '#8e8e93', textDecoration: 'line-through' }}>{r.match.price_original} €</span>}
+                  </td>
+                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', color: r.diff == null ? '#c7c7cc' : r.diff > 0.01 ? '#d70015' : r.diff < -0.01 ? '#0e7490' : '#1e7e34' }}>
+                    {r.diff != null ? (r.diff > 0 ? '+' : '') + r.diff + ' €' + (r.diff_pct != null ? ' (' + (r.diff_pct > 0 ? '+' : '') + r.diff_pct + '%)' : '') : '—'}
+                  </td>
+                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontSize: 11, color: '#8e8e93' }}>
+                    {r.match ? `${r.match.method === 'артикул' ? '🔢' : '🔤'} ${r.match.score}%` : '—'}
+                  </td>
+                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>{verdict(r)}</td>
+                </tr>
+              ))}
+              {!rows.length && <tr><td colSpan={9} style={{ padding: 16, textAlign: 'center', color: '#8e8e93' }}>Нет позиций под выбранный фильтр</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+

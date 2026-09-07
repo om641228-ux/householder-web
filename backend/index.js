@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v137-2026-09-07', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v141-2026-09-07', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -5153,6 +5153,89 @@ app.patch('/api/parse/catalog/:id', requireAuth, async (req, res) => {
     }
     if (error) throw error;
     res.json({ ok: true, product: data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v141: сравнение цен чеков/фактур со спарсенным каталогом (Leroy Merlin)
+app.get('/api/compare/lm', requireAuth, async (req, res) => {
+  try {
+    const days = Math.min(1095, Math.max(1, parseInt(req.query.days, 10) || 365));
+    const storeQ = String(req.query.store || 'leroy').trim();
+    const lim = Math.min(600, Math.max(1, parseInt(req.query.limit, 10) || 300));
+    const site = String(req.query.site || 'www.leroymerlin.es').slice(0, 120);
+    const since = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
+    let q = supabaseAdmin.from('receipts').select('id,store_name,receipt_date,total_amount,currency,document_type,items')
+      .gte('receipt_date', since).not('items', 'is', null).order('receipt_date', { ascending: false }).limit(lim);
+    if (storeQ) q = q.ilike('store_name', '%' + storeQ.replace(/[%_]/g, ' ') + '%');
+    const { data: receipts, error } = await q;
+    if (error) throw error;
+    const norm = (x) => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+    const STOP = new Set(['de', 'la', 'el', 'para', 'con', 'sin', 'en', 'y', 'a', 'del', 'al', 'un', 'una', 'los', 'las', 'por', 'the', 'and', 'set', 'kit']);
+    const toks = (x) => norm(x).split(' ').filter(t => t.length >= 3 && !STOP.has(t));
+    // позиции чеков
+    const items = [];
+    for (const r of receipts || []) {
+      for (const it of (Array.isArray(r.items) ? r.items : [])) {
+        const nm = String((it && it.name) || '').trim();
+        let pr = it && it.price != null ? Number(it.price) : null;
+        if ((pr == null || !isFinite(pr) || pr <= 0) && it && it.total != null && Number(it.quantity) > 0) pr = Number(it.total) / Number(it.quantity);
+        if (!nm || nm.length < 4 || pr == null || !isFinite(pr) || pr <= 0) continue;
+        if (/^(total|suma|base imponible|iva|igic|retenc|descuento)/i.test(nm)) continue;
+        items.push({ receipt_id: r.id, store: r.store_name, date: r.receipt_date, name: nm, qty: Number(it.quantity) || 1, price: Math.round(pr * 100) / 100 });
+        if (items.length >= 400) break;
+      }
+      if (items.length >= 400) break;
+    }
+    // 1) точное совпадение по артикулу (7–9 цифр в названии позиции)
+    const artMap = new Map();
+    items.forEach((it, i) => {
+      const m = it.name.match(/(?:^|\D)(\d{7,9})(?:\D|$)/);
+      if (m) { if (!artMap.has(m[1])) artMap.set(m[1], []); artMap.get(m[1]).push(i); }
+    });
+    const arts = [...artMap.keys()];
+    for (let i = 0; i < arts.length; i += 100) {
+      const { data: prods } = await supabaseAdmin.from('parse_products')
+        .select('id,name,url,article,price,price_original,discount_pct,currency,image')
+        .eq('site', site).in('article', arts.slice(i, i + 100));
+      for (const p of prods || []) for (const idx of (artMap.get(p.article) || [])) {
+        if (p.price != null) items[idx]._match = { ...p, method: 'артикул', score: 100 };
+      }
+    }
+    // 2) fuzzy по токенам названия для остальных
+    let fuzzyDone = 0;
+    for (const it of items) {
+      if (it._match || fuzzyDone >= 250) continue;
+      fuzzyDone++;
+      const t = toks(it.name);
+      if (!t.length) continue;
+      const keyTok = t.slice().sort((a, b) => b.length - a.length)[0];
+      const { data: cands } = await supabaseAdmin.from('parse_products')
+        .select('id,name,url,article,price,price_original,discount_pct,currency,image')
+        .eq('site', site).ilike('name', '%' + keyTok.replace(/[%_]/g, ' ') + '%').not('price', 'is', null).limit(60);
+      let best = null, bestScore = 0;
+      for (const c of cands || []) {
+        const ct = new Set(toks(c.name));
+        const hit = t.filter(x => ct.has(x)).length;
+        const score = Math.round(hit / t.length * 100);
+        if (score > bestScore) { best = c; bestScore = score; }
+      }
+      if (best && bestScore >= 60) it._match = { ...best, method: 'название', score: bestScore };
+    }
+    const rows = items.map(it => {
+      const m = it._match || null;
+      const diff = m && m.price != null ? Math.round((it.price - m.price) * 100) / 100 : null;
+      const diffPct = m && m.price ? Math.round((it.price - m.price) / m.price * 1000) / 10 : null;
+      return {
+        receipt_id: it.receipt_id, date: it.date, store: it.store, name: it.name, qty: it.qty, price_paid: it.price,
+        match: m ? { id: m.id, name: m.name, url: m.url, article: m.article, price: m.price, price_original: m.price_original, discount_pct: m.discount_pct, currency: m.currency || 'EUR', image: m.image, method: m.method, score: m.score } : null,
+        diff, diff_pct: diffPct
+      };
+    });
+    const matched = rows.filter(r => r.match && r.match.price != null);
+    const spent = Math.round(rows.reduce((s2, r) => s2 + r.price_paid * r.qty, 0) * 100) / 100;
+    const catalog = Math.round(matched.reduce((s2, r) => s2 + r.match.price * r.qty, 0) * 100) / 100;
+    const delta = Math.round(matched.reduce((s2, r) => s2 + (r.price_paid - r.match.price) * r.qty, 0) * 100) / 100;
+    res.json({ rows, summary: { items: rows.length, matched: matched.length, unmatched: rows.length - matched.length, spent, catalog, delta } });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
