@@ -316,7 +316,7 @@ app.use((req, res, next) => {
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 // redeploy-trigger: 2026-09-08T00:30
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v146-2026-09-08', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v147-2026-09-08', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -678,7 +678,7 @@ Cambio: <как на документе>
 - Если данных для модуля нет на чеке — НЕ выдумывай, пропусти модуль целиком
 - raw_text — строго на языке оригинала; raw_text_ru — полный перевод на русский; обе структуры идентичны
 - ОБА поля ОБЯЗАТЕЛЬНЫ: если на документе есть хоть какой-то текст, raw_text_ru должен присутствовать и содержать перевод КАЖДОЙ строки raw_text
-- ЗАПРЕЩЕНО выводить raw_text и raw_text_ru как JSON-массив или одной строкой без переносов
+- ЗАПРЕЩЕНО выводить raw_text и raw_text_ru как JSON-массив, одной строкой без переносов, ИЛИ вставлять в них JSON-структуры ответа ({"items": ...}) — raw_text это ТОЛЬКО читаемый текст документа по модулям
 
 Верни ТОЛЬКО JSON, без markdown, без объяснений:
 
@@ -1738,7 +1738,28 @@ function salvageItemsFromJsonText(txt) {
       else if (c === '[') depth++;
       else if (c === ']') { depth--; if (depth === 0) { end = i; break; } }
     }
-    if (end < 0) break;
+    if (end < 0) {
+      // v147: массив обрезан (нет закрывающей ]) — берём до последнего ЦЕЛОГО объекта и закрываем сами
+      let d2 = 0, inStr2 = false, esc2 = false, lastObj = -1;
+      for (let i = start; i < src.length; i++) {
+        const c = src[i];
+        if (inStr2) { if (esc2) esc2 = false; else if (c === '\\') esc2 = true; else if (c === '"') inStr2 = false; continue; }
+        if (c === '"') inStr2 = true;
+        else if (c === '[' || c === '{') d2++;
+        else if (c === '}' || c === ']') { d2--; if (c === '}' && d2 === 1) lastObj = i; }
+      }
+      if (lastObj > start) {
+        try {
+          const arr = JSON.parse(src.slice(start, lastObj + 1) + ']');
+          if (Array.isArray(arr)) for (const x of arr) {
+            if (x && typeof x === 'object' && x.name && out.length < 300) {
+              out.push({ name: String(x.name).slice(0, 200), name_ru: x.name_ru || null, article: x.article != null ? String(x.article) : null, quantity: Number(x.quantity) || 1, price: Number(x.price) || 0, total: Number(x.total) || Number(x.price) || 0 });
+            }
+          }
+        } catch (_) { /* не починилось */ }
+      }
+      break;
+    }
     try {
       const arr = JSON.parse(src.slice(start, end + 1));
       if (Array.isArray(arr)) for (const x of arr) {
@@ -2219,6 +2240,11 @@ function buildReceiptTextPrompt(text, currency, docType) {
 ${text}
 """
 
+КРИТИЧЕСКИ ВАЖНО — ПРАВИЛА ВЫВОДА:
+- массив "items" — ОБЯЗАТЕЛЬНЫЙ и НЕПУСТОЙ, если в тексте есть товары с ценами: каждый товар отдельным объектом {"name","name_ru","article","quantity","price","total"};
+- НИКОГДА не копируй входной JSON в другие поля и не возвращай пустой items, когда позиции есть во входе;
+- если входной текст — это JSON с "items", твой ответ ДОЛЖЕН содержать тот же список позиций в поле items (можно улучшить переводы name_ru, но не терять ни одной позиции).
+
 Верни ТОЛЬКО JSON, без markdown, без объяснений:
 {
   "store_name": "MediaMarkt",
@@ -2661,6 +2687,14 @@ function parseAIResponse(text) {
         : (data.raw_text_ru || data.raw_text_translation || null)
     };
 
+    // v147: модель вернула валидный JSON, но items потерялись/пусты — спасаем из сырого ответа
+    if (!result.items.length) {
+      const sv = salvageItemsFromJsonText(jsonStr);
+      if (sv.length) {
+        result.items = normalizeItems(sv);
+        console.log(`v147: items спасены из сырого ответа модели (${sv.length} шт.)`);
+      }
+    }
     // Если модель «сжала» модуль ТОВАРЫ до заглушки "(109 artículos...)" — пересобираем из items
     result.raw_text = rebuildItemsModule(result.raw_text, result.items, false);
     if (result.raw_text_ru) result.raw_text_ru = rebuildItemsModule(result.raw_text_ru, result.items, true);
@@ -2668,6 +2702,9 @@ function parseAIResponse(text) {
     return result;
   } catch (e) {
     console.error('JSON parse error:', e, 'Text:', text.substring(0, 500));
+    // v147: JSON сломан/обрезан — но позиции в нём могли остаться целыми, спасаем
+    const sv = salvageItemsFromJsonText(text);
+    if (sv.length) console.log(`v147: JSON сломан, но items спасены из обрывка (${sv.length} шт.)`);
     return {
       store_name: null,
       store_name_ru: null,
@@ -2680,7 +2717,7 @@ function parseAIResponse(text) {
       currency: 'AED',
       payment_method: null,
       country: null,
-      items: [],
+      items: normalizeItems(sv),
       raw_text: text
     };
   }

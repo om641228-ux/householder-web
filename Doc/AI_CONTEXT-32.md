@@ -2596,3 +2596,10 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - Новая salvageItemsFromJsonText(txt): ищет ВСЕ «"items": […]» в тексте, балансировка скобок с учётом строк/экранов, JSON.parse, маппинг в {name,name_ru,article,quantity,price,total} (до 300). Подключена в finalizeReceiptFromPageTexts ДО extractItemsFallback; если нет name_ru — translateItemNames.
 - buildReceiptTextPrompt (локальный путь!): добавлено поле article (6–14 цифр, LM M*/H*), правило «вход уже содержит JSON с items → скопируй каждый объект», never-empty items; пример JSON — с article.
 - build: 'v146-2026-09-08'.
+
+## v147 (2026-09-08) — централизованное спасение items (ВСЕ пути распознавания)
+Корневая причина «ТОВАРЫ (0) при 100% распознавании»: модель клала JSON с позициями в raw_text или JSON ответа обрывался → parseAIResponse возвращал items:[] и терял позиции.
+- parseAIResponse: success-ветка — если items пусты, salvageItemsFromJsonText(jsonStr); catch-ветка (JSON сломан) — items: normalizeItems(salvageItemsFromJsonText(text)) вместо []. Теперь items спасаются на ЛЮБОМ пути (vision, reprocess, OCR-текст, сводка).
+- salvageItemsFromJsonText: ремонт ОБРЕЗАННОГО массива — если нет закрывающей ], берётся до последнего целого объекта (depth==1) и ']' достраивается. Тест: обрыв на 3-й позиции → 2 целые спасены.
+- Промпты: vision — запрет вставлять JSON-структуры в raw_text; локальный текстовый — блок «КРИТИЧЕСКИ ВАЖНО»: items обязательный и непустой, входной JSON → вернуть тот же список позиций, не теряя ни одной.
+- build: 'v147-2026-09-08'.
