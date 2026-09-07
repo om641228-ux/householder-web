@@ -2615,3 +2615,6 @@ Railway не подтянул v146/v147. Бамп build: 'v148-2026-09-08' (back
 
 ## v150 (2026-09-08) — фикс падения reprocess без model
 /api/reprocess-receipt: model из body мог быть undefined → model.startsWith → TypeError → 500 «не парсится». Теперь String(req.body.model || 'auto'). Smoke-тест parseAIResponse: валидный JSON (items+article+итог), битый JSON (2 позиции спасены).
+
+## v151 (2026-09-08) — глобальный перехват ошибок на фронте
+«Ничего не происходит» при живом сервере → добавлен window error/unhandledrejection hook: красный баннер снизу с текстом ошибки (тап — скрыть). Диагностика без F12.

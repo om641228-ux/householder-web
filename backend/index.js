@@ -315,8 +315,8 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-// redeploy-trigger: 2026-09-08T02:00 (v150)
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v150-2026-09-08', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+// redeploy-trigger: 2026-09-08T03:00 (v151)
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v151-2026-09-08', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
