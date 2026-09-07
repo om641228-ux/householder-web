@@ -315,8 +315,8 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-// redeploy-trigger: 2026-09-08T01:15 (v148)
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v149-2026-09-08', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+// redeploy-trigger: 2026-09-08T02:00 (v150)
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v150-2026-09-08', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4006,7 +4006,8 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
 // ========== REPROCESS ==========
 app.post('/api/reprocess-receipt', requireAuth, async (req, res) => {
   try {
-    const { receiptId, model } = req.body;
+    const { receiptId } = req.body;
+    const model = String(req.body.model || 'auto'); // v150: model может не прийти — раньше model.startsWith ронял запрос с 500
     const { data: receipt } = await supabaseAdmin
       .from('receipts')
       .select('image_url')

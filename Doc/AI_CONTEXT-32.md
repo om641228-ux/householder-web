@@ -2612,3 +2612,6 @@ Railway не подтянул v146/v147. Бамп build: 'v148-2026-09-08' (back
 - parseAIResponse: если total_amount null/0 и есть items → итог = Σ строк (все пути), лог «v149: итог восстановлен суммой строк».
 - Все 3 промпта: артикул = колонка «Nº Art.»/«Artículo»/«Ref»/«Código» в табличных фактурах; НЕ путать с «Nº Serie/IMEI». Правило: нет ИТОГО → просуммировать позиции в total_amount.
 - build: 'v149-2026-09-08'.
+
+## v150 (2026-09-08) — фикс падения reprocess без model
+/api/reprocess-receipt: model из body мог быть undefined → model.startsWith → TypeError → 500 «не парсится». Теперь String(req.body.model || 'auto'). Smoke-тест parseAIResponse: валидный JSON (items+article+итог), битый JSON (2 позиции спасены).
