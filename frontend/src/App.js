@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v141 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v142 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -9360,7 +9360,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-07 · v141 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-07 · v142 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9373,7 +9373,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-07 · v141</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-07 · v142</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
@@ -10153,11 +10153,12 @@ ${bodyHtml}
                     </div>
                   )}
                   <table className="items-table">
-                    <thead><tr><th>№</th><th>Товар</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead>
+                    <thead><tr><th>№</th><th>Артикул</th><th>Товар</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead>
                     <tbody>
                       {rowsIt.map(({ item, i }) => (
                         <tr key={i}>
                           <td>{i + 1}</td>
+                          <td style={{ fontFamily: 'monospace', fontSize: 11, color: item.article ? '#1d1d1f' : '#c7c7cc', whiteSpace: 'nowrap' }}>{item.article || '—'}</td>
                           <td><HighlightText text={item.name_ru || item.name || '—'} query={searchQuery} /></td>
                           <td>{item.quantity}</td>
                           <td>{item.price}</td>
@@ -12508,9 +12509,9 @@ function CompareLmTab({ API_URL, token }) {
 
   const exportCsv = () => {
     const esc = (v) => { v = v == null ? '' : String(v); return /[";\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
-    const head = ['Дата', 'Чек', 'Товар из чека', 'Кол-во', 'Цена в чеке', 'Товар в каталоге', 'Артикул', 'Цена каталога', 'Без скидки', 'Δ ед.', 'Δ %', 'Совпадение', 'URL'];
+    const head = ['Дата', 'Чек', 'Товар из чека', 'Артикул магазина', 'Кол-во', 'Цена в чеке', 'Товар в каталоге', 'Артикул каталога', 'Цена каталога', 'Без скидки', 'Δ ед.', 'Δ %', 'Совпадение', 'URL'];
     const lines = [head.join(';')];
-    for (const r of rows) lines.push([r.date, r.receipt_id, r.name, r.qty, r.price_paid, r.match ? r.match.name : '', r.match ? r.match.article : '', r.match ? r.match.price : '', r.match && r.match.price_original != null ? r.match.price_original : '', r.diff != null ? r.diff : '', r.diff_pct != null ? r.diff_pct : '', r.match ? r.match.method + ' ' + r.match.score + '%' : '', r.match ? r.match.url : ''].map(esc).join(';'));
+    for (const r of rows) lines.push([r.date, r.receipt_id, r.name, r.article || '', r.qty, r.price_paid, r.match ? r.match.name : '', r.match ? r.match.article : '', r.match ? r.match.price : '', r.match && r.match.price_original != null ? r.match.price_original : '', r.diff != null ? r.diff : '', r.diff_pct != null ? r.diff_pct : '', r.match ? r.match.method + ' ' + r.match.score + '%' : '', r.match ? r.match.url : ''].map(esc).join(';'));
     const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -12568,6 +12569,7 @@ function CompareLmTab({ API_URL, token }) {
               <tr style={{ textAlign: 'left', color: '#8e8e93', borderBottom: '2px solid #f0f0f2' }}>
                 <th style={{ padding: '6px 8px' }}>Дата</th>
                 <th style={{ padding: '6px 8px' }}>Товар из чека</th>
+                <th style={{ padding: '6px 8px' }}>Артикул магазина</th>
                 <th style={{ padding: '6px 8px' }}>Кол-во</th>
                 <th style={{ padding: '6px 8px' }}>Цена в чеке</th>
                 <th style={{ padding: '6px 8px' }}>Товар в каталоге</th>
@@ -12582,6 +12584,7 @@ function CompareLmTab({ API_URL, token }) {
                 <tr key={i} style={{ borderBottom: '1px solid #f5f5f7' }}>
                   <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', color: '#8e8e93' }}>{r.date || '—'}</td>
                   <td style={{ padding: '6px 8px', minWidth: 180 }}>{r.name}</td>
+                  <td style={{ padding: '6px 8px', fontFamily: 'monospace', fontSize: 11, whiteSpace: 'nowrap', color: r.article ? '#1d1d1f' : '#c7c7cc' }}>{r.article || '—'}</td>
                   <td style={{ padding: '6px 8px' }}>{r.qty}</td>
                   <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}><b>{r.price_paid} €</b></td>
                   <td style={{ padding: '6px 8px', minWidth: 180 }}>
@@ -12602,7 +12605,7 @@ function CompareLmTab({ API_URL, token }) {
                   <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>{verdict(r)}</td>
                 </tr>
               ))}
-              {!rows.length && <tr><td colSpan={9} style={{ padding: 16, textAlign: 'center', color: '#8e8e93' }}>Нет позиций под выбранный фильтр</td></tr>}
+              {!rows.length && <tr><td colSpan={10} style={{ padding: 16, textAlign: 'center', color: '#8e8e93' }}>Нет позиций под выбранный фильтр</td></tr>}
             </tbody>
           </table>
         </div>

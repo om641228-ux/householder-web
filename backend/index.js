@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v141-2026-09-07', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v143-2026-09-07', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -1173,7 +1173,7 @@ function buildDocumentSummaryPrompt(textSample) {
   "party_b": "ПОЛУЧАТЕЛЬ/вторая сторона ПОЛНОСТЬЮ одной строкой НА ЯЗЫКЕ ОРИГИНАЛА — название + NIF/CIF + адрес (напр. 'RONESIA LIMITED, CL REYKJAVIK 7, FINCA LA QUINTA, 38660 Adeje'): для contract/municipality/bank/tax — arrendatario, comprador, contribuyente; для invoice/bill — cliente/titular (кому выставлен); если в документе нет — null",
   "doc_kind": "для официальных документов: contract (договор), certificate (справка/certificado), power_of_attorney (доверенность/poder), bank_correspondence (письма/выписки банка), gov_correspondence (переписка с госорганами: AEAT, Ayuntamiento, Seguridad Social) — иначе null",
   "summary": "1-2 предложения: о чём документ (предмет договора, сумма, сроки) НА РУССКОМ (названия компаний не переводи) — или null",
-  "items": [ПОЗИЦИИ ДОКУМЕНТА. Для receipt/invoice (чек, упрощённая/торговая фактура — ticket, factura simplificada) — КАЖДЫЙ товар из списка покупок СО ВСЕХ СТРАНИЦ, без пропусков (если документ содержит несколько фактур — позиции бери из КАЖДОЙ фактуры, не только с первой страницы!): {"name":"название как напечатано","name_ru":"перевод на русский","quantity":1,"price":цена за единицу ЧИСЛОМ,"total":сумма строки ЧИСЛОМ,"page":НОМЕР СТРАНИЦЫ, где напечатана позиция — по маркеру «СТРАНИЦА N из M» (маркеров нет — 1)}. Строки «Взнос за управление отходами»/RAEE/ecotasa — тоже отдельными позициями со своей суммой. УСЛУГИ — тоже позиции (нотариус: diligencia, certificación, folios, заверения — каждая со своей ценой). Штрихкод/EAN (13 цифр) рядом с товаром — НЕ цена. ЗАПРЕЩЕНО включать в items: строки ИТОГОВ и сводок (SUMA DE BASES, BASE IMPONIBLE, RETENCIÓN, IVA/IGIC, TOTAL A PAGAR, «Общая сумма…») — это не товары; и ЗАПРЕЩЕНЫ позиции-заглушки вида «(Пропущено, не товар)» — не товар просто пропусти, без записи. Поле name_ru ОБЯЗАТЕЛЬНО для каждой позиции (перевод названия на русский). Для bill — строки начислений (ENERGÍA, CARGOS, IGIC...). Для contract/bank/municipality/tax/proposal/other — пустой массив []],
+  "items": [ПОЗИЦИИ ДОКУМЕНТА. Для receipt/invoice (чек, упрощённая/торговая фактура — ticket, factura simplificada) — КАЖДЫЙ товар из списка покупок СО ВСЕХ СТРАНИЦ, без пропусков (если документ содержит несколько фактур — позиции бери из КАЖДОЙ фактуры, не только с первой страницы!): {"name":"название как напечатано","name_ru":"перевод на русский","article":"АРТИКУЛ МАГАЗИНА/SKU/ref как напечатан рядом с товаром (обычно 6–9 ЦИФР; у Leroy Merlin — 8 цифр, часто в колонке «Ref»/«Artículo» или под названием). НЕ путать со штрихкодом EAN (13 цифр) и НЕ с номером кассы/транзакции. Если артикула нет — null","quantity":1,"price":цена за единицу ЧИСЛОМ,"total":сумма строки ЧИСЛОМ,"page":НОМЕР СТРАНИЦЫ, где напечатана позиция — по маркеру «СТРАНИЦА N из M» (маркеров нет — 1)}. Строки «Взнос за управление отходами»/RAEE/ecotasa — тоже отдельными позициями со своей суммой. УСЛУГИ — тоже позиции (нотариус: diligencia, certificación, folios, заверения — каждая со своей ценой). Штрихкод/EAN (13 цифр) рядом с товаром — НЕ цена. ЗАПРЕЩЕНО включать в items: строки ИТОГОВ и сводок (SUMA DE BASES, BASE IMPONIBLE, RETENCIÓN, IVA/IGIC, TOTAL A PAGAR, «Общая сумма…») — это не товары; и ЗАПРЕЩЕНЫ позиции-заглушки вида «(Пропущено, не товар)» — не товар просто пропусти, без записи. Поле name_ru ОБЯЗАТЕЛЬНО для каждой позиции (перевод названия на русский). Для bill — строки начислений (ENERGÍA, CARGOS, IGIC...). Для contract/bank/municipality/tax/proposal/other — пустой массив []],
   "raw_text": null, "raw_text_ru": null
 }
 
@@ -2660,6 +2660,17 @@ function parseAmount(val) {
   return isNaN(num) ? null : num;
 }
 
+// v143: массив артикулов магазина из jsonb-позиций чека — для физической колонки receipts.articles
+function articlesFromItems(items) {
+  if (!Array.isArray(items)) return [];
+  const out = [];
+  for (const it of items) {
+    const a = String((it && it.article) || '').replace(/\D/g, '');
+    if (/^\d{4,}$/.test(a) && !out.includes(a)) out.push(a);
+  }
+  return out;
+}
+
 function normalizeItems(items) {
   if (!Array.isArray(items)) return [];
   // v56.4: выкидываем мусорные «позиции»: заглушки модели («(Пропущено, не товар)») и строки
@@ -2865,6 +2876,7 @@ async function saveReceiptToDB(receiptData, imageUrl, user, recognitionMethod) {
     country: receiptData.country,
     payment_method: receiptData.payment_method,
     items: receiptData.items,
+    articles: articlesFromItems(receiptData.items), // v143
     image_url: imageUrl,
     page_urls: Array.isArray(receiptData.page_urls) && receiptData.page_urls.length ? receiptData.page_urls : null,
     raw_text: receiptData.raw_text,
@@ -3970,6 +3982,7 @@ app.post('/api/reprocess-receipt', requireAuth, async (req, res) => {
       country: receiptData.country,
       payment_method: receiptData.payment_method,
       items: receiptData.items,
+      articles: articlesFromItems(receiptData.items), // v143
       raw_text: receiptData.raw_text,
       raw_text_ru: receiptData.raw_text_ru || null,
       document_type: docType === 'auto' ? (receiptData.document_type || 'receipt') : docType,
@@ -5181,7 +5194,7 @@ app.get('/api/compare/lm', requireAuth, async (req, res) => {
         if ((pr == null || !isFinite(pr) || pr <= 0) && it && it.total != null && Number(it.quantity) > 0) pr = Number(it.total) / Number(it.quantity);
         if (!nm || nm.length < 4 || pr == null || !isFinite(pr) || pr <= 0) continue;
         if (/^(total|suma|base imponible|iva|igic|retenc|descuento)/i.test(nm)) continue;
-        items.push({ receipt_id: r.id, store: r.store_name, date: r.receipt_date, name: nm, qty: Number(it.quantity) || 1, price: Math.round(pr * 100) / 100 });
+        items.push({ receipt_id: r.id, store: r.store_name, date: r.receipt_date, name: nm, article: it.article != null ? String(it.article) : null, qty: Number(it.quantity) || 1, price: Math.round(pr * 100) / 100 });
         if (items.length >= 400) break;
       }
       if (items.length >= 400) break;
@@ -5189,8 +5202,13 @@ app.get('/api/compare/lm', requireAuth, async (req, res) => {
     // 1) точное совпадение по артикулу (7–9 цифр в названии позиции)
     const artMap = new Map();
     items.forEach((it, i) => {
-      const m = it.name.match(/(?:^|\D)(\d{7,9})(?:\D|$)/);
-      if (m) { if (!artMap.has(m[1])) artMap.set(m[1], []); artMap.get(m[1]).push(i); }
+      // v142: артикул магазина — отдельное поле из распознавания (приоритет); запасной вариант — цифры в названии
+      let art = String(it.article || '').replace(/\D/g, '');
+      if (!/^\d{6,9}$/.test(art)) {
+        const m = it.name.match(/(?:^|\D)(\d{7,9})(?:\D|$)/);
+        art = m ? m[1] : '';
+      }
+      if (art) { it.article = art; if (!artMap.has(art)) artMap.set(art, []); artMap.get(art).push(i); }
     });
     const arts = [...artMap.keys()];
     for (let i = 0; i < arts.length; i += 100) {
@@ -5226,7 +5244,7 @@ app.get('/api/compare/lm', requireAuth, async (req, res) => {
       const diff = m && m.price != null ? Math.round((it.price - m.price) * 100) / 100 : null;
       const diffPct = m && m.price ? Math.round((it.price - m.price) / m.price * 1000) / 10 : null;
       return {
-        receipt_id: it.receipt_id, date: it.date, store: it.store, name: it.name, qty: it.qty, price_paid: it.price,
+        receipt_id: it.receipt_id, date: it.date, store: it.store, name: it.name, article: it.article || null, qty: it.qty, price_paid: it.price,
         match: m ? { id: m.id, name: m.name, url: m.url, article: m.article, price: m.price, price_original: m.price_original, discount_pct: m.discount_pct, currency: m.currency || 'EUR', image: m.image, method: m.method, score: m.score } : null,
         diff, diff_pct: diffPct
       };
@@ -6342,7 +6360,7 @@ app.post('/api/receipts/:id/recognize-failed-pages', requireAuth, requireRole('a
     if (!fixed) return res.status(502).json({ error: `Не удалось перераспознать (страницы: ${stillFailed.join(', ')}) — попробуйте позже` });
     // Пересобираем документ из всех страниц (старая логика сводки)
     const data = await finalizeDocumentFromPageTexts(pageTexts, r.currency || 'EUR', r.document_type || null);
-    const upd = { raw_text: data.raw_text, raw_text_ru: data.raw_text_ru, items: Array.isArray(data.items) ? data.items : [] };
+    const upd = { raw_text: data.raw_text, raw_text_ru: data.raw_text_ru, items: Array.isArray(data.items) ? data.items : [], articles: articlesFromItems(data.items) };
     for (const k of ['store_name', 'store_name_ru', 'receipt_date', 'total_amount', 'subtotal', 'tax_amount', 'document_type', 'subtype', 'invoice_number', 'provider', 'summary']) {
       if (data[k] !== undefined && data[k] !== null && data[k] !== '') upd[k] = data[k];
     }
@@ -6367,6 +6385,7 @@ app.put('/api/receipts/:id', requireAuth, requireRole('admin', 'manager', 'buchh
     for (const k of EDITABLE) {
       if (req.body && Object.prototype.hasOwnProperty.call(req.body, k)) updates[k] = req.body[k];
     }
+    if (Object.prototype.hasOwnProperty.call(updates, 'items')) updates.articles = articlesFromItems(updates.items); // v143
     if (!Object.keys(updates).length) return res.status(400).json({ error: 'Нет полей для обновления' });
     const columns = await getTableColumns();
     const { data, error } = await supabaseAdmin
