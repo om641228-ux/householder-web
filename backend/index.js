@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v136.1-2026-09-07', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v137-2026-09-07', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -5090,6 +5090,69 @@ app.post('/api/parse/ext-price', requireAuth, async (req, res) => {
     }
     if (error) throw error;
     res.json({ ok: true, product: data, changed });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v137: журнал парсинга — расширение пишет итоги по разделу
+app.post('/api/parse/ext-log', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const row = {
+      site: String(b.site || '').slice(0, 120) || null,
+      url: String(b.url || '').slice(0, 500) || null,
+      category: String(b.category || '').slice(0, 300) || null,
+      total: Math.max(0, parseInt(b.total, 10) || 0),
+      with_photo: Math.max(0, parseInt(b.with_photo, 10) || 0),
+      with_brand: Math.max(0, parseInt(b.with_brand, 10) || 0),
+      with_mpn: Math.max(0, parseInt(b.with_mpn, 10) || 0),
+      with_price: Math.max(0, parseInt(b.with_price, 10) || 0),
+      sent: Math.max(0, parseInt(b.sent, 10) || 0)
+    };
+    const { error } = await supabaseAdmin.from('parse_logs').insert(row);
+    if (error) {
+      if (/parse_logs|relation.*does not exist|schema cache/i.test(error.message || '')) return res.json({ ok: false, warn: 'Выполните supabase-migration-v137.sql (create table parse_logs)' });
+      throw error;
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v137: журнал парсинга — чтение
+app.get('/api/parse/logs', requireAuth, async (req, res) => {
+  try {
+    const lim = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    const { data, error } = await supabaseAdmin.from('parse_logs').select('*').order('created_at', { ascending: false }).limit(lim);
+    if (error) {
+      if (/parse_logs|relation.*does not exist|schema cache/i.test(error.message || '')) return res.json({ logs: [], warn: 'Выполните supabase-migration-v137.sql' });
+      throw error;
+    }
+    res.json({ logs: data || [] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v137: ручное редактирование товара каталога (все столбцы)
+app.patch('/api/parse/catalog/:id', requireAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ error: 'Нужен id' });
+    const b = req.body || {};
+    const numOr = (v) => { if (v == null || v === '') return null; const n = parseFloat(String(v).replace(/\s/g, '').replace(',', '.')); return (isFinite(n) && n >= 0 && n < 10000000) ? n : null; };
+    const upd = {};
+    for (const k of ['name', 'article', 'brand', 'mpn', 'category', 'image', 'currency', 'url']) {
+      if (b[k] !== undefined) upd[k] = String(b[k] == null ? '' : b[k]).slice(0, k === 'url' || k === 'image' ? 500 : 300) || null;
+    }
+    for (const k of ['price', 'price_original', 'discount_pct', 'discount_abs']) {
+      if (b[k] !== undefined) upd[k] = numOr(b[k]);
+    }
+    if (!Object.keys(upd).length) return res.status(400).json({ error: 'Нечего обновлять' });
+    if (upd.price != null) { upd.price_at = new Date().toISOString(); upd.price_source = 'manual'; }
+    let { data, error } = await supabaseAdmin.from('parse_products').update(upd).eq('id', id).select().single();
+    if (error && /price_original|discount_pct|discount_abs/i.test(error.message || '')) { // миграция v136 не выполнена
+      delete upd.price_original; delete upd.discount_pct; delete upd.discount_abs;
+      ({ data, error } = await supabaseAdmin.from('parse_products').update(upd).eq('id', id).select().single());
+    }
+    if (error) throw error;
+    res.json({ ok: true, product: data });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
