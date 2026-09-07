@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v137 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v138 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2881,6 +2881,33 @@ function ParseTab({ token, isMobileView, canRun }) {
       setEditProd(null);
     } catch (e) { alert('❌ ' + e.message); }
   };
+  const extSend = (msg) => new Promise((resolve, reject) => { // v138: команда в расширение Chrome
+    const id = localStorage.getItem('lm_ext_id') || '';
+    if (!id) { reject(new Error('no-id')); return; }
+    if (!window.chrome || !chrome.runtime || !chrome.runtime.sendMessage) { reject(new Error('no-ext')); return; }
+    try {
+      chrome.runtime.sendMessage(id, msg, (r) => {
+        const err = chrome.runtime.lastError;
+        if (err) reject(new Error(err.message)); else resolve(r);
+      });
+    } catch (e) { reject(e); }
+  });
+  const extReparse = async (url) => { // v138: перезапуск парсинга раздела из приложения
+    try {
+      const r = await extSend({ cmd: 'parse-section', url });
+      if (r && r.ok) alert('▶ Парсинг раздела запущен в расширении Chrome. Прогресс смотрите в popup расширения.');
+      else if (r && r.error === 'busy') alert('⏳ Расширение уже занято другим парсингом — дождитесь окончания или остановите его в popup.');
+      else if (r && r.error === 'no-auth') alert('⚠️ В расширении не сохранены API URL и токен — откройте popup расширения и нажмите «Сохранить».');
+      else alert('⚠️ Расширение ответило: ' + ((r && r.error) || 'нет ответа'));
+    } catch (e) {
+      if (e.message === 'no-id') {
+        const id = prompt('Укажите ID расширения Chrome (откройте chrome://extensions → «Householder — сборщик цен» → скопируйте ID под названием):');
+        if (id && id.trim()) { localStorage.setItem('lm_ext_id', id.trim()); return extReparse(url); }
+      } else {
+        alert('❌ Не удалось связаться с расширением. Проверьте: 1) расширение v1.14+ установлено и включено (⟳ в chrome://extensions), 2) ID указан верно (⚙ рядом с журналом). Ошибка: ' + e.message);
+      }
+    }
+  };
   const loadCatTree = async () => {
     try {
       const r = await fetch(`${API_URL}/api/parse/catalog/categories?token=${token}&site=www.leroymerlin.es`);
@@ -3125,6 +3152,7 @@ function ParseTab({ token, isMobileView, canRun }) {
             style={{ fontSize: 12, fontWeight: 700, cursor: 'pointer', userSelect: 'none', color: '#6e6e73' }}>
             {catLogsOpen ? '▾' : '▸'} 📜 Журнал парсинга{catLogs ? ` (${catLogs.length})` : ''}
             {catLogsOpen && <span onClick={(e) => { e.stopPropagation(); loadCatLogs(); }} title="Обновить журнал" style={{ marginLeft: 8, cursor: 'pointer' }}>🔄</span>}
+            {catLogsOpen && <span onClick={(e) => { e.stopPropagation(); const id = prompt('ID расширения Chrome (chrome://extensions → «Householder — сборщик цен» → ID):', localStorage.getItem('lm_ext_id') || ''); if (id != null) localStorage.setItem('lm_ext_id', id.trim()); }} title="Настроить связь с расширением — ID из chrome://extensions" style={{ marginLeft: 6, cursor: 'pointer' }}>⚙</span>}
           </div>
           {catLogsOpen && (
             <div style={{ marginTop: 6, overflowX: 'auto' }}>
@@ -3165,7 +3193,9 @@ function ParseTab({ token, isMobileView, canRun }) {
                           <td style={{ padding: '4px 8px' }}>{l.with_mpn}</td>
                           <td style={{ padding: '4px 8px', whiteSpace: 'nowrap' }}>
                             {needRe
-                              ? <span style={{ fontSize: 10.5, color: '#d70015', background: '#fdecea', borderRadius: 8, padding: '2px 8px' }} title={pricePct < 0.8 ? 'Цена менее чем у 80% товаров' : 'Парсинг старше 7 дней — цены могли устареть'}>🔄 Перепарсить{pricePct < 0.8 ? ' (мало цен)' : ' (устарело)'}</span>
+                              ? <button onClick={() => l.url && extReparse(l.url)} disabled={!l.url}
+                                  title={(pricePct < 0.8 ? 'Цена менее чем у 80% товаров. ' : 'Парсинг старше 7 дней — цены могли устареть. ') + 'Клик — запустить парсинг раздела в расширении Chrome'}
+                                  style={{ fontSize: 10.5, color: '#fff', background: '#d70015', border: 'none', borderRadius: 8, padding: '2px 8px', cursor: l.url ? 'pointer' : 'default' }}>🔄 Перепарсить{pricePct < 0.8 ? ' (мало цен)' : ' (устарело)'}</button>
                               : <span style={{ fontSize: 10.5, color: '#1e7e34', background: '#e8f8ef', borderRadius: 8, padding: '2px 8px' }}>✅ Актуально</span>}
                           </td>
                         </tr>
@@ -9314,7 +9344,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-07 · v137 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-07 · v138 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9327,7 +9357,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-07 · v137</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-07 · v138</div>
           )}
           <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">

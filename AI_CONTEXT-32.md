@@ -2520,3 +2520,35 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 - collectStateProducts: фото = ПЕРВОЕ из images[]/media[] (раньше бралось поле image = этикетка энергоэффективности); BAD_PHOTO банит etiqueta/energetic/energy/efficien/clase-ener/eeli/svg; цена + offers/массивы/lowPrice.
 - DOM: бан энергоэтикеток по alt/src/data-src; цена — без «€/ед» (€/kg, €/m²), подъём по ≤3 компактным предкам если в карточке нет.
 - Сервер: тот же бан в ext-products; backfill-чистка обнуляет image с etiqueta/energetic/efficien/eeli.
+
+## v134 + расширение v1.10 (2026-09-07) — столбец MPN + извлечение из строки
+- Каталог: отдельный сортируемый столбец «№ производителя» (mpn, mono).
+- deriveMpn (расширение) + серверный дубль в ext-products: MPN из названия — код в скобках → пара «БУКВЫ цифры» после бренда (GBH 2-26) → одиночный токен буквы+цифры (DHP453); отсев единиц/размеров/8-значного артикула.
+
+## v135 + расширение v1.11 (2026-09-07) — полнота данных, ревизия кнопок, статусы
+- Расширение: collectOne — до 3 попыток пока нет цены И фото (ожидание+скролл; капча сразу стоп). runSectionOnce — до 3 проходов по странице, пока >20% без фото/цены (скролл 400px/250ms + повторная экстракция DOM+MAIN, добор только пустых полей). Прогресс: «Стр. N: X товаров · с ценой · с фото · с брендом · отправлено».
+- Каталог: убраны кнопки «🔢 Артикулы» и «💶 ×10» (мёртвая, 403 без прокси); счётчик брендов в «⇪ Справочник (N)». Блок «📂 Что уже спарсено» — чипы верхних разделов с количеством товаров (клик = фильтр) + бейдж «спарсено путей: N».
+
+## v136 / ext v1.12 (2026-09-07)
+- Причина плохих цен: на карточке LM три числа — бейдж «-1.991 €» (абсолют скидки), зачёркнутая 4.990 €, итоговая 2.999 €; старый regex требовал десятичные и брал «последнюю».
+- Новый __visualPrice(root) в background.js (дублируется внутри extractOnPage и extractLinksOnPage — injected funcs без замыканий): исключает бейджи «-X €»/«-X %», зачёркнутые (del/s/strike, class tachad/strike/old/antes/was/previous/regular/original, computed line-through), цены за единицу (€/kg); текущая цена = незачёркнутый кандидат с максимальным font-size; «2.999»+<sup>€</sup> склеивается; __num понимает тысячные точки.
+- collectStateProducts: price_original из originalPrice/listPrice/pvp/regularPrice/previousPrice/priceBeforeDiscount/crossedPrice/wasPrice, discount_pct из discountPercentage/Percent; abs досчитывается.
+- Backend v136: ext-price/ext-products принимают price_original/discount_pct/discount_abs, досчёт недостающего (из orig+price, abs, pct); сортировка price_original/discount_pct/discount_abs; CSV export +3 колонки.
+- Frontend v136: 3 новых сортируемых столбца «Без скидки» (зачёркнутая), «−%», «−€».
+- МИГРАЦИЯ supabase-migration-v136.sql: alter table parse_products add price_original/discount_pct/discount_abs numeric + notify pgrst.
+- Тест jsdom: case1 (2999/4990/39.9%/1991) ✅ case2 (10.99/26.95/59%/15.96) ✅ case3 (цена за кг исключена) ✅
+
+## v136.1 / ext v1.12.1 (2026-09-07)
+- БАГ: целые цены («142 €», «2.999 €» без десятичных) не совпадали с regex → цены не парились вообще. Добавлена альтернатива \d{1,6}(?=\s*€).
+- Backend: если миграция v136 не выполнена — ext-price/ext-products повторяют запись БЕЗ новых колонок (цены не теряются).
+- Тесты jsdom: 142/159/−17€/10.7% ✅ 10.99/26.95/−59% ✅ 89 € ✅ 2999/4990/−1991€ ✅
+
+## v137 / ext v1.13 (2026-09-07)
+- Backend: POST /api/parse/ext-log (запись журнала), GET /api/parse/logs?limit, PATCH /api/parse/catalog/:id (ручное редактирование name/article/brand/mpn/category/image/currency/url + price/price_original/discount_pct/discount_abs; price→price_source='manual'; отказоустойчиво без миграции v136).
+- МИГРАЦИЯ supabase-migration-v137.sql: create table parse_logs (created_at, site, url, category, total, with_photo, with_brand, with_mpn, with_price, sent) + disable RLS.
+- Extension v1.13: runSectionOnce накапливает статистику раздела и шлёт в ext-log в конце (и при остановке).
+- Frontend v137: строка таблицы — вместо 💶/🤖 одна ✏️ (модал редактирования всех столбцов); убраны кнопки «🤖 AI-цены ×10» и «🏷 Бренды»; блок «🛠 Sitemap-синхронизация и разделы каталога» сворачиваемый (по умолчанию свёрнут); сворачиваемый «📜 Журнал парсинга» с колонками Дата/Раздел(клик→фильтр, 🔗→сайт)/Товаров/💶%/📷/🏷/№ и рекомендацией «🔄 Перепарсить» (цен <80% или старше 7 дней).
+
+## v138 / ext v1.14 (2026-09-07)
+- Перезапуск парсера из приложения: manifest externally_connectable → householder-web-production.up.railway.app; background onMessageExternal: cmd parse-section{url}/status/stop; api+token из chrome.storage.local.
+- Frontend: extSend() (ID расширения в localStorage 'lm_ext_id'), extReparse(url); в журнале «🔄 Перепарсить» — кнопка запуска парсинга раздела; ⚙ рядом с заголовком журнала — ввод ID расширения.

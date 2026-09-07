@@ -352,6 +352,8 @@ async function runSection(api, token, startUrl) {
 async function runSectionOnce(api, token, startUrl) {
   const known = new Set();
   let totalSent = 0;
+  // v1.13: накопители статистики для журнала парсинга
+  let statTotal = 0, statPhoto = 0, statBrand = 0, statMpn = 0, statPrice = 0, logCat = '';
   try {
     for (let page = 1; page <= 100; page++) {
       if (stopped) { progress(`⏹ Раздел остановлен: отправлено ${totalSent} товаров`); break; }
@@ -437,7 +439,9 @@ async function runSectionOnce(api, token, startUrl) {
       } catch (e) { progress('⚠️ Стр. ' + page + ': не загрузилась — ' + e.message); }
       if (tab) try { await chrome.tabs.remove(tab.id); } catch (e) {}
       if (links.length) {
-        const wp = links.filter(l => l.price != null).length, wi = links.filter(l => l.image).length, wb = links.filter(l => l.brand).length;
+        const wp = links.filter(l => l.price != null).length, wi = links.filter(l => l.image).length, wb = links.filter(l => l.brand).length, wm = links.filter(l => l.mpn).length;
+        statTotal += links.length; statPhoto += wi; statBrand += wb; statMpn += wm; statPrice += wp;
+        if (!logCat && links[0].category) logCat = links[0].category;
         progress(`📦 Стр. ${page}: ${links.length} товаров · 💶 с ценой ${wp} · 📷 с фото ${wi} · 🏷 с брендом ${wb} · отправлено всего ${totalSent}`);
       }
       const fresh = links.filter(l => !known.has(l.url));
@@ -451,6 +455,16 @@ async function runSectionOnce(api, token, startUrl) {
         if (rr.ok) { const jj = await rr.json().catch(() => ({})); totalSent += jj.upserted || 0; }
       }
       await sleep(2500 + Math.random() * 1500); // вежливая пауза между страницами
+    }
+    // v1.13: итоги раздела — в журнал парсинга на сервере
+    if (statTotal > 0) {
+      try {
+        await fetch(`${api}/api/parse/ext-log?token=${encodeURIComponent(token)}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ site: 'www.leroymerlin.es', url: startUrl, category: logCat, total: statTotal, with_photo: statPhoto, with_brand: statBrand, with_mpn: statMpn, with_price: statPrice, sent: totalSent })
+        });
+        progress('📜 Журнал: итоги раздела записаны');
+      } catch (e) {}
     }
   } catch (e) { progress('❌ ' + e.message); }
 }
@@ -638,6 +652,26 @@ async function runSectionQueue(api, token, urls) {
   } catch (e) { progress('❌ ' + e.message); }
   running = false;
 }
+
+// v1.14: команды из веб-приложения Householder (onMessageExternal) — запуск/стоп/статус парсинга раздела
+chrome.runtime.onMessageExternal.addListener((m, sender, sendResponse) => {
+  (async () => {
+    try {
+      const { api, token } = await chrome.storage.local.get(['api', 'token']);
+      if (!api || !token) { sendResponse({ ok: false, error: 'no-auth' }); return; }
+      if (m && m.cmd === 'parse-section' && /^https?:\/\//i.test(String(m.url || ''))) {
+        if (running) { sendResponse({ ok: false, error: 'busy' }); return; }
+        runSection(api, token, String(m.url));
+        sendResponse({ ok: true });
+      } else if (m && m.cmd === 'status') {
+        sendResponse({ ok: true, running });
+      } else if (m && m.cmd === 'stop') {
+        stopped = true; sendResponse({ ok: true });
+      } else sendResponse({ ok: false, error: 'unknown-cmd' });
+    } catch (e) { sendResponse({ ok: false, error: e.message }); }
+  })();
+  return true; // ответ асинхронный
+});
 
 chrome.runtime.onMessage.addListener((m) => {
   if (m.type === 'section' && !running) runSection(m.api, m.token, m.url);
