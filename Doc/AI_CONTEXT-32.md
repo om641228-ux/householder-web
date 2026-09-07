@@ -2556,3 +2556,43 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 ## v139 / ext v1.15 (2026-09-07)
 - Причина «нет прогресса при репарсинге»: прогресс показывался ТОЛЬКО в popup расширения. Теперь background хранит lastProgress и отдаёт в cmd 'status'; App.js после «🔄 Перепарсить» опрашивает status каждые 4 с и показывает живую строку прогресса в журнале (жёлтая=идёт, зелёная=готово + автообновление журнала).
 - Меню вкладок (.tabs-inline): убран серый фон-прямоугольник и pill у активной — инлайн-переопределение: фон none, кнопки без рамок, активная = синий жирный текст + подчёркивание.
+
+## v140 / ext v1.16 (2026-09-07)
+- Причина зависания: прокрутка страницы (executeScript Promise) без таймаута → running=true навсегда, новые запуски = busy. Теперь: Promise.race с sleep(12–15с) на всех прокрутках; isStuck() (2 мин без прогресса) самосбрасывает running в parse-section/status/popup-хендлерах.
+- Причина «одинаковый результат при репарсинге»: на витрине у товаров-вариантов цены нет физически. v1.16: после раздела добор цен со СТРАНИЦ товаров (collectOne), до 40 шт за проход, стоп при 3 капчах, прогресс «💶 Добор цены N/M».
+- Меню: переопределение усилено специфичностью (.mini-header .tabs-inline …) + инлайн style на <nav> (background:none, boxShadow:none) — внешний CSS больше не рисует подложку.
+
+## v141 (2026-09-07) — вкладка «⚖️ Цены»
+- Backend GET /api/compare/lm?store=leroy&days=365&limit: берёт receipts (items jsonb: name/quantity/price/total) по store_name ilike + receipt_date, собирает до 400 позиций (пропуск итогов/IVA).
+- Сопоставление с parse_products (site www.leroymerlin.es): 1) точное по артикулу (7–9 цифр в названии позиции, пачки in(100)); 2) fuzzy: ilike по самому длинному значимому токену (≥3 симв., стоп-слова ES, без акцентов NFD), 60 кандидатов, score = покрытие токенов позиции, порог 60%.
+- Ответ: rows (date, name, qty, price_paid, match{name,url,article,price,price_original,discount_pct,method,score}, diff, diff_pct) + summary (items/matched/spent/catalog/delta).
+- Frontend: вкладка compare (TAB_LABELS '⚖️ Цены', кнопка после Парсинга), компонент CompareLmTab в конце App.js: фильтры магазин/период, карточки итогов (потрачено/каталог/Δ), чипы Все/Дороже/Дешевле/Та же/Не найдено, таблица с вердиктами и ссылками на LM, выгрузка CSV.
+
+## v142 (2026-09-07) — артикул магазина в чеках
+- Промпт распознавания: в items добавлено поле "article" (артикул магазина/SKU/ref, 6–9 цифр; НЕ EAN-13, НЕ № транзакции; null если нет).
+- /api/compare/lm: матчинг теперь по it.article из позиции чека (приоритет), запасной — цифры из названия, далее fuzzy. В rows добавлено article.
+- Frontend: таблица позиций чека — столбец «Артикул» (mono); вкладка «⚖️ Цены» — столбец «Артикул магазина» + в CSV.
+
+## v143 (2026-09-07) — физическая колонка receipts.articles
+- МИГРАЦИЯ supabase-migration-v143.sql: alter table receipts add articles text[] + разовое заполнение из jsonb (только 4+ цифр) + GIN-индекс receipts_articles_gin.
+- Backend: articlesFromItems(items) — сбор уникальных артикулов из позиций; записывается при: сохранении нового чека, перераспознавании (полном и постраничном), ручном редактировании items (PUT /api/receipts/:id). filterRecordByColumns сам пропустит поле после миграции (getTableColumns из БД).
+
+## v144 (2026-09-08) — усиление распознавания позиций чека (ТОВАРЫ (0))
+Причина бага: чек LM распознавался с полным raw_text, но items=[] — промпт v142 ошибочно требовал артикул «6–9 цифр», а у LM артикулы 10–13 цифр после маркеров M*/M/H* («M* 3276007874082 179,00»); модель обнуляла позиции.
+- ОБА промпта (buildReceiptPrompt + buildDocumentSummaryPrompt): формат чека LM (2 строки на позицию: название + «M* <артикул> <цена>»), article = 6–14 цифр, «Promo operacion»/«Dto.» = позиции с отрицательной суммой, ecotasa = позиция, ЖЁСТКОЕ ПРАВИЛО: есть товары с ценами → items НИКОГДА не [] и document_type receipt/invoice.
+- Пример JSON в buildReceiptPrompt: добавлено поле article.
+- extractItemsFallback: захват кода 8–14 цифр в article (не выбрасывается), срез маркера M*/H* из имени; склейка с pendingName покрывает 2-строчный формат LM. Тест: обе позиции с артикулами извлекаются.
+- Гейт фолбэка (сводка документа): добавлены leroy|merlin как валидный сигнал чека.
+- /api/compare/lm: артикул 6–14 цифр (было 6–9 — 13-значные коды LM не матчились с parse_products.article).
+
+## v145 (2026-09-08) — фикс проверки local-mac-ocr (КРИТИЧНО)
+Ошибка «Бэкенд householder-api устарел… build v52+» на свежем бэке: фронт сравнивал build СТРОКОЙ (`h.build < 'v52'`) → 'v144' < 'v52' лексикографически ('1'<'5'). Локальный OCR ломался в ЛЮБОЙ версии ≥ v100. Исправлено на числовое сравнение parseInt(build.replace(/^v/,'')) >= 52 в ДВУХ местах (одиночная загрузка ~6249, пакетная ~6707). ПРАВИЛО: build никогда не сравнивать строкой!
+
+## v146 (2026-09-08) — прогресс-бар пакетного перераспознавания
+Вкладка Фактуры → «🔄 Перераспознать»: состояние reprocessProg {total,done,ok,failed,currentName,startedAt,finished,lastError}; панель под bulk-кнопками: полоса прогресса (done/total %), текущий чек (магазин + дата), этапы «OCR → AI → сохранение», счётчики ✔/✖, по завершении — итог + время + кнопка ✕. Ошибки по каждому чеку считаются из ответа /api/reprocess-receipt.
+
+## v146-backend (2026-09-08) — salvage items из JSON-фрагмента (локальная AI)
+Баг: при local-mac-ocr в raw_text попадал готовый JSON «"items":[{name,article,price,…}]» (ответ локальной модели), items=[] в карточке; regex-фолбэк не ловит строки «"price": 175.00,».
+- Новая salvageItemsFromJsonText(txt): ищет ВСЕ «"items": […]» в тексте, балансировка скобок с учётом строк/экранов, JSON.parse, маппинг в {name,name_ru,article,quantity,price,total} (до 300). Подключена в finalizeReceiptFromPageTexts ДО extractItemsFallback; если нет name_ru — translateItemNames.
+- buildReceiptTextPrompt (локальный путь!): добавлено поле article (6–14 цифр, LM M*/H*), правило «вход уже содержит JSON с items → скопируй каждый объект», never-empty items; пример JSON — с article.
+- build: 'v146-2026-09-08'.

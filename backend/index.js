@@ -316,7 +316,7 @@ app.use((req, res, next) => {
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 // redeploy-trigger: 2026-09-08T00:30
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v144-2026-09-08', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v146-2026-09-08', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -1719,6 +1719,39 @@ function shouldUseDocumentPipeline(pageTexts) {
 // Когда LLM вернул items: [] при явном списке товаров в тексте (Mac OCR и др.).
 // Механический разбор: строка, оканчивающаяся ценой («34,99» / «5.95»), — позиция;
 // название — текст той же строки (без EAN-штрихкода) + предшествующие текстовые строки.
+// v146: локальная AI иногда возвращает готовый JSON («"items": [ {…} ]») прямо в OCR-тексте —
+// достаём массив позиций оттуда с балансировкой скобок
+function salvageItemsFromJsonText(txt) {
+  const src = String(txt || '');
+  const out = [];
+  let pos = 0;
+  while (true) {
+    const idx = src.indexOf('"items"', pos);
+    if (idx < 0) break;
+    const start = src.indexOf('[', idx + 7);
+    if (start < 0) break;
+    let depth = 0, inStr = false, esc = false, end = -1;
+    for (let i = start; i < src.length; i++) {
+      const c = src[i];
+      if (inStr) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') inStr = false; continue; }
+      if (c === '"') inStr = true;
+      else if (c === '[') depth++;
+      else if (c === ']') { depth--; if (depth === 0) { end = i; break; } }
+    }
+    if (end < 0) break;
+    try {
+      const arr = JSON.parse(src.slice(start, end + 1));
+      if (Array.isArray(arr)) for (const x of arr) {
+        if (x && typeof x === 'object' && x.name && out.length < 300) {
+          out.push({ name: String(x.name).slice(0, 200), name_ru: x.name_ru || null, article: x.article != null ? String(x.article) : null, quantity: Number(x.quantity) || 1, price: Number(x.price) || 0, total: Number(x.total) || Number(x.price) || 0 });
+        }
+      }
+    } catch (_) { /* обрыв JSON — пропускаем */ }
+    pos = end + 1;
+  }
+  return out;
+}
+
 function extractItemsFallback(rawText) {
   const lines = String(rawText || '').split('\n').map(l => l.trim()).filter(Boolean);
   const items = [];
@@ -2161,7 +2194,8 @@ function buildReceiptTextPrompt(text, currency, docType) {
 
 ВАЖНЫЕ ПРАВИЛА:
 1. Найди магазин (store_name — ВСЕГДА оригинальное название как напечатано, без перевода; перевод — в store_name_ru), дату (receipt_date в формате YYYY-MM-DD), время (receipt_time), итоговую сумму (total_amount).
-2. Найди ВСЕ товары — каждый товар это объект: name (оригинал), name_ru (перевод на русский), quantity (количество, если не указано — 1), price (цена за единицу), total (сумма за товар). Выведи КАЖДЫЙ товар, без пропусков.
+2. Найди ВСЕ товары — каждый товар это объект: name (оригинал), name_ru (перевод на русский), article (АРТИКУЛ МАГАЗИНА — цифровой код 6–14 знаков рядом с товаром; у Leroy Merlin — 10–13 цифр после маркера M*/M/H* на отдельной строке «M* 3276007874082 179,00»; если нет — null), quantity (количество, если не указано — 1), price (цена за единицу), total (сумма за товар). Выведи КАЖДЫЙ товар, без пропусков. ЖЁСТКОЕ ПРАВИЛО: если в тексте есть товары с ценами — массив items НИКОГДА не пустой.
+   ОСОБЫЙ СЛУЧАЙ: если во входном тексте уже есть JSON-фрагмент вида "items": [ {...} ] — это готовые позиции от предыдущего шага: скопируй КАЖДЫЙ объект в массив items ответа (name, name_ru, article, quantity, price, total), ничего не теряя.
 3. ${currencyHint}
 4. Если не уверен в значении — используй null, НЕ используй "Unknown" или 0 без причины.
 5. Дата: "20/03/2026" или "20.03.2026" → "2026-03-20". Суммы — точные числа без символов валют.
@@ -2212,7 +2246,7 @@ ${text}
   "consumption_unit": null,
   "object": null,
   "items": [
-    { "name": "BROTHER MFD LASER MONO", "name_ru": "МФУ Brother лазерное", "quantity": 1, "price": 399.00, "total": 399.00 }
+    { "name": "BROTHER MFD LASER MONO", "name_ru": "МФУ Brother лазерное", "article": "5035048665541", "quantity": 1, "price": 399.00, "total": 399.00 }
   ]
 }`;
 }
@@ -2251,6 +2285,15 @@ async function finalizeReceiptFromPageTexts(pageTexts, currency, docType) {
   data.raw_text_ru = raw_text_ru;
   if (!data.object) data.object = detectObjectByAddress(data.supply_address, raw_text);
   if (!Array.isArray(data.items)) data.items = [];
+  // v146: OCR-текст сам содержит JSON с items (ответ локальной AI) — забираем позиции напрямую
+  if (data.items.length === 0) {
+    const sv = salvageItemsFromJsonText(raw_text);
+    if (sv.length) {
+      data.items = sv;
+      console.log(`v146: позиции извлечены из JSON-фрагмента в OCR-тексте (${sv.length} шт.)`);
+      if (!data.items.some(it => it.name_ru)) await translateItemNames(data.items);
+    }
+  }
   // v54.2: строгий фолбэк — LLM не извлёк позиции, а в тексте явный список товаров
   if (data.items.length === 0) {
     const fb = extractItemsFallback(raw_text);
