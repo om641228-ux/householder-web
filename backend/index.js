@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v143-2026-09-07', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v144-2026-09-08', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -592,7 +592,9 @@ function buildReceiptPrompt(currency, docType) {
 ВАЖНЫЕ ПРАВИЛА:
 1. Извлеки ВЕСЬ текст с чека полностью — каждую строку, каждую цифру.
 2. Найди магазин (store_name), дату (receipt_date в формате YYYY-MM-DD), время (receipt_time), итоговую сумму (total_amount).
-3. Найди ВСЕ товары — каждый товар это объект с: name (оригинальное название), name_ru (перевод на русский), quantity (количество), price (цена за единицу), total (общая сумма за товар). Товаров может быть 100+ — выведи КАЖДЫЙ, без пропусков и без сокращений списка.
+3. Найди ВСЕ товары — каждый товар это объект с: name (оригинальное название), name_ru (перевод на русский), article (АРТИКУЛ МАГАЗИНА как напечатан рядом с товаром — цифровой код 6–14 знаков; если не напечатан — null), quantity (количество), price (цена за единицу), total (общая сумма за товар). Товаров может быть 100+ — выведи КАЖДЫЙ, без пропусков и без сокращений списка.
+   ФОРМАТ ЧЕКА LEROY MERLIN: позиция = 2 строки — строка с названием, затем строка «M* 3276007874082 179,00» (маркер M*/M/H*, затем артикул из 10–13 цифр, затем цена) — объединяй в одну позицию: name из первой строки, article = цифровой код, price/total = цена в конце. Строки «Promo operacion» / «Dto.» — отдельные позиции с ОТРИЦАТЕЛЬНОЙ суммой. «Contribución a la gestión del residuo» (ecotasa) — тоже позиция.
+   ЖЁСТКОЕ ПРАВИЛО: если на чеке/фактуре видны товары с ценами — массив items НИКОГДА не пустой: выведи КАЖДЫЙ товар, и document_type = "receipt" (или "invoice"), НЕ "other".
 4. ${currencyHint}
 5. Если не уверен в значении — используй null, НЕ используй "Unknown" или 0 без причины.
 6. Дата: если на чеке "20/03/2026" → "2026-03-20". Если "20.03.2026" → "2026-03-20".
@@ -708,6 +710,7 @@ Cambio: <как на документе>
     {
       "name": "BROTHER MFD LASER MONO",
       "name_ru": "МФУ Brother лазерное",
+      "article": "3276007874082",
       "quantity": 1,
       "price": 399.00,
       "total": 399.00
@@ -1173,7 +1176,7 @@ function buildDocumentSummaryPrompt(textSample) {
   "party_b": "ПОЛУЧАТЕЛЬ/вторая сторона ПОЛНОСТЬЮ одной строкой НА ЯЗЫКЕ ОРИГИНАЛА — название + NIF/CIF + адрес (напр. 'RONESIA LIMITED, CL REYKJAVIK 7, FINCA LA QUINTA, 38660 Adeje'): для contract/municipality/bank/tax — arrendatario, comprador, contribuyente; для invoice/bill — cliente/titular (кому выставлен); если в документе нет — null",
   "doc_kind": "для официальных документов: contract (договор), certificate (справка/certificado), power_of_attorney (доверенность/poder), bank_correspondence (письма/выписки банка), gov_correspondence (переписка с госорганами: AEAT, Ayuntamiento, Seguridad Social) — иначе null",
   "summary": "1-2 предложения: о чём документ (предмет договора, сумма, сроки) НА РУССКОМ (названия компаний не переводи) — или null",
-  "items": [ПОЗИЦИИ ДОКУМЕНТА. Для receipt/invoice (чек, упрощённая/торговая фактура — ticket, factura simplificada) — КАЖДЫЙ товар из списка покупок СО ВСЕХ СТРАНИЦ, без пропусков (если документ содержит несколько фактур — позиции бери из КАЖДОЙ фактуры, не только с первой страницы!): {"name":"название как напечатано","name_ru":"перевод на русский","article":"АРТИКУЛ МАГАЗИНА/SKU/ref как напечатан рядом с товаром (обычно 6–9 ЦИФР; у Leroy Merlin — 8 цифр, часто в колонке «Ref»/«Artículo» или под названием). НЕ путать со штрихкодом EAN (13 цифр) и НЕ с номером кассы/транзакции. Если артикула нет — null","quantity":1,"price":цена за единицу ЧИСЛОМ,"total":сумма строки ЧИСЛОМ,"page":НОМЕР СТРАНИЦЫ, где напечатана позиция — по маркеру «СТРАНИЦА N из M» (маркеров нет — 1)}. Строки «Взнос за управление отходами»/RAEE/ecotasa — тоже отдельными позициями со своей суммой. УСЛУГИ — тоже позиции (нотариус: diligencia, certificación, folios, заверения — каждая со своей ценой). Штрихкод/EAN (13 цифр) рядом с товаром — НЕ цена. ЗАПРЕЩЕНО включать в items: строки ИТОГОВ и сводок (SUMA DE BASES, BASE IMPONIBLE, RETENCIÓN, IVA/IGIC, TOTAL A PAGAR, «Общая сумма…») — это не товары; и ЗАПРЕЩЕНЫ позиции-заглушки вида «(Пропущено, не товар)» — не товар просто пропусти, без записи. Поле name_ru ОБЯЗАТЕЛЬНО для каждой позиции (перевод названия на русский). Для bill — строки начислений (ENERGÍA, CARGOS, IGIC...). Для contract/bank/municipality/tax/proposal/other — пустой массив []],
+  "items": [ПОЗИЦИИ ДОКУМЕНТА. Для receipt/invoice (чек, упрощённая/торговая фактура — ticket, factura simplificada) — КАЖДЫЙ товар из списка покупок СО ВСЕХ СТРАНИЦ, без пропусков (если документ содержит несколько фактур — позиции бери из КАЖДОЙ фактуры, не только с первой страницы!): {"name":"название как напечатано","name_ru":"перевод на русский","article":"АРТИКУЛ МАГАЗИНА/SKU/ref как напечатан рядом с товаром (обычно 6–14 ЦИФР; у Leroy Merlin — длинный код из 10–13 цифр, напечатанный под названием товара отдельной строкой вида «M* 3276007874082 179,00» или «H* 3276007874082» — бери ВЕСЬ цифровой код после M*/M/H*, это и есть артикул, а цена в конце строки — цена товара). НЕ путать с номером кассы/транзакции. Если артикула нет — null","quantity":1,"price":цена за единицу ЧИСЛОМ,"total":сумма строки ЧИСЛОМ,"page":НОМЕР СТРАНИЦЫ, где напечатана позиция — по маркеру «СТРАНИЦА N из M» (маркеров нет — 1)}. Строки «Взнос за управление отходами»/RAEE/ecotasa — тоже отдельными позициями со своей суммой. УСЛУГИ — тоже позиции (нотариус: diligencia, certificación, folios, заверения — каждая со своей ценой). Штрихкод/EAN (13 цифр) рядом с товаром — НЕ цена. ЗАПРЕЩЕНО включать в items: строки ИТОГОВ и сводок (SUMA DE BASES, BASE IMPONIBLE, RETENCIÓN, IVA/IGIC, TOTAL A PAGAR, «Общая сумма…») — это не товары; и ЗАПРЕЩЕНЫ позиции-заглушки вида «(Пропущено, не товар)» — не товар просто пропусти, без записи. Поле name_ru ОБЯЗАТЕЛЬНО для каждой позиции (перевод названия на русский). ФОРМАТ ЧЕКА LEROY MERLIN: каждая позиция занимает 2 строки — первая строка название товара, вторая строка «M* <13-значный артикул> <цена>» (или H*/M) — объединяй их в ОДНУ позицию {name, article, price}; строки «Promo operacion»/«Dto.» — отдельные позиции с ОТРИЦАТЕЛЬНОЙ суммой; «Contribución a la gestión del residuo» — отдельная позиция. ЖЁСТКОЕ ПРАВИЛО: если в тексте документа есть товары с ценами — массив items НИКОГДА не должен быть пустым ([]), выводи КАЖДЫЙ товар; document_type в этом случае — «receipt» или «invoice», НЕ «other». Для bill — строки начислений (ENERGÍA, CARGOS, IGIC...). Для contract/bank/municipality/tax/proposal/other — пустой массив []],
   "raw_text": null, "raw_text_ru": null
 }
 
@@ -1730,7 +1733,9 @@ function extractItemsFallback(rawText) {
     const m = line.match(priceRe);
     if (m) {
       const price = parseAmountLike(m[1]);
-      const namePart = line.slice(0, m.index).replace(/\b\d{8,14}\b/g, '').replace(/\s{2,}/g, ' ').trim();
+      const before = line.slice(0, m.index);
+      const am = before.match(/\b(\d{8,14})\b/); // v144: длинный код рядом с ценой — артикул магазина (LM: M* 3276007874082 …)
+      const namePart = before.replace(/\b\d{8,14}\b/g, '').replace(/^[MH]\*?\s*/i, '').replace(/\s{2,}/g, ' ').trim();
       let name = [pendingName, namePart].filter(Boolean).join(' ').replace(/\s{2,}/g, ' ').trim();
       pendingName = null;
       if (price == null || price <= 0 || price >= 1e6) continue;
@@ -1739,7 +1744,7 @@ function extractItemsFallback(rawText) {
       // v56.2: строка итогов «11,40 7,00 0,80 → 12,20» — не товар: в названии должна быть буква
       if (!/[a-zа-яёáéíóúñü]/i.test(name)) continue;
       if (notName.test(name) && name.length < 12) continue;
-      items.push({ name: name.slice(0, 120), name_ru: null, quantity: 1, price, total: price, page: curPage });
+      items.push({ name: name.slice(0, 120), name_ru: null, article: am ? am[1] : null, quantity: 1, price, total: price, page: curPage });
     } else if (notName.test(line) || !/[a-zа-яёáéíóúñü]/i.test(line) || line.length < 4) {
       pendingName = null; // служебная/не текстовая строка — разделитель, шапку в название не тянем
     } else {
@@ -2050,7 +2055,7 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
   // v54.2: строгий фолбэк — LLM не извлёк позиции, а в тексте явный список товаров
   if (data.items.length === 0) {
     const fb = extractItemsFallback(raw_text);
-    if (fb.length >= 2 && /итого|total|ticket|factura|recibo/i.test(raw_text)) {
+    if (fb.length >= 2 && /итого|total|ticket|factura|recibo|leroy|merlin/i.test(raw_text)) {
       data.items = fb;
       if (!data.document_type || data.document_type === 'other') data.document_type = 'receipt';
       console.log(`v54.2: позиции восстановлены фолбэк-парсером (${fb.length} шт.)`);
@@ -5204,8 +5209,8 @@ app.get('/api/compare/lm', requireAuth, async (req, res) => {
     items.forEach((it, i) => {
       // v142: артикул магазина — отдельное поле из распознавания (приоритет); запасной вариант — цифры в названии
       let art = String(it.article || '').replace(/\D/g, '');
-      if (!/^\d{6,9}$/.test(art)) {
-        const m = it.name.match(/(?:^|\D)(\d{7,9})(?:\D|$)/);
+      if (!/^\d{6,14}$/.test(art)) {
+        const m = it.name.match(/(?:^|\D)(\d{7,14})(?:\D|$)/);
         art = m ? m[1] : '';
       }
       if (art) { it.article = art; if (!artMap.has(art)) artMap.set(art, []); artMap.get(art).push(i); }
