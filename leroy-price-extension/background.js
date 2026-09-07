@@ -1,7 +1,8 @@
 let running = false, stopped = false;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-let lastProgress = ''; // v1.15: последний прогресс — для опроса из веб-приложения
-const progress = (text) => { lastProgress = text; chrome.runtime.sendMessage({ type: 'progress', text }).catch(() => {}); };
+let lastProgress = '', progressAt = 0; // v1.15/v1.16: последний прогресс + метка времени — для опроса из приложения и самосброса зависания
+const progress = (text) => { lastProgress = text; progressAt = Date.now(); chrome.runtime.sendMessage({ type: 'progress', text }).catch(() => {}); };
+const isStuck = () => running && progressAt && (Date.now() - progressAt > 120000); // v1.16: 2 мин без прогресса = завис
 
 // извлечение JSON-LD Product на странице товара
 function extractOnPage() {
@@ -139,7 +140,7 @@ async function collectOne(api, token, p) {
     for (let att = 1; att <= 3; att++) {
       await sleep(att === 1 ? 1000 : 2500); // даём дорендериться JSON-LD/цене/фото
       if (att > 1) {
-        try { await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => { window.scrollTo(0, document.body.scrollHeight / 2); window.scrollTo(0, 0); } }); } catch (e) {}
+        try { await Promise.race([chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => { window.scrollTo(0, document.body.scrollHeight / 2); window.scrollTo(0, 0); } }), sleep(5000)]); } catch (e) {}
         await sleep(1200);
       }
       try {
@@ -355,6 +356,7 @@ async function runSectionOnce(api, token, startUrl) {
   let totalSent = 0;
   // v1.13: накопители статистики для журнала парсинга
   let statTotal = 0, statPhoto = 0, statBrand = 0, statMpn = 0, statPrice = 0, logCat = '';
+  const needPrice = []; // v1.16: товары без цены на витрине — дочитаем со страниц товаров
   try {
     for (let page = 1; page <= 100; page++) {
       if (stopped) { progress(`⏹ Раздел остановлен: отправлено ${totalSent} товаров`); break; }
@@ -374,7 +376,10 @@ async function runSectionOnce(api, token, startUrl) {
         await sleep(1200);
         // v1.5.2: прокрутка вниз — принуждаем lazy-load отдать реальные src картинок
         try {
-          await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => new Promise((res) => { let y = 0; const t = setInterval(() => { y += 600; window.scrollTo(0, y); if (y >= document.body.scrollHeight) { clearInterval(t); res(); } }, 150); }) });
+          await Promise.race([
+          chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => new Promise((res) => { let y = 0; const t = setInterval(() => { y += 600; window.scrollTo(0, y); if (y >= document.body.scrollHeight) { clearInterval(t); res(); } }, 150); }) }),
+          sleep(12000) // v1.16: прокрутка не должна висеть вечно
+        ]);
         } catch (e) {}
         await sleep(800);
         const [inj] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractLinksOnPage });
@@ -412,7 +417,10 @@ async function runSectionOnce(api, token, startUrl) {
           if (noPhoto <= links.length * 0.2 && noPrice <= links.length * 0.2) break; // ≥80% полных — идём дальше
           progress(`⏳ Стр. ${page}: фото нет у ${noPhoto}/${links.length}, цены нет у ${noPrice} — догружаю (проход ${pass})…`);
           try {
-            await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => new Promise((res) => { let y = 0; const t = setInterval(() => { y += 400; window.scrollTo(0, y); if (y >= document.body.scrollHeight) { clearInterval(t); window.scrollTo(0, 0); res(); } }, 250); }) });
+            await Promise.race([
+              chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => new Promise((res) => { let y = 0; const t = setInterval(() => { y += 400; window.scrollTo(0, y); if (y >= document.body.scrollHeight) { clearInterval(t); window.scrollTo(0, 0); res(); } }, 250); }) }),
+              sleep(15000) // v1.16: таймаут догрузочной прокрутки
+            ]);
           } catch (e) {}
           await sleep(2000);
           let again = [];
@@ -442,6 +450,7 @@ async function runSectionOnce(api, token, startUrl) {
       if (links.length) {
         const wp = links.filter(l => l.price != null).length, wi = links.filter(l => l.image).length, wb = links.filter(l => l.brand).length, wm = links.filter(l => l.mpn).length;
         statTotal += links.length; statPhoto += wi; statBrand += wb; statMpn += wm; statPrice += wp;
+        for (const l of links) { if (l.price == null && !needPrice.some(x => x.url === l.url)) needPrice.push({ url: l.url, name: l.name }); }
         if (!logCat && links[0].category) logCat = links[0].category;
         progress(`📦 Стр. ${page}: ${links.length} товаров · 💶 с ценой ${wp} · 📷 с фото ${wi} · 🏷 с брендом ${wb} · отправлено всего ${totalSent}`);
       }
@@ -456,6 +465,21 @@ async function runSectionOnce(api, token, startUrl) {
         if (rr.ok) { const jj = await rr.json().catch(() => ({})); totalSent += jj.upserted || 0; }
       }
       await sleep(2500 + Math.random() * 1500); // вежливая пауза между страницами
+    }
+    // v1.16: добор цен со СТРАНИЦ ТОВАРОВ — на витрине у вариантов («4 opciones») и «только онлайн/в магазине» цены нет физически
+    if (needPrice.length && !stopped) {
+      const todo = needPrice.slice(0, 40); // не более 40 страниц за проход — вежливость + время
+      progress(`💶 Добор цен со страниц товаров: ${todo.length} из ${needPrice.length} без цены…`);
+      let fixed = 0, capStreak = 0;
+      for (const it of todo) {
+        if (stopped) break;
+        progress(`💶 Добор цены ${fixed + 1}/${todo.length}: ${it.name || it.url}`);
+        const r = await collectOne(api, token, it);
+        if (r.saved) { fixed++; statPrice++; }
+        if (r.failReason === 'captcha') { capStreak++; if (capStreak >= 3) { progress('🛑 Капча DataDome — добор цен остановлен'); break; } }
+        await sleep(1500 + Math.random() * 1500);
+      }
+      progress(`💶 Добор цен завершён: получено ${fixed} из ${todo.length}${needPrice.length > 40 ? ` (осталось ${needPrice.length - 40} — следующий проход доберёт)` : ''}`);
     }
     // v1.13: итоги раздела — в журнал парсинга на сервере
     if (statTotal > 0) {
@@ -661,11 +685,13 @@ chrome.runtime.onMessageExternal.addListener((m, sender, sendResponse) => {
       const { api, token } = await chrome.storage.local.get(['api', 'token']);
       if (!api || !token) { sendResponse({ ok: false, error: 'no-auth' }); return; }
       if (m && m.cmd === 'parse-section' && /^https?:\/\//i.test(String(m.url || ''))) {
+        if (isStuck()) { running = false; stopped = false; } // v1.16: самосброс зависшего запуска
         if (running) { sendResponse({ ok: false, error: 'busy' }); return; }
         runSection(api, token, String(m.url));
         sendResponse({ ok: true });
       } else if (m && m.cmd === 'status') {
-        sendResponse({ ok: true, running, last: lastProgress });
+        if (isStuck()) { running = false; } // v1.16: самосброс
+        sendResponse({ ok: true, running, last: lastProgress, stuckCleared: true });
       } else if (m && m.cmd === 'stop') {
         stopped = true; sendResponse({ ok: true });
       } else sendResponse({ ok: false, error: 'unknown-cmd' });
@@ -675,6 +701,7 @@ chrome.runtime.onMessageExternal.addListener((m, sender, sendResponse) => {
 });
 
 chrome.runtime.onMessage.addListener((m) => {
+  if (isStuck()) { running = false; stopped = false; } // v1.16: зависший сбор не блокирует новые запуски
   if (m.type === 'section' && !running) runSection(m.api, m.token, m.url);
   if (m.type === 'sections' && !running) runSectionQueue(m.api, m.token, m.urls || []);
   if (m.type === 'brands' && !running) runBrands(m.api, m.token);
