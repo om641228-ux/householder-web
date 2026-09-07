@@ -2552,3 +2552,7 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 ## v138 / ext v1.14 (2026-09-07)
 - Перезапуск парсера из приложения: manifest externally_connectable → householder-web-production.up.railway.app; background onMessageExternal: cmd parse-section{url}/status/stop; api+token из chrome.storage.local.
 - Frontend: extSend() (ID расширения в localStorage 'lm_ext_id'), extReparse(url); в журнале «🔄 Перепарсить» — кнопка запуска парсинга раздела; ⚙ рядом с заголовком журнала — ввод ID расширения.
+
+## v139 / ext v1.15 (2026-09-07)
+- Причина «нет прогресса при репарсинге»: прогресс показывался ТОЛЬКО в popup расширения. Теперь background хранит lastProgress и отдаёт в cmd 'status'; App.js после «🔄 Перепарсить» опрашивает status каждые 4 с и показывает живую строку прогресса в журнале (жёлтая=идёт, зелёная=готово + автообновление журнала).
+- Меню вкладок (.tabs-inline): убран серый фон-прямоугольник и pill у активной — инлайн-переопределение: фон none, кнопки без рамок, активная = синий жирный текст + подчёркивание.

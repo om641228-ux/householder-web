@@ -2226,7 +2226,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v138 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v139 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2709,6 +2709,7 @@ function ParseTab({ token, isMobileView, canRun }) {
   const [catLogsOpen, setCatLogsOpen] = useState(false);
   const [catToolsOpen, setCatToolsOpen] = useState(false); // v137: sitemap + дерево свёрнуты
   const [editProd, setEditProd] = useState(null); // v137: ручное редактирование товара
+  const [extStatus, setExtStatus] = useState(null); // v139: живой прогресс парсинга из расширения
   const [catExpanded, setCatExpanded] = useState({});
   const catParamsRef = useRef({});
   const [catBusy, setCatBusy] = useState(false);
@@ -2892,10 +2893,20 @@ function ParseTab({ token, isMobileView, canRun }) {
       });
     } catch (e) { reject(e); }
   });
+  const pollExtStatus = async () => { // v139: живой прогресс парсинга — опрос расширения
+    try {
+      const r = await extSend({ cmd: 'status' });
+      if (r && r.ok) {
+        setExtStatus({ running: !!r.running, last: r.last || '' });
+        if (r.running) setTimeout(pollExtStatus, 4000);
+        else setTimeout(loadCatLogs, 1500); // парсинг кончился — обновить журнал
+      }
+    } catch (e) {}
+  };
   const extReparse = async (url) => { // v138: перезапуск парсинга раздела из приложения
     try {
       const r = await extSend({ cmd: 'parse-section', url });
-      if (r && r.ok) alert('▶ Парсинг раздела запущен в расширении Chrome. Прогресс смотрите в popup расширения.');
+      if (r && r.ok) { setCatLogsOpen(true); setExtStatus({ running: true, last: '▶ Запуск парсинга раздела…' }); setTimeout(pollExtStatus, 3000); }
       else if (r && r.error === 'busy') alert('⏳ Расширение уже занято другим парсингом — дождитесь окончания или остановите его в popup.');
       else if (r && r.error === 'no-auth') alert('⚠️ В расширении не сохранены API URL и токен — откройте popup расширения и нажмите «Сохранить».');
       else alert('⚠️ Расширение ответило: ' + ((r && r.error) || 'нет ответа'));
@@ -3154,6 +3165,11 @@ function ParseTab({ token, isMobileView, canRun }) {
             {catLogsOpen && <span onClick={(e) => { e.stopPropagation(); loadCatLogs(); }} title="Обновить журнал" style={{ marginLeft: 8, cursor: 'pointer' }}>🔄</span>}
             {catLogsOpen && <span onClick={(e) => { e.stopPropagation(); const id = prompt('ID расширения Chrome (chrome://extensions → «Householder — сборщик цен» → ID):', localStorage.getItem('lm_ext_id') || ''); if (id != null) localStorage.setItem('lm_ext_id', id.trim()); }} title="Настроить связь с расширением — ID из chrome://extensions" style={{ marginLeft: 6, cursor: 'pointer' }}>⚙</span>}
           </div>
+          {catLogsOpen && extStatus && extStatus.last && (
+            <div style={{ marginTop: 6, fontSize: 12, padding: '6px 10px', borderRadius: 8, background: extStatus.running ? '#fff8e6' : '#e8f8ef', color: extStatus.running ? '#8a6d3b' : '#1e7e34', border: '1px solid ' + (extStatus.running ? '#ffd699' : '#b7e4c7') }}>
+              {extStatus.running ? '⏳' : '✅'} {extStatus.last}
+            </div>
+          )}
           {catLogsOpen && (
             <div style={{ marginTop: 6, overflowX: 'auto' }}>
               {!catLogs || !catLogs.length
@@ -9344,7 +9360,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-07 · v138 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-07 · v139 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9357,9 +9373,9 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-07 · v138</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-07 · v139</div>
           )}
-          <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
+          <style>{'.tabs-inline{background:none !important;border:none !important;box-shadow:none !important}.tabs-inline button{background:none !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.tabs-inline button.active{background:none !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline">
             {user?.role !== 'viewer' && tabAllowed('upload') && (
               <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>Загрузка</button>

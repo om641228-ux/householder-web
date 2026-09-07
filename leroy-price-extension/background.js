@@ -1,6 +1,7 @@
 let running = false, stopped = false;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const progress = (text) => chrome.runtime.sendMessage({ type: 'progress', text }).catch(() => {});
+let lastProgress = ''; // v1.15: последний прогресс — для опроса из веб-приложения
+const progress = (text) => { lastProgress = text; chrome.runtime.sendMessage({ type: 'progress', text }).catch(() => {}); };
 
 // извлечение JSON-LD Product на странице товара
 function extractOnPage() {
@@ -664,7 +665,7 @@ chrome.runtime.onMessageExternal.addListener((m, sender, sendResponse) => {
         runSection(api, token, String(m.url));
         sendResponse({ ok: true });
       } else if (m && m.cmd === 'status') {
-        sendResponse({ ok: true, running });
+        sendResponse({ ok: true, running, last: lastProgress });
       } else if (m && m.cmd === 'stop') {
         stopped = true; sendResponse({ ok: true });
       } else sendResponse({ ok: false, error: 'unknown-cmd' });
