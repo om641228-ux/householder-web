@@ -2669,3 +2669,7 @@ Frontend: карточка документа — над постранично�
 - FIX мультимагазина: эффект каталога теперь зависит от catStore — при переключении полный сброс (товары, разделы, бренды, журнал, поиск) и загрузка данных ВЫБРАННОГО магазина; интервал автообновления пересоздаётся (убраны устаревшие замыкания с LM).
 - Журнал парсинга фильтруется по магазину: GET /api/parse/logs?site=host (ilike по url).
 - Mercadona: дедуп товаров по id до upsert (ошибка «ON CONFLICT ... second time» — товар в нескольких подразделах); после синка раздела пишется запись в parse_logs (журнал показывает синки Mercadona).
+
+## v165 (2026-09-09)
+- Worten: https://canarias.worten.es/sitemap.xml отдаёт 403. Рабочий индекс из robots.txt: https://www.worten.pt/_/sitemap/sitemap_index_wortenic.xml (12 файлов, URLs вида canarias.worten.es/produtos/...-7252144). Артикул: добавлен паттерн «-NNNNN в конце URL».
+- Как парсить Worten: вкладка Worten Canarias → ⬇ sitemap_index_wortenic.xml → вернётся список из 12 файлов (это индекс) → синхронизировать файлы по одному (товары в файлах с /produtos/, остальные — бренды /marcas/).

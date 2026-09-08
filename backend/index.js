@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v164-2026-09-09', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v165-2026-09-09', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4690,7 +4690,7 @@ app.post('/api/parse/catalog/sync', requireAuth, requireRole('admin', 'manager')
     let upserted = 0, errs = 0;
     for (let i = 0; i < items.length; i += 500) {
       const rows = items.slice(i, i + 500).map(it => {
-        const am = it.url.match(/-(\d{5,})\.html?/i) || it.url.match(/\/(\d{5,})(?:\.html?)?(?:[?#].*)?$/i); // v122: артикул = число перед .html; v161: или в конце URL (MediaMarkt/Worten)
+        const am = it.url.match(/-(\d{5,})\.html?/i) || it.url.match(/\/(\d{5,})(?:\.html?)?(?:[?#].*)?$/i) || it.url.match(/-(\d{5,})(?:[?#].*)?$/i); // v122: артикул = число перед .html; v161: конец URL; v165: Worten «…-7252144»
         return { site, url: it.url, name: it.name.slice(0, 300), image: it.image, article: am ? am[1] : null, last_seen: new Date().toISOString() };
       });
       const { error } = await supabaseAdmin.from('parse_products').upsert(rows, { onConflict: 'site,url' });
