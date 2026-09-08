@@ -2618,3 +2618,7 @@ Railway не подтянул v146/v147. Бамп build: 'v148-2026-09-08' (back
 
 ## v151 (2026-09-08) — глобальный перехват ошибок на фронте
 «Ничего не происходит» при живом сервере → добавлен window error/unhandledrejection hook: красный баннер снизу с текстом ошибки (тап — скрыть). Диагностика без F12.
+
+## v152 (2026-09-08) — редактируемый пользовательский промпт для AI
+Frontend: вкладка Загрузка → кнопка «📝 Свой промпт для AI» (сворачиваемый textarea, localStorage hh_custom_prompt, бейдж АКТИВЕН, сброс). Уходит как custom_prompt во всех FormData загрузки (одиночная/папка/Mac OCR) и в body /api/reprocess-receipt.
+Backend: custom_prompt (≤4000 симв.) → customPrompt проброшен в buildReceiptPrompt / buildReceiptTextPrompt как блок «ДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ ПОЛЬЗОВАТЕЛЯ (приоритет выше базовых, JSON-схема неизменна)»; threading через recognizeWithGemini/Groq/OpenAICompat/GeminiAuto/Fallback и finalizeReceiptFromPageTexts; читается в /api/upload-receipt, /api/upload-receipts (multi) и /api/reprocess-receipt.

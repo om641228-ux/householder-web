@@ -316,7 +316,7 @@ app.use((req, res, next) => {
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 // redeploy-trigger: 2026-09-08T03:00 (v151)
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v151-2026-09-08', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v152-2026-09-08', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -576,7 +576,7 @@ app.post('/api/logout', (req, res) => {
 });
 
 // ========== RECEIPT PROMPT ==========
-function buildReceiptPrompt(currency, docType) {
+function buildReceiptPrompt(currency, docType, customPrompt) {
   const currencyHint = currency === 'auto' 
     ? `Определи валюту АВТОМАТИЧЕСКИ по месту и содержимому документа:
        - символы: € → EUR, $ → USD, £ → GBP, ₽/руб → RUB, د.إ/Dhs → AED
@@ -588,7 +588,10 @@ function buildReceiptPrompt(currency, docType) {
     ? 'Определи тип САМ по содержимому документа.'
     : `Пользователь указал тип "${docType}" — но если по содержимому явно видно другое, укажи правильный.`;
 
-  return `Ты — эксперт по распознаванию чеков и фактур. Проанализируй изображение и извлеки ВСЕ данные в строгом JSON формате.
+  const customBlock = customPrompt && String(customPrompt).trim()
+    ? `\n\nДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ ПОЛЬЗОВАТЕЛЯ (ПРИОРИТЕТ ВЫШЕ БАЗОВЫХ ПРАВИЛ, но JSON-схема ответа неизменна):\n${String(customPrompt).trim()}\n`
+    : '';
+  return `Ты — эксперт по распознаванию чеков и фактур. Проанализируй изображение и извлеки ВСЕ данные в строгом JSON формате.${customBlock}
 
 ВАЖНЫЕ ПРАВИЛА:
 1. Извлеки ВЕСЬ текст с чека полностью — каждую строку, каждую цифру.
@@ -745,7 +748,7 @@ function detectObjectByAddress(...texts) {
 }
 const GEMINI_FALLBACK_CANDIDATES = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'];
 
-async function recognizeWithGemini(imageBuffer, modelName, currency, docType, mimeType = 'image/jpeg') {
+async function recognizeWithGemini(imageBuffer, modelName, currency, docType, mimeType = 'image/jpeg', customPrompt = null) {
   if (!genAI) throw new Error('Gemini API key not configured');
   // maxOutputTokens задан явно: raw_text (оригинал) + raw_text_ru (перевод) — длинный вывод
   // (длинные чеки на 100+ товаров!), а у 2.5 thinking-токены тоже идут в этот лимит.
@@ -753,7 +756,7 @@ async function recognizeWithGemini(imageBuffer, modelName, currency, docType, mi
     model: modelName || DEFAULT_GEMINI_MODEL,
     generationConfig: { maxOutputTokens: 16384, temperature: 0.1 }
   });
-  const prompt = buildReceiptPrompt(currency, docType);
+  const prompt = buildReceiptPrompt(currency, docType, customPrompt);
   
   const result = await model.generateContent([
     { inlineData: { data: imageBuffer.toString('base64'), mimeType } },
@@ -765,11 +768,11 @@ async function recognizeWithGemini(imageBuffer, modelName, currency, docType, mi
 }
 
 // Gemini с автоподбором рабочей модели: перебирает кандидатов, пока одна не ответит
-async function recognizeWithGeminiAuto(imageBuffer, currency, docType, mimeType = 'image/jpeg') {
+async function recognizeWithGeminiAuto(imageBuffer, currency, docType, mimeType = 'image/jpeg', customPrompt = null) {
   let lastError = null;
   for (const candidate of GEMINI_FALLBACK_CANDIDATES) {
     try {
-      const data = await recognizeWithGemini(imageBuffer, candidate, currency, docType, mimeType);
+      const data = await recognizeWithGemini(imageBuffer, candidate, currency, docType, mimeType, customPrompt);
       return { data, model: candidate };
     } catch (e) {
       console.warn(`Gemini model ${candidate} failed: ${e.message}`);
@@ -780,12 +783,12 @@ async function recognizeWithGeminiAuto(imageBuffer, currency, docType, mimeType 
 }
 
 // ========== УНИВЕРСАЛЬНОЕ РАСПОЗНАВАНИЕ (OpenAI-совместимые: OpenRouter/GitHub/Mistral) ==========
-async function recognizeWithOpenAICompat(imageBuffer, modelName, currency, docType, providerKey) {
+async function recognizeWithOpenAICompat(imageBuffer, modelName, currency, docType, providerKey, customPrompt = null) {
   const cfg = OPENAI_COMPAT_PROVIDERS[providerKey];
   if (!cfg) throw new Error(`Unknown provider: ${providerKey}`);
   if (!cfg.apiKey) throw new Error(`${cfg.displayName} API key not configured`);
   const base64 = imageBuffer.toString('base64');
-  const prompt = buildReceiptPrompt(currency, docType);
+  const prompt = buildReceiptPrompt(currency, docType, customPrompt);
   const model = modelName || cfg.defaultModel;
 
   const body = {
@@ -835,10 +838,10 @@ async function recognizeWithOpenAICompat(imageBuffer, modelName, currency, docTy
 }
 
 // ========== ОБЩАЯ ЦЕПОЧКА FALLBACK: Gemini → OpenRouter → GitHub → Mistral → Kimi ==========
-async function recognizeWithFallback(imageBuffer, currency, docType, mimeType = 'image/jpeg') {
+async function recognizeWithFallback(imageBuffer, currency, docType, mimeType = 'image/jpeg', customPrompt = null) {
   const errors = [];
   try {
-    const auto = await recognizeWithGeminiAuto(imageBuffer, currency, docType, mimeType);
+    const auto = await recognizeWithGeminiAuto(imageBuffer, currency, docType, mimeType, customPrompt);
     return { data: auto.data, model: auto.model };
   } catch (e) {
     errors.push(`gemini: ${e.message}`);
@@ -851,7 +854,7 @@ async function recognizeWithFallback(imageBuffer, currency, docType, mimeType = 
     const cfg = OPENAI_COMPAT_PROVIDERS[key];
     if (!cfg.apiKey) { errors.push(`${key}: нет API ключа`); continue; }
     try {
-      const data = await recognizeWithOpenAICompat(imageBuffer, cfg.defaultModel, currency, docType, key);
+      const data = await recognizeWithOpenAICompat(imageBuffer, cfg.defaultModel, currency, docType, key, customPrompt);
       return { data, model: `${key}-${cfg.defaultModel}` };
     } catch (e) {
       console.warn(`Fallback ${key} failed: ${e.message}`);
@@ -2199,7 +2202,7 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
 // ========== ЧЕК/ФАКТУРА из готового OCR-текста (локальный OCR, v28.5) ==========
 // В отличие от buildDocumentSummaryPrompt (многостраничные документы, items: []),
 // здесь извлекаем ТОВАРЫ, дату, итог и все чековые поля — как vision-промпт buildReceiptPrompt.
-function buildReceiptTextPrompt(text, currency, docType) {
+function buildReceiptTextPrompt(text, currency, docType, customPrompt) {
   const currencyHint = currency === 'auto'
     ? `Определи валюту АВТОМАТИЧЕСКИ: символы € → EUR, $ → USD, £ → GBP, ₽/руб → RUB, د.إ/Dhs → AED;
        страна/адрес: Испания/Европа → EUR, ОАЭ → AED, США → USD, Россия → RUB; слова "IVA"/"IGIC" → EUR.
@@ -2209,7 +2212,10 @@ function buildReceiptTextPrompt(text, currency, docType) {
     ? 'Определи тип САМ по содержимому документа.'
     : `Пользователь указал тип "${docType}" — но если по содержимому явно видно другое, укажи правильный.`;
 
-  return `Ты — эксперт по распознаванию чеков и фактур. Ниже дан ТЕКСТ документа, полученный OCR.
+  const customBlock = customPrompt && String(customPrompt).trim()
+    ? `\nДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ ПОЛЬЗОВАТЕЛЯ (ПРИОРИТЕТ ВЫШЕ БАЗОВЫХ ПРАВИЛ, JSON-схема неизменна):\n${String(customPrompt).trim()}\n`
+    : '';
+  return `Ты — эксперт по распознаванию чеков и фактур. Ниже дан ТЕКСТ документа, полученный OCR.${customBlock}
 Текст может содержать ошибки OCR и случайные повторы фрагментов — игнорируй дубликаты, восстанавливай смысл.
 Извлеки ВСЕ данные в строгом JSON формате.
 
@@ -2279,7 +2285,7 @@ ${text}
 
 // Карточка чека/фактуры из готовых OCR-текстов страниц (v28.5):
 // чековая схема (с товарами) + те же запасные варианты, что у документного конвейера
-async function finalizeReceiptFromPageTexts(pageTexts, currency, docType) {
+async function finalizeReceiptFromPageTexts(pageTexts, currency, docType, customPrompt) {
   const pageCount = pageTexts.length;
   const raw_text = pageCount > 1
     ? pageTexts.map((t, i) => `══════ СТРАНИЦА ${i + 1} из ${pageCount} ══════\n${t}`).join('\n\n')
@@ -2301,7 +2307,7 @@ async function finalizeReceiptFromPageTexts(pageTexts, currency, docType) {
 
   let data;
   try {
-    data = parseAIResponse(await callTextChain(buildReceiptTextPrompt(raw_text.slice(0, 16000), currency, docType)));
+    data = parseAIResponse(await callTextChain(buildReceiptTextPrompt(raw_text.slice(0, 16000), currency, docType, customPrompt)));
   } catch (e) {
     console.error('Структурирование чека из OCR-текста не удалось:', e.message);
     data = parseAIResponse('{}');
@@ -2536,7 +2542,7 @@ async function isGroqModelAlive(resolvedId) {
   }
 }
 
-async function recognizeWithGroq(imageBuffer, modelName, currency, docType) {
+async function recognizeWithGroq(imageBuffer, modelName, currency, docType, customPrompt = null) {
   if (!groq) throw new Error('Groq API key not configured');
   const resolvedModel = resolveGroqModel(modelName);
   // Модель снята с поддержки Groq (например llama-4-scout) → сразу бросаем понятную ошибку,
@@ -2545,7 +2551,7 @@ async function recognizeWithGroq(imageBuffer, modelName, currency, docType) {
     throw new Error(`Модель ${resolvedModel} снята с поддержки Groq (decommissioned) — выбери другую модель в меню`);
   }
   const base64 = imageBuffer.toString('base64');
-  const prompt = buildReceiptPrompt(currency, docType);
+  const prompt = buildReceiptPrompt(currency, docType, customPrompt);
 
   const response = await groq.chat.completions.create({
     model: resolvedModel,
@@ -2586,7 +2592,7 @@ async function recognizeWithOCRSpace(imageBuffer, engine, currency, docType, mim
   const parsed = res.data?.ParsedResults?.[0]?.ParsedText || '';
   if (!parsed) throw new Error('OCR.space returned empty text');
   
-  const { data } = await recognizeWithFallback(imageBuffer, currency, docType, mimeType);
+  const { data } = await recognizeWithFallback(imageBuffer, currency, docType, mimeType, customPrompt);
   return data;
 }
 
@@ -3193,6 +3199,7 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'No image provided' });
     
     const model = req.body.model || DEFAULT_GEMINI_MODEL;
+    const customPrompt = String(req.body.custom_prompt || '').slice(0, 4000) || null; // v152: свой промпт из вкладки Загрузка
     const currency = req.body.currency || 'auto';
     const docType = req.body.docType || 'receipt';
     const object = req.body.object || 'other';
@@ -3211,7 +3218,7 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
       console.log(`Word/text-импорт: ${fname} → страниц: ${pageTexts.length}`);
       let rd = shouldUseDocumentPipeline(pageTexts)
         ? await finalizeDocumentFromPageTexts(pageTexts, currency, docType)
-        : await finalizeReceiptFromPageTexts(pageTexts, currency, docType);
+        : await finalizeReceiptFromPageTexts(pageTexts, currency, docType, typeof customPrompt !== 'undefined' ? customPrompt : null);
       rd = await ensureRawTextRu(rd);
       rd.docType = docType === 'auto' ? (rd.document_type || 'other') : docType;
       rd.object = (object && object !== 'other') ? object : (rd.object || 'other');
@@ -3243,7 +3250,7 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
               if (!crop) continue;
               const cropProcessed = await processImage(crop);
               const cropUrl = await uploadToStorage(cropProcessed, `${req.file.originalname || 'scan'}_check${i + 1}.jpg`, user.id, 'image/jpeg');
-              const auto = await recognizeWithFallback(cropProcessed, currency, docType, 'image/jpeg');
+              const auto = await recognizeWithFallback(cropProcessed, currency, docType, 'image/jpeg', customPrompt);
               let rd = auto.data;
               rd = await ensureRawTextRu(rd);
               rd.docType = docType === 'auto' ? (rd.document_type || 'receipt') : docType;
@@ -3299,26 +3306,26 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
         }
       } else if (isPdf && !model.startsWith('gemini') && !model.startsWith('ocrspace')) {
         // Vision-модели Groq/OpenRouter/GitHub/Mistral/Kimi НЕ читают PDF — используем цепочку с Gemini
-        const auto = await recognizeWithFallback(processedBuffer, currency, docType, mimeType);
+        const auto = await recognizeWithFallback(processedBuffer, currency, docType, mimeType, customPrompt);
         receiptData = auto.data;
         recognitionMethod = `${model} (pdf → ${auto.model})`;
       } else if (model.startsWith('gemini')) {
-        receiptData = await recognizeWithGemini(processedBuffer, model, currency, docType, mimeType);
+        receiptData = await recognizeWithGemini(processedBuffer, model, currency, docType, mimeType, customPrompt);
       } else if (model.startsWith('groq')) {
-        receiptData = await recognizeWithGroq(processedBuffer, model, currency, docType);
+        receiptData = await recognizeWithGroq(processedBuffer, model, currency, docType, customPrompt);
       } else if (model.startsWith('ocrspace')) {
         const engine = model.replace('ocrspace-', '');
         receiptData = await recognizeWithOCRSpace(processedBuffer, engine, currency, docType, mimeType);
       } else if (model.startsWith('openrouter-')) {
-        receiptData = await recognizeWithOpenAICompat(processedBuffer, model.replace(/^openrouter-/, ''), currency, docType, 'openrouter');
+        receiptData = await recognizeWithOpenAICompat(processedBuffer, model.replace(/^openrouter-/, ''), currency, docType, 'openrouter', customPrompt);
       } else if (model.startsWith('github-')) {
-        receiptData = await recognizeWithOpenAICompat(processedBuffer, model.replace(/^github-/, ''), currency, docType, 'github');
+        receiptData = await recognizeWithOpenAICompat(processedBuffer, model.replace(/^github-/, ''), currency, docType, 'github', customPrompt);
       } else if (model.startsWith('mistral-')) {
-        receiptData = await recognizeWithOpenAICompat(processedBuffer, model.replace(/^mistral-/, ''), currency, docType, 'mistral');
+        receiptData = await recognizeWithOpenAICompat(processedBuffer, model.replace(/^mistral-/, ''), currency, docType, 'mistral', customPrompt);
       } else if (model.startsWith('kimi-')) {
-        receiptData = await recognizeWithOpenAICompat(processedBuffer, model.replace(/^kimi-/, ''), currency, docType, 'kimi');
+        receiptData = await recognizeWithOpenAICompat(processedBuffer, model.replace(/^kimi-/, ''), currency, docType, 'kimi', customPrompt);
       } else {
-        const auto = await recognizeWithFallback(processedBuffer, currency, docType, mimeType);
+        const auto = await recognizeWithFallback(processedBuffer, currency, docType, mimeType, customPrompt);
         receiptData = auto.data;
         recognitionMethod = auto.model;
       }
@@ -3326,7 +3333,7 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
       console.error('Recognition error:', recognizeError);
       recognizeErrorMsg = recognizeError.response?.data?.error?.message || recognizeError.message;
       try {
-        const auto = await recognizeWithFallback(processedBuffer, currency, docType, mimeType);
+        const auto = await recognizeWithFallback(processedBuffer, currency, docType, mimeType, customPrompt);
         receiptData = auto.data;
         recognitionMethod = `${model} (fallback → ${auto.model})`;
         fallback = true;
@@ -3585,7 +3592,7 @@ app.post('/api/upload-ocr-text', upload.array('pages', 60), async (req, res) => 
     // С ТОВАРАМИ; 3+ страниц (или отчётность/налоговая форма, v34) — документный конвейер
     const receiptData = shouldUseDocumentPipeline(pageTexts)
       ? await finalizeDocumentFromPageTexts(pageTexts, currency, docType)
-      : await finalizeReceiptFromPageTexts(pageTexts, currency, docType);
+      : await finalizeReceiptFromPageTexts(pageTexts, currency, docType, typeof customPrompt !== 'undefined' ? customPrompt : null);
     receiptData.docType = docType === 'auto' ? (receiptData.document_type || 'receipt') : docType;
     receiptData.object = (object && object !== 'other') ? object : (receiptData.object || 'other');
     if (subtypeOverride) receiptData.subtype = subtypeOverride;
@@ -3715,6 +3722,7 @@ app.post('/api/upload-document-pages', upload.array('pages', 60), async (req, re
     const paymentStatusOverride = sanitizePaymentStatus(req.body.payment_status);
     // v84: выбранная в интерфейсе модель (kimi-*/openrouter-*/github-*/mistral-*) — для vision по страницам
     const pageModel = String(req.body.model || '');
+    const customPrompt = String(req.body.custom_prompt || '').slice(0, 4000) || null; // v152
     const pageProvider = ['kimi', 'openrouter', 'github', 'mistral'].find(pr => pageModel.startsWith(pr + '-') && OPENAI_COMPAT_PROVIDERS[pr]);
 
     // WORD/ТЕКСТ (v32.3): OCR не нужен — страницы извлекаем из текста файла
@@ -4008,6 +4016,7 @@ app.post('/api/reprocess-receipt', requireAuth, async (req, res) => {
   try {
     const { receiptId } = req.body;
     const model = String(req.body.model || 'auto'); // v150: model может не прийти — раньше model.startsWith ронял запрос с 500
+    const customPrompt = String(req.body.custom_prompt || '').slice(0, 4000) || null; // v152
     const { data: receipt } = await supabaseAdmin
       .from('receipts')
       .select('image_url')
@@ -4040,23 +4049,23 @@ app.post('/api/reprocess-receipt', requireAuth, async (req, res) => {
       }
     } else if (isPdfDoc && !model.startsWith('gemini') && !model.startsWith('ocrspace')) {
       // Vision-модели Groq/OpenRouter/GitHub/Mistral/Kimi НЕ читают PDF — цепочка с Gemini
-      const auto = await recognizeWithFallback(buffer, currency, docType, mimeType);
+      const auto = await recognizeWithFallback(buffer, currency, docType, mimeType, customPrompt);
       receiptData = auto.data;
       pageModeMethod = `${model} (pdf → ${auto.model})`;
     } else if (model.startsWith('gemini')) {
-      receiptData = await recognizeWithGemini(buffer, model, currency, docType, mimeType);
+      receiptData = await recognizeWithGemini(buffer, model, currency, docType, mimeType, customPrompt);
     } else if (model.startsWith('groq')) {
-      receiptData = await recognizeWithGroq(buffer, model, currency, docType);
+      receiptData = await recognizeWithGroq(buffer, model, currency, docType, customPrompt);
     } else if (model.startsWith('openrouter-')) {
-      receiptData = await recognizeWithOpenAICompat(buffer, model.replace(/^openrouter-/, ''), currency, docType, 'openrouter');
+      receiptData = await recognizeWithOpenAICompat(buffer, model.replace(/^openrouter-/, ''), currency, docType, 'openrouter', customPrompt);
     } else if (model.startsWith('github-')) {
-      receiptData = await recognizeWithOpenAICompat(buffer, model.replace(/^github-/, ''), currency, docType, 'github');
+      receiptData = await recognizeWithOpenAICompat(buffer, model.replace(/^github-/, ''), currency, docType, 'github', customPrompt);
     } else if (model.startsWith('mistral-')) {
-      receiptData = await recognizeWithOpenAICompat(buffer, model.replace(/^mistral-/, ''), currency, docType, 'mistral');
+      receiptData = await recognizeWithOpenAICompat(buffer, model.replace(/^mistral-/, ''), currency, docType, 'mistral', customPrompt);
     } else if (model.startsWith('kimi-')) {
-      receiptData = await recognizeWithOpenAICompat(buffer, model.replace(/^kimi-/, ''), currency, docType, 'kimi');
+      receiptData = await recognizeWithOpenAICompat(buffer, model.replace(/^kimi-/, ''), currency, docType, 'kimi', customPrompt);
     } else {
-      const auto = await recognizeWithFallback(buffer, currency, docType, mimeType);
+      const auto = await recognizeWithFallback(buffer, currency, docType, mimeType, customPrompt);
       receiptData = auto.data;
     }
 

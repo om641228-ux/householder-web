@@ -2247,7 +2247,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v151 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v152 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -5674,6 +5674,10 @@ function App() {
   const [scanResultOpen, setScanResultOpen] = useState(false);
   // По умолчанию — Kimi K3 (бывший дефолт Groq Llama 4 Scout снят Groq с поддержки)
   const [selectedModel, setSelectedModel] = useState('kimi-kimi-k3');
+  // v152: свой промпт для AI — редактируется во вкладке «Загрузка», хранится локально, уходит на сервер с каждым распознаванием
+  const [customPrompt, setCustomPrompt] = useState(() => { try { return localStorage.getItem('hh_custom_prompt') || ''; } catch (e) { return ''; } });
+  const [promptEditorOpen, setPromptEditorOpen] = useState(false);
+  const saveCustomPrompt = (v) => { setCustomPrompt(v); try { localStorage.setItem('hh_custom_prompt', v); } catch (e) {} };
   // Свой URL Mac OCR (v52.2): Safari/Chrome блокируют fetch с https-страницы на http://127.0.0.1 (mixed content).
   // Решение — HTTPS-туннель cloudflared на порт 8787; URL хранится в localStorage 'mac_ocr_url_v1'
   const [macOcrUrl, setMacOcrUrl] = useState(() => {
@@ -6381,6 +6385,7 @@ function App() {
       }
       if (allowDuplicate) formData.append('allow_duplicate', '1');
       formData.append('model', textLayerOnly ? 'pdf-text-layer' : effModel);
+      if (customPrompt.trim()) formData.append('custom_prompt', customPrompt.trim());
       formData.append('currency', currency);
       formData.append('docType', docType);
       formData.append('subtype', subtype);
@@ -6538,6 +6543,7 @@ ${receiptData.failover.from} — недоступна
       formData.append('image', fileToUpload);
       if (allowDuplicate) formData.append('allow_duplicate', '1');
       formData.append('model', selectedModel);
+      if (customPrompt.trim()) formData.append('custom_prompt', customPrompt.trim());
       formData.append('currency', currency);
       formData.append('docType', docType);
       formData.append('subtype', subtype);
@@ -6759,6 +6765,7 @@ ${receiptData.failover.from} — недоступна
             fd.append('pages', up);
             fd.append('ocr_texts', JSON.stringify([j.text]));
             fd.append('model', 'local-mac-ocr');
+            if (customPrompt.trim()) fd.append('custom_prompt', customPrompt.trim());
             fd.append('currency', currency);
             fd.append('docType', docType);
             fd.append('subtype', subtype);
@@ -6798,6 +6805,7 @@ ${receiptData.failover.from} — недоступна
           const formData = new FormData();
           formData.append('image', fileToUpload);
           formData.append('model', selectedModel);
+      if (customPrompt.trim()) formData.append('custom_prompt', customPrompt.trim());
           formData.append('currency', currency);
           formData.append('docType', docType);
           formData.append('subtype', subtype);
@@ -8920,7 +8928,7 @@ ${bodyHtml}
         const res = await fetch(`${API_URL}/api/reprocess-receipt?token=${token}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ receiptId: id, model: selectedModel })
+          body: JSON.stringify({ receiptId: id, model: selectedModel, custom_prompt: customPrompt.trim() || undefined })
         });
         if (res.ok) { ok++; }
         else { failed++; const d = await res.json().catch(() => ({})); lastError = d.error || `HTTP ${res.status}`; }
@@ -9400,7 +9408,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-08 · v151 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-08 · v152 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9413,7 +9421,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-08 · v151</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-08 · v152</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
@@ -10352,6 +10360,27 @@ ${bodyHtml}
             >
               🖥 Локально (Mac OCR, бесплатно)
             </button>
+            <div style={{ flexBasis: '100%', marginTop: 6 }}>
+              <button onClick={() => setPromptEditorOpen(o => !o)}
+                style={{ background: customPrompt.trim() ? '#fff3cd' : 'rgba(255,255,255,.7)', border: '1px solid #d5d5da', borderRadius: 10, padding: '5px 12px', fontSize: 12.5, cursor: 'pointer', color: '#1d1d1f' }}>
+                📝 Свой промпт для AI {customPrompt.trim() ? '· АКТИВЕН ✓' : ''} {promptEditorOpen ? '▴' : '▾'}
+              </button>
+              {promptEditorOpen && (
+                <div style={{ marginTop: 6, background: '#fff', border: '1px solid #d5d5da', borderRadius: 12, padding: 10 }}>
+                  <textarea
+                    value={customPrompt}
+                    onChange={e => saveCustomPrompt(e.target.value)}
+                    rows={6}
+                    placeholder={'Дополнительные инструкции для AI поверх базового промпта.\nНапример: «Артикул бери из колонки Nº Art. Если итога нет — суммируй позиции».\nПустое поле = стандартный промпт. Сохраняется автоматически.'}
+                    style={{ width: '100%', boxSizing: 'border-box', fontFamily: 'monospace', fontSize: 12.5, border: '1px solid #e5e5ea', borderRadius: 8, padding: 8, resize: 'vertical' }}
+                  />
+                  <div style={{ display: 'flex', gap: 8, marginTop: 6, alignItems: 'center', fontSize: 12, color: '#6e6e73' }}>
+                    <span>{customPrompt.trim() ? `Активен · ${customPrompt.trim().length} симв. — применяется ко ВСЕМ распознаваниям (загрузка, папка, перераспознать)` : 'Сейчас используется стандартный промпт'}</span>
+                    {customPrompt.trim() && <button onClick={() => saveCustomPrompt('')} style={{ marginLeft: 'auto', border: 'none', background: '#ffe5e5', color: '#d70015', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>Сбросить</button>}
+                  </div>
+                </div>
+              )}
+            </div>
             <div className="toolbar-controls hide-mobile">
               <div className="control-group compact">
                 <label>Валюта:</label>
