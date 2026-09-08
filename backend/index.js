@@ -316,7 +316,16 @@ app.use((req, res, next) => {
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 // redeploy-trigger: 2026-09-08T03:00 (v151)
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v152-2026-09-08', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+// v153: текущий базовый промпт распознавания (для просмотра в UI, read-only)
+app.get('/api/prompts/current', (req, res) => {
+  const user = resolveToken(req.query.token);
+  if (!user) return res.status(401).json({ error: 'Invalid token' });
+  const currency = String(req.query.currency || 'auto');
+  const docType = String(req.query.docType || 'auto');
+  res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
+});
+
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v153-2026-09-08', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —

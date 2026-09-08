@@ -2247,7 +2247,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v152 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v153 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -5677,6 +5677,14 @@ function App() {
   // v152: свой промпт для AI — редактируется во вкладке «Загрузка», хранится локально, уходит на сервер с каждым распознаванием
   const [customPrompt, setCustomPrompt] = useState(() => { try { return localStorage.getItem('hh_custom_prompt') || ''; } catch (e) { return ''; } });
   const [promptEditorOpen, setPromptEditorOpen] = useState(false);
+  const [basePrompt, setBasePrompt] = useState(''); // v153: базовый промпт (только просмотр/копирование)
+  const loadBasePrompt = async () => {
+    try {
+      const r = await fetch(`${API_URL}/api/prompts/current?token=${token}&currency=${currency || 'auto'}&docType=${docType || 'auto'}`);
+      const d = await r.json();
+      if (d.prompt) setBasePrompt(d.prompt);
+    } catch (e) { setBasePrompt('(не удалось загрузить: ' + e.message + ')'); }
+  };
   const saveCustomPrompt = (v) => { setCustomPrompt(v); try { localStorage.setItem('hh_custom_prompt', v); } catch (e) {} };
   // Свой URL Mac OCR (v52.2): Safari/Chrome блокируют fetch с https-страницы на http://127.0.0.1 (mixed content).
   // Решение — HTTPS-туннель cloudflared на порт 8787; URL хранится в localStorage 'mac_ocr_url_v1'
@@ -9408,7 +9416,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-08 · v152 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-08 · v153 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9421,7 +9429,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-08 · v152</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-08 · v153</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
@@ -10361,12 +10369,24 @@ ${bodyHtml}
               🖥 Локально (Mac OCR, бесплатно)
             </button>
             <div style={{ flexBasis: '100%', marginTop: 6 }}>
-              <button onClick={() => setPromptEditorOpen(o => !o)}
+              <button onClick={() => { setPromptEditorOpen(o => { if (!o && !basePrompt) loadBasePrompt(); return !o; }); }}
                 style={{ background: customPrompt.trim() ? '#fff3cd' : 'rgba(255,255,255,.7)', border: '1px solid #d5d5da', borderRadius: 10, padding: '5px 12px', fontSize: 12.5, cursor: 'pointer', color: '#1d1d1f' }}>
                 📝 Свой промпт для AI {customPrompt.trim() ? '· АКТИВЕН ✓' : ''} {promptEditorOpen ? '▴' : '▾'}
               </button>
               {promptEditorOpen && (
                 <div style={{ marginTop: 6, background: '#fff', border: '1px solid #d5d5da', borderRadius: 12, padding: 10 }}>
+                  <div style={{ fontSize: 12, color: '#6e6e73', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <b>Текущий базовый промпт</b> (только просмотр — текст можно выделять и копировать; учитывает выбранные Валюту и Тип)
+                    <button onClick={loadBasePrompt} style={{ marginLeft: 'auto', border: '1px solid #d5d5da', background: '#f5f5f7', borderRadius: 8, padding: '2px 10px', cursor: 'pointer', fontSize: 12 }}>↻ Обновить</button>
+                  </div>
+                  <textarea
+                    value={basePrompt || 'Загрузка…'}
+                    readOnly
+                    rows={10}
+                    onFocus={e => e.target.select()}
+                    style={{ width: '100%', boxSizing: 'border-box', fontFamily: 'monospace', fontSize: 11.5, color: '#48484a', background: '#f7f7f9', border: '1px solid #e5e5ea', borderRadius: 8, padding: 8, resize: 'vertical', marginBottom: 8 }}
+                  />
+                  <div style={{ fontSize: 12, color: '#6e6e73', marginBottom: 4 }}><b>Ваши дополнительные инструкции</b> (приоритет выше базовых правил):</div>
                   <textarea
                     value={customPrompt}
                     onChange={e => saveCustomPrompt(e.target.value)}
