@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v160-2026-09-09', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v161-2026-09-09', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4690,7 +4690,7 @@ app.post('/api/parse/catalog/sync', requireAuth, requireRole('admin', 'manager')
     let upserted = 0, errs = 0;
     for (let i = 0; i < items.length; i += 500) {
       const rows = items.slice(i, i + 500).map(it => {
-        const am = it.url.match(/-(\d{5,})\.html?/i); // v122: артикул = число перед .html
+        const am = it.url.match(/-(\d{5,})\.html?/i) || it.url.match(/\/(\d{5,})(?:\.html?)?(?:[?#].*)?$/i); // v122: артикул = число перед .html; v161: или в конце URL (MediaMarkt/Worten)
         return { site, url: it.url, name: it.name.slice(0, 300), image: it.image, article: am ? am[1] : null, last_seen: new Date().toISOString() };
       });
       const { error } = await supabaseAdmin.from('parse_products').upsert(rows, { onConflict: 'site,url' });
@@ -4706,6 +4706,59 @@ app.post('/api/parse/catalog/sync', requireAuth, requireRole('admin', 'manager')
 
 // Поиск по каталогу
 // v126: дерево разделов каталога (пути вида «Productos > Herramientas > …»)
+// ================== v161: Mercadona — каталог через официальный API tienda.mercadona.es ==================
+const MERCADONA_BASE = 'https://tienda.mercadona.es';
+const mercadonaOpts = { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36', 'Accept': 'application/json' }, timeout: 30000 };
+// Дерево разделов (2 уровня) — фронт показывает чипы и синкает по одному
+app.get('/api/parse/mercadona/tree', requireAuth, async (req, res) => {
+  try {
+    const r = await axios.get(MERCADONA_BASE + '/api/categories/', mercadonaOpts);
+    const out = [];
+    for (const c of ((r.data && r.data.results) || [])) {
+      for (const sub of (c.categories || [])) out.push({ id: String(sub.id), path: `${c.name} › ${sub.name}` });
+    }
+    res.json({ categories: out });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// Синк ОДНОГО раздела Mercadona → parse_products (site = tienda.mercadona.es), цены сразу есть
+app.post('/api/parse/mercadona/sync', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const id = String((req.body && req.body.id) || '').trim();
+    if (!/^\d+$/.test(id)) return res.status(400).json({ error: 'Нужен числовой id раздела' });
+    const catPath = String((req.body && req.body.path) || '').slice(0, 300);
+    const r = await axios.get(`${MERCADONA_BASE}/api/categories/${id}`, mercadonaOpts);
+    // API отдаёт товары на уровень глубже: products лежат внутри подразделов categories[]
+    let prods = (r.data && r.data.products) || [];
+    if (!prods.length && Array.isArray(r.data && r.data.categories)) {
+      for (const sub of r.data.categories) prods = prods.concat(sub.products || []);
+    }
+    let upserted = 0;
+    for (let i = 0; i < prods.length; i += 500) {
+      const rows = prods.slice(i, i + 500).map(pr => ({
+        site: 'tienda.mercadona.es',
+        url: `${MERCADONA_BASE}/product/${pr.id}`,
+        name: String(pr.display_name || '').slice(0, 300),
+        image: pr.thumbnail || null,
+        article: String(pr.id || ''),
+        category: catPath || null,
+        price: pr.price_instructions && pr.price_instructions.unit_price ? Number(pr.price_instructions.unit_price) : null,
+        currency: 'EUR',
+        price_at: new Date().toISOString(),
+        price_source: 'mercadona-api',
+        last_seen: new Date().toISOString()
+      }));
+      const { error } = await supabaseAdmin.from('parse_products').upsert(rows, { onConflict: 'site,url' });
+      if (error) {
+        if (/does not exist/i.test(error.message || '')) return res.status(500).json({ error: 'Нет таблицы parse_products — выполните v119-парсинг.sql повторно' });
+        throw error;
+      }
+      upserted += rows.length;
+    }
+    if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Синк Mercadona', `раздел ${id}: ${upserted} товаров`, req);
+    res.json({ ok: true, upserted, total: prods.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/parse/catalog/categories', requireAuth, async (req, res) => {
   try {
     const site = String(req.query.site || '').trim();
