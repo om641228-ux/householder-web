@@ -113,12 +113,18 @@ function extractOnPage() {
   // v1.18: MPN — микроразметка или текст «MPN: …» / «Ref. …» на странице
   if (!out.mpn) {
     const el = document.querySelector('[itemprop="mpn"], [class*="mpn" i], [class*="referencia" i]');
-    if (el) out.mpn = String(el.getAttribute('content') || el.textContent || '').replace(/^(MPN|Ref\.?|Referencia)\s*[:.]?\s*/i, '').trim();
+    if (el) {
+      const v = String(el.getAttribute('content') || el.textContent || '').replace(/^(MPN|Ref\.?|Referencia)\s*[:.]?\s*/i, '').trim();
+      if (/\d/.test(v) && v.length >= 4 && v.length <= 32) out.mpn = v;
+    }
   }
   if (!out.mpn) {
-    const m = String(document.body ? document.body.innerText.slice(0, 30000) : '').match(/(?:MPN|Ref(?:erencia)?\.?|Modelo|N[ºo°]\s*de\s*art[íi]culo)\s*[:.]?\s*([A-Z0-9][\w.\-\/]{3,30})/i);
+    // v1.18.1: строгие границы слов («Ref» ≠ «Refresca» из меню!) + в номере обязательна цифра
+    const m = String(document.body ? document.body.innerText.slice(0, 30000) : '')
+      .match(/(?:\bMPN\b|\bRef(?:erencia)?\b(?!\w)|\bModelo\b(?!\w)|N[ºo°]\s*de\s*art[íi]culo)\s*[:.\-]?\s*((?=[\w.\-\/]*\d)[A-Z0-9][\w.\-\/]{3,30})/i);
     if (m) out.mpn = m[1];
   }
+  if (!out.mpn && out.gtin) out.mpn = out.gtin; // v1.18.1: штрихкод gtin13 как запасной № производителя
   if (!out.price) {
     const mp = document.querySelector('meta[property="product:price:amount"],meta[name="og:price:amount"]');
     if (mp) out.price = parseFloat(mp.content.replace(',', '.')) || null;
