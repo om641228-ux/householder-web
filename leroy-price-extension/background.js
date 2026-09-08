@@ -89,10 +89,35 @@ function extractOnPage() {
               out.currency = String(off.priceCurrency || '');
             }
             out.image = Array.isArray(x.image) ? x.image[0] : String(x.image || '');
+            if (!out.mpn && x.gtin13) out.gtin = String(x.gtin13); // v1.18: штрихкод как запасной вариант
           }
         }
       }
     } catch (e) { /* пропускаем битый блок */ }
+  }
+  // v1.18: ФОТО — запасные источники (Worten: в JSON-LD фото может не быть)
+  if (!out.image) {
+    const og = document.querySelector('meta[property="og:image"], meta[name="twitter:image"]');
+    if (og && og.content) out.image = og.content;
+  }
+  if (!out.image) { // самое большое фото в галерее товара
+    let best = '', bestW = 0;
+    for (const im of document.querySelectorAll('img')) {
+      const w = im.naturalWidth || im.width || 0;
+      const src = im.currentSrc || im.src || '';
+      if (w > bestW && src && !/logo|icon|sprite|svg/i.test(src)) { bestW = w; best = src; }
+    }
+    if (best) out.image = best;
+  }
+  if (out.image && /^\//.test(out.image)) out.image = location.origin + out.image; // относительный → абсолютный
+  // v1.18: MPN — микроразметка или текст «MPN: …» / «Ref. …» на странице
+  if (!out.mpn) {
+    const el = document.querySelector('[itemprop="mpn"], [class*="mpn" i], [class*="referencia" i]');
+    if (el) out.mpn = String(el.getAttribute('content') || el.textContent || '').replace(/^(MPN|Ref\.?|Referencia)\s*[:.]?\s*/i, '').trim();
+  }
+  if (!out.mpn) {
+    const m = String(document.body ? document.body.innerText.slice(0, 30000) : '').match(/(?:MPN|Ref(?:erencia)?\.?|Modelo|N[ºo°]\s*de\s*art[íi]culo)\s*[:.]?\s*([A-Z0-9][\w.\-\/]{3,30})/i);
+    if (m) out.mpn = m[1];
   }
   if (!out.price) {
     const mp = document.querySelector('meta[property="product:price:amount"],meta[name="og:price:amount"]');
