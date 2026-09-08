@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v161-2026-09-09', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v164-2026-09-09', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4732,6 +4732,8 @@ app.post('/api/parse/mercadona/sync', requireAuth, requireRole('admin', 'manager
     if (!prods.length && Array.isArray(r.data && r.data.categories)) {
       for (const sub of r.data.categories) prods = prods.concat(sub.products || []);
     }
+    const seenIds = new Set();
+    prods = prods.filter(pr => { const k = String(pr.id); if (seenIds.has(k)) return false; seenIds.add(k); return true; });
     let upserted = 0;
     for (let i = 0; i < prods.length; i += 500) {
       const rows = prods.slice(i, i + 500).map(pr => ({
@@ -4755,6 +4757,12 @@ app.post('/api/parse/mercadona/sync', requireAuth, requireRole('admin', 'manager
       upserted += rows.length;
     }
     if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Синк Mercadona', `раздел ${id}: ${upserted} товаров`, req);
+    try {
+      await supabaseAdmin.from('parse_logs').insert({
+        url: MERCADONA_BASE, category: catPath || ('Раздел ' + id),
+        total: upserted, with_photo: upserted, with_brand: 0, with_mpn: 0, with_price: upserted, sent: upserted
+      });
+    } catch (e) { /* журнал не критичен */ }
     res.json({ ok: true, upserted, total: prods.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -5414,7 +5422,10 @@ app.post('/api/parse/ext-log', requireAuth, async (req, res) => {
 app.get('/api/parse/logs', requireAuth, async (req, res) => {
   try {
     const lim = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
-    const { data, error } = await supabaseAdmin.from('parse_logs').select('*').order('created_at', { ascending: false }).limit(lim);
+    const site = String(req.query.site || '').trim();
+    let q = supabaseAdmin.from('parse_logs').select('*').order('created_at', { ascending: false }).limit(lim);
+    if (site) q = q.ilike('url', '%' + site.replace(/[%_]/g, ' ') + '%');
+    const { data, error } = await q;
     if (error) {
       if (/parse_logs|relation.*does not exist|schema cache/i.test(error.message || '')) return res.json({ logs: [], warn: 'Выполните supabase-migration-v137.sql' });
       throw error;

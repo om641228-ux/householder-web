@@ -2247,7 +2247,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v161 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v164 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2900,7 +2900,7 @@ function ParseTab({ token, isMobileView, canRun }) {
   // v126: дерево разделов каталога
   const loadCatLogs = async () => { // v137: журнал парсинга
     try {
-      const r = await fetch(`${API_URL}/api/parse/logs?token=${token}&limit=50`);
+      const r = await fetch(`${API_URL}/api/parse/logs?token=${token}&limit=50&site=${CAT_STORE.host}`);
       const j = await r.json();
       if (r.ok) setCatLogs(j.logs || []);
     } catch (e) { /* журнал не критичен */ }
@@ -2998,9 +2998,13 @@ function ParseTab({ token, isMobileView, canRun }) {
   });
   // v123.1: каталог уже в базе — подгружаем при открытии вкладки, без пересинхронизации sitemap
   // v126: автообновление каждые 15 с — товары, распознанные расширением прямо сейчас, появляются сверху сами
-  const catAutoLoaded = useRef(false);
+  // v164: эффект зависит от магазина — при переключении ПОЛНЫЙ сброс и загрузка ЕГО данных.
+  // Интервал пересоздаётся на каждый магазин → устаревших замыканий нет.
   useEffect(() => {
-    if (!catAutoLoaded.current) { catAutoLoaded.current = true; catSearch(); loadCatTree(); loadBrandsCount(); }
+    setCatItems(null); setCatCat(''); setCatPage(0); setCatTree([]); setCatSync({}); setCatPricedTotal(null); setCatQ(''); setCatLogs(null);
+    catParamsRef.current = { q: '', pr: false, pg: 0, lim: 60, cc: '', so: { key: '', dir: 'desc' } };
+    catSearch({ q: '', priced: false, page: 0, category: '' });
+    loadCatTree(); loadBrandsCount(); loadCatLogs();
     const iv = setInterval(() => {
       if (document.visibilityState === 'visible') {
         const p = catParamsRef.current || {};
@@ -3009,14 +3013,6 @@ function ParseTab({ token, isMobileView, canRun }) {
       }
     }, 15000);
     return () => clearInterval(iv);
-  }, []);
-  // v161: смена магазина — сброс и загрузка его каталога
-  const catStoreFirst = useRef(true);
-  useEffect(() => {
-    if (catStoreFirst.current) { catStoreFirst.current = false; return; }
-    setCatItems(null); setCatCat(''); setCatPage(0); setCatTree([]); setCatSync({}); setCatPricedTotal(null); setCatQ('');
-    catSearch({ q: '', priced: false, page: 0, category: '' });
-    loadCatTree();
   }, [catStore]);
   const fetchPrices = async (ids) => {
     ids.forEach(id => setPriceBusy(prev => ({ ...prev, [id]: true })));
@@ -9507,7 +9503,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-09 · v161 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-09 · v164 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9520,7 +9516,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-09 · v161</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-09 · v164</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>

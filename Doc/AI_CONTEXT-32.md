@@ -2652,3 +2652,20 @@ Frontend: карточка документа — над постранично�
 - Frontend: сводная таблица позиций теперь ВСЕГДА первая в блоке «Товары/Позиции» (убрана зависимость от постраничности), заголовок «📊 Сводная таблица».
 - Карточка чека в списке: кнопки «Просмотр»/«Удалить» заменены на маленькие круглые ярлыки 👁 / 🗑 (title-подсказки сохранены).
 - Backend: только бамп build v160 для контроля деплоя.
+
+## v161 (2026-09-09)
+- Мультимагазинный каталог парсинга: чипы-переключатели Leroy Merlin / MediaMarkt Canarias / Worten Canarias / Mercadona. Таблица parse_products общая, разделение по site (host). Все запросы каталога/брендов/экспорта/импорта шлют site=CAT_STORE.host.
+- Артикул из URL расширен: кроме LM "-NNN.html" — число в конце URL (MediaMarkt/Worten).
+- Mercadona: у них нет sitemap — официальный API tienda.mercadona.es. Новые эндпоинты: GET /api/parse/mercadona/tree (2-уровневые разделы), POST /api/parse/mercadona/sync {id,path} (товары раздела сразу с ценами EUR, price_source='mercadona-api'). Фронт: «🌳 Загрузить разделы» → чипы разделов + «Синхронизировать ВСЕ».
+- БД: миграций НЕ нужно (та же parse_products, onConflict site,url).
+
+## v162 (2026-09-09)
+- Решение по архитектуре каталога: ОДНА таблица parse_products (выбор пользователя). Защита: supabase-migration-v162-rls.sql — RLS enable + deny для anon/authenticated (service_role бэкенда не затронут), view на каждый магазин (v_products_leroymerlin / _mediamarkt / _worten / _mercadona) для ручного редактирования, триггер-страж против массового DELETE >500 строк за операцию.
+
+## v163 (2026-09-09, FIX)
+- RLS deny-политика v162 заблокировала upsert бэкенда («new row violates row-level security policy»). FIX: supabase-migration-v163-rls-fix.sql — drop deny, create policy parse_products_app_all (using true) для anon/authenticated/service_role. RLS остаётся включённым; view и триггер-страж сохранены. v162-файл исправлен, чтобы не ломал при повторном применении.
+
+## v164 (2026-09-09)
+- FIX мультимагазина: эффект каталога теперь зависит от catStore — при переключении полный сброс (товары, разделы, бренды, журнал, поиск) и загрузка данных ВЫБРАННОГО магазина; интервал автообновления пересоздаётся (убраны устаревшие замыкания с LM).
+- Журнал парсинга фильтруется по магазину: GET /api/parse/logs?site=host (ilike по url).
+- Mercadona: дедуп товаров по id до upsert (ошибка «ON CONFLICT ... second time» — товар в нескольких подразделах); после синка раздела пишется запись в parse_logs (журнал показывает синки Mercadona).
