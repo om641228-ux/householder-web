@@ -1,11 +1,19 @@
 const $ = (id) => document.getElementById(id);
-chrome.storage.local.get(['api', 'token', 'batch', 'mode', 'staleDays', 'schedHours'], (v) => {
+chrome.storage.local.get(['api', 'token', 'batch', 'mode', 'staleDays', 'schedHours', 'site'], (v) => {
   if (v.api) $('api').value = v.api;
   if (v.token) $('token').value = v.token;
   if (v.batch) $('batch').value = v.batch;
   if (v.mode) $('mode').value = v.mode;
   if (v.staleDays) $('days').value = v.staleDays;
+  if (v.site) $('site').value = v.site;
   $('sched').value = String(v.schedHours || 0);
+  // v1.17.1: показать последний статус фонового сбора (popup мог быть закрыт)
+  chrome.storage.local.get(['lastProgress', 'progressAt'], (pv) => {
+    if (pv.lastProgress) {
+      const ago = pv.progressAt ? Math.round((Date.now() - pv.progressAt) / 1000) : '?';
+      $('st').textContent = pv.lastProgress + `  (${ago} с назад)`;
+    }
+  });
 });
 $('save').onclick = () => {
   chrome.storage.local.set({ api: $('api').value.trim().replace(/\/+$/, ''), token: $('token').value.trim() });
@@ -17,8 +25,9 @@ async function start(continuous) {
   const batch = Math.min(100, Math.max(1, parseInt($('batch').value, 10) || 20));
   const mode = $('mode').value;
   const staleDays = Math.min(90, Math.max(1, parseInt($('days').value, 10) || 7));
-  chrome.storage.local.set({ batch, mode, staleDays });
-  chrome.runtime.sendMessage({ type: 'start', api, token, batch, mode, staleDays, continuous });
+  const site = $('site').value;
+  chrome.storage.local.set({ batch, mode, staleDays, site });
+  chrome.runtime.sendMessage({ type: 'start', api, token, batch, mode, staleDays, continuous, site });
   $('st').textContent = continuous ? '⏳ Непрерывный сбор запущен…' : '⏳ Сбор пачки запущен…';
 }
 $('go').onclick = () => start(false);

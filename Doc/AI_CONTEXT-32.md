@@ -2673,3 +2673,15 @@ Frontend: карточка документа — над постранично�
 ## v165 (2026-09-09)
 - Worten: https://canarias.worten.es/sitemap.xml отдаёт 403. Рабочий индекс из robots.txt: https://www.worten.pt/_/sitemap/sitemap_index_wortenic.xml (12 файлов, URLs вида canarias.worten.es/produtos/...-7252144). Артикул: добавлен паттерн «-NNNNN в конце URL».
 - Как парсить Worten: вкладка Worten Canarias → ⬇ sitemap_index_wortenic.xml → вернётся список из 12 файлов (это индекс) → синхронизировать файлы по одному (товары в файлах с /produtos/, остальные — бренды /marcas/).
+
+## v165-ext (расширение v1.17)
+- Расширение: выбор магазина в popup (🌐 Все / Leroy / Worten / MediaMarkt) — сбор цен идёт по очереди ВЫБРАННОГО магазина (site в pending-prices/stale-prices). ext-log site теперь = hostname стартового URL (не захардкожен LM). Worten: страницы товаров отдают 403 серверу (Cloudflare) — цены собирать ТОЛЬКО расширением v1.17.
+
+## ext v1.17.1
+- Прогресс сбора теперь сохраняется в storage (виден при повторном открытии popup: «… (N с назад)») + синий бейдж ● на иконке во время работы. Раньше сообщения терялись при закрытом popup → казалось «ничего не происходит».
+
+## v166 (2026-09-09)
+- FIX Worten: /api/parse/catalog/sync брал site из hostname sitemap-файла (www.worten.pt) → 292k строк под чужим site, вкладка/расширение видели 0. Теперь site = hostname из URL товаров. Миграция supabase-migration-v166-worten-site-fix.sql: перенос строк на canarias.worten.es + удаление мусорных /marcas/ страниц.
+
+## v167 (2026-09-09)
+- Worten: sitemap содержал тысячи SEO/бренд-страниц (без артикула/фото/цены). Синк теперь пропускает URL без артикула (все магазины). Миграция supabase-migration-v167-worten-clean.sql: удаление Worten-строк без артикула / не /produtos/…-NNNNN (с отключением триггер-стража).

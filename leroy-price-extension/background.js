@@ -1,7 +1,12 @@
 let running = false, stopped = false;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let lastProgress = '', progressAt = 0; // v1.15/v1.16: последний прогресс + метка времени — для опроса из приложения и самосброса зависания
-const progress = (text) => { lastProgress = text; progressAt = Date.now(); chrome.runtime.sendMessage({ type: 'progress', text }).catch(() => {}); };
+const progress = (text) => {
+  lastProgress = text; progressAt = Date.now();
+  try { chrome.storage.local.set({ lastProgress, progressAt }); } catch (e) {}
+  try { chrome.action.setBadgeText({ text: running ? '●' : '' }); chrome.action.setBadgeBackgroundColor({ color: '#0071e3' }); } catch (e) {}
+  chrome.runtime.sendMessage({ type: 'progress', text }).catch(() => {});
+};
 const isStuck = () => running && progressAt && (Date.now() - progressAt > 120000); // v1.16: 2 мин без прогресса = завис
 
 // извлечение JSON-LD Product на странице товара
@@ -113,10 +118,11 @@ function extractOnPage() {
 }
 
 // v124: список задач — товары без цены (pending) или с устаревшей ценой (stale)
-async function fetchQueue(api, token, lim, mode, staleDays) {
+async function fetchQueue(api, token, lim, mode, staleDays, site) {
+  const sq = site ? `&site=${encodeURIComponent(site)}` : '';
   const path = mode === 'stale'
-    ? `/api/parse/catalog/stale-prices?limit=${lim}&days=${staleDays || 7}`
-    : `/api/parse/catalog/pending-prices?limit=${lim}`;
+    ? `/api/parse/catalog/stale-prices?limit=${lim}&days=${staleDays || 7}${sq}`
+    : `/api/parse/catalog/pending-prices?limit=${lim}${sq}`;
   const r = await fetch(`${api}${path}&token=${encodeURIComponent(token)}`);
   const j = await r.json();
   if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
@@ -175,7 +181,7 @@ async function collectOne(api, token, p) {
 }
 
 // v124: continuous = крутить пачки до конца очереди (режим «Собрать ВСЕ»)
-async function run(api, token, batch, mode, staleDays, continuous) {
+async function run(api, token, batch, mode, staleDays, continuous, site) {
   if (running) return;
   running = true; stopped = false;
   let totalDone = 0, totalOk = 0, totalChanges = 0, rounds = 0;
@@ -183,7 +189,7 @@ async function run(api, token, batch, mode, staleDays, continuous) {
     for (;;) {
       if (stopped) break;
       const lim = Math.min(100, Math.max(1, batch || 20));
-      const { items, total } = await fetchQueue(api, token, lim, mode, staleDays);
+      const { items, total } = await fetchQueue(api, token, lim, mode, staleDays, site);
       if (!items.length) {
         progress(rounds ? `✅ ВСЁ собрано: обработано ${totalDone}, цен ${totalOk}, изменений ${totalChanges}` : (mode === 'stale' ? '✅ Устаревших цен нет' : '✅ Все товары с ценами — очередь пуста'));
         break;
@@ -210,6 +216,7 @@ async function run(api, token, batch, mode, staleDays, continuous) {
     if (!stopped && rounds) progress(`✅ Готово: обработано ${totalDone}, цен сохранено ${totalOk}, изменений цен ${totalChanges}${continuous ? ' — очередь исчерпана' : '. Можно запустить ещё раз.'}`);
   } catch (e) { progress('❌ ' + e.message); }
   running = false;
+  try { chrome.action.setBadgeText({ text: '' }); } catch (e2) {}
 }
 
 // v1.3: извлечение карточек товаров со страницы раздела/списка
@@ -486,7 +493,7 @@ async function runSectionOnce(api, token, startUrl) {
       try {
         await fetch(`${api}/api/parse/ext-log?token=${encodeURIComponent(token)}`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ site: 'www.leroymerlin.es', url: startUrl, category: logCat, total: statTotal, with_photo: statPhoto, with_brand: statBrand, with_mpn: statMpn, with_price: statPrice, sent: totalSent })
+          body: JSON.stringify({ site: (() => { try { return new URL(startUrl).hostname; } catch (e) { return ''; } })(), url: startUrl, category: logCat, total: statTotal, with_photo: statPhoto, with_brand: statBrand, with_mpn: statMpn, with_price: statPrice, sent: totalSent })
         });
         progress('📜 Журнал: итоги раздела записаны');
       } catch (e) {}
@@ -705,7 +712,7 @@ chrome.runtime.onMessage.addListener((m) => {
   if (m.type === 'section' && !running) runSection(m.api, m.token, m.url);
   if (m.type === 'sections' && !running) runSectionQueue(m.api, m.token, m.urls || []);
   if (m.type === 'brands' && !running) runBrands(m.api, m.token);
-  if (m.type === 'start' && !running) run(m.api, m.token, m.batch, m.mode, m.staleDays, !!m.continuous);
+  if (m.type === 'start' && !running) run(m.api, m.token, m.batch, m.mode, m.staleDays, !!m.continuous, m.site || '');
   if (m.type === 'stop') stopped = true;
   if (m.type === 'schedule') { // v124: планировщик — часы между запусками (0 = выкл)
     chrome.storage.local.set({ schedHours: m.hours });
@@ -717,9 +724,9 @@ chrome.runtime.onMessage.addListener((m) => {
 // v124: автозапуск по расписанию (работает, пока открыт Chrome)
 chrome.alarms.onAlarm.addListener(async (a) => {
   if (a.name !== 'lm-collect' || running) return;
-  const v = await chrome.storage.local.get(['api', 'token', 'batch', 'mode', 'staleDays', 'schedHours']);
+  const v = await chrome.storage.local.get(['api', 'token', 'batch', 'mode', 'staleDays', 'schedHours', 'site']);
   if (!v.api || !v.token || !v.schedHours) return;
-  run(v.api, v.token, v.batch || 20, v.mode || 'pending', v.staleDays || 7, false);
+  run(v.api, v.token, v.batch || 20, v.mode || 'pending', v.staleDays || 7, false, v.site || '');
 });
 
 // при старте браузера — восстановить будильник, если был включён
