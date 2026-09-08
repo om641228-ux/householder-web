@@ -2390,3 +2390,277 @@ originalname как Latin-1, UTF-8 имена ломались при сохра
 ## v122.1 (2026-09-04) — фикс «AI не нашёл цену»
 - aiFindPrice: 2 попытки (веб-поиск с запросами по артикулу/названию/Google Shopping → усиленный запрос с допуском приблизительной цены "approx":true); запасной парсинг цены из произвольного текста («12.99 €»); при полном провале ошибка содержит первые 180 символов ответа AI для диагностики.
 - price_source: 'ai-search' (точная) / 'ai-estimate' (приблизительная, бейдж 🤖≈ оранжевый).
+
+## v123 (2026-09-04) — «Сделай все уровни»: цены-факт vs AI-оценка, расширение Chrome
+- Бэкенд: AI-цена теперь проходит самопроверку — в обоих промптах aiFindPrice добавлено поле `"match": true/false` (источник точно про ЭТОТ артикул?); `approx = !!j.approx || j.match === false`.
+- Разделение данных: если approx → обновляются ТОЛЬКО `price_estimate`/`price_estimate_at` (факт-цена не трогается); если точное совпадение → price + price_source='ai-search' + price_estimate тоже заполняется.
+- Новые эндпоинты: GET /api/parse/catalog/pending-prices?limit&site (товары без цены); POST /api/parse/ext-price {url,price,currency,title,image} — upsert в parse_products с price_source='extension', артикул из URL.
+- SQL (дописано в v119-парсинг.sql, ПЕРЕЗАПУСТИТЬ): alter parse_products add price_estimate numeric, price_estimate_at timestamptz.
+- Фронт: в карточке товара факт-цена жирным; если факта нет, но есть оценка → оранжевым «≈ X € (оценка AI)»; бейджи 🤖 (ai-search), 🧩 (extension), 🤖≈ (есть оценка). fetchAiPrices маппит approx → price_estimate, не затирая price.
+- Расширение Chrome MV3 leroy-price-extension/ (+ zip): popup (API URL + токен, «▶ Собрать 20 цен»), background.js открывает фоновые вкладки из pending-prices, извлекает JSON-LD Product (extractOnPage), шлёт POST /ext-price, пауза 2–3.5 с. Обходит DataDome IP пользователя.
+
+## v123.1 (2026-09-05) — каталог: автозагрузка из базы + фильтр «с ценой»
+- Бэкенд GET /api/parse/catalog: параметр priced=1 (price not null, сортировка по price_at desc); ответ теперь включает pricedTotal (всего товаров с ценой по сайту). build v123.1-2026-09-05.
+- Фронт ParseTab: catPriced/catPricedTotal state; catSearch(over={q,priced}) с переопределениями; useEffect автозагрузки каталога из parse_products при открытии вкладки (sitemap-синк нужен только для пополнения); кнопка-переключатель «💶 С ценой: N» рядом с «Найти»; строка «Найдено» показывает счётчик цен.
+
+## v124 (2026-09-05) — автоматизация сбора цен: непрерывный режим, планировщик, история цен
+- Бэкенд: ext-price теперь фиксирует изменение цены — при расхождении пишет price_prev/price_changed_at и возвращает changed {from,to}; новый GET /api/parse/catalog/stale-prices?days&limit (цена старше N дней, по price_at asc, до 100). build v124-2026-09-05.
+- SQL (дописано, ПЕРЕЗАПУСТИТЬ): alter parse_products add price_prev numeric, price_changed_at timestamptz.
+- Расширение v1.1: режимы «🆕 без цены» / «🔄 обновить старые (>N дней)»; «▶ Собрать пачку» и «▶▶ Собрать ВСЁ» (continuous: пачки до конца очереди, пауза 3–5 с между пачками); планировщик chrome.alarms каждые 6/12/24 ч (permission alarms, onStartup восстановление); прогресс со счётчиками ок/изм, 📈/📉 строки при изменении цены.
+- Фронт: бейдж в карточке «📈/📉 было X» при price_prev != price.
+- ВАЖНО: MV3 service worker может засыпать — continuous-режим держится на активности вкладок; планировщик работает только пока открыт Chrome.
+
+## v124.1 (2026-09-05) — защита очереди цен от зацикливания (диагноз: 8000 обработано / 2000 с ценой)
+- Причина: pending-prices возвращал ВСЕ товары без цены — провалившиеся (капча DataDome, снятые с производства, таймаут) попадали в каждую пачку заново.
+- Бэкенд: колонки price_attempts/price_attempt_at/price_fail_reason; ext-price принимает {fail:true, reason} (+1 попытка), успех сбрасывает счётчик; pending-prices исключает attempts>=5 и сортирует attempts asc; ответ включает total.
+- Расширение v1.2: extractOnPage детектит капчу (iframe captcha / #captcha-delivery / title); collectOne шлёт fail-репорт (captcha/no-price/load-error); autoDiscardable:false; таймаут 18с + settle 1с; авто-стоп после 3 капч подряд с инструкцией пройти проверку вручную.
+
+## v125 (2026-09-05) — Ref со страницы + парсинг целых разделов
+- Бэкенд: ext-price принимает article (Ref/sku со страницы, в приоритете над URL-регексом); новый POST /api/parse/ext-products (bulk до 300/запрос, upsert parse_products) — приём товаров со страниц списков. build v125-2026-09-05. SQL не требуется.
+- Расширение v1.3: extractOnPage берёт sku/mpn из JSON-LD + fallback-регекс «Ref. NNNN» из innerText; article уходит с ценой. Новый режим «🗂 Парсинг раздела»: extractLinksOnPage собирает карточки (a[href~-NNNNN.html]), листает ?p=N до отсутствия новых ссылок (≤100 стр.), шлёт пачками по 200 на ext-products; паузы 2,5–4 с.
+- Рекомендация по номерам: извлечение со страницы (бесплатно, точно) вместо AI; AI-кнопка «🔢 Артикулы» остаётся для старых записей.
+
+## v126 (2026-09-05) — структурный каталог: дерево разделов, таблица, пагинация
+- SQL (ПЕРЕЗАПУСТИТЬ): parse_products + category text, индекс category text_pattern_ops.
+- Бэкенд: GET /api/parse/catalog принимает category (ilike prefix), limit/offset (range); новый GET /api/parse/catalog/categories (distinct пути + count, лимит 30000 строк); ext-products/ext-price сохраняют category. build v126-2026-09-05.
+- Расширение v1.4: extractLinksOnPage собирает хлебные крошки (nav breadcrumb + H1) в category каждого товара.
+- Фронт ParseTab: дерево разделов (catChildrenOf/renderCatLevel, раскрытие ▸, клик фильтрует, ✕ сброс); результаты — ТАБЛИЦА со столбцами Товар | Артикул | Раздел | Цена | действия (клик по разделу в строке фильтрует); пагинация 60/100 + ← Пред/След →; catParamsRef для автообновления каждые 15 с (silent) — свежие товары парсера появляются сверху сами.
+
+## v127 (2026-09-05) — пагинация с номерами, чистка вкладки парсинга
+- Общий компонент PageBar (перед ParseTab): «← 1 … 5 6 7 … 45 →», точки кликабельны (прыжок в середину пропуска).
+- Чеки: панель страниц ПЕРЕМЕЩЕНА наверх списка (вставка после `) : ( <>` в ветке списка), старая нижняя удалена; onGo скроллит наверх.
+- Каталог: «← Пред/След →» заменены на PageBar (0-based catPage → 1-based p).
+- Вкладка Парсинг: удалены карточка «➕ Новый источник» и список источников (модалки autoHelpFor/paste остались как dead-код); если дерево разделов пусто — подсказка, что оно заполняется парсингом разделов расширением.
+- Расширение v1.5: подписи у числовых полей (дни / размер пачки).
+
+## v127.1 (2026-09-05) — фото и цена прямо с витрины раздела
+- Расширение v1.5.1: extractLinksOnPage ищет img в карточке (closest li/article/.product/.card), читает currentSrc/src/data-src/data-lazy-src/srcset (относительные → absolute); цена = ПОСЛЕДНЯЯ «xx,xx €» в тексте карточки (первая бывает зачёркнутой).
+- Бэкенд: ext-products принимает price/currency → price + price_source='extension-list' + price_at. build v126.1-2026-09-05.
+- Фронт: бейдж 🧩 покрывает и extension-list (title различает). Версия v127.1.
+
+## v127.2 (2026-09-05) — фикс затирания картинок при парсинге раздела
+- Баг: ext-products upsert писал image:null и стирал картинки, пришедшие из sitemap. Теперь пустые name/image/article/category НЕ включаются в row (upsert их не трогает). build v126.2.
+- Расширение v1.5.2: srcOf() — currentSrc/src/data-src/data-lazy-src/data-original + srcset (последний вариант), фильтр placeholder/blank.gif, fallback picture>source; перед extractLinksOnPage страница раздела прокручивается вниз (600px/150мс) для lazy-load.
+- Восстановление уже затёртых картинок: пересинхронизировать sitemap (⬇ sitemap 1) ИЛИ перепарсить раздел новой версией.
+
+## v128 (2026-09-05) — бренд+MPN, точное дерево из URL, сворачиваемый каталог
+- SQL (ПЕРЕЗАПУСТИТЬ): parse_products + brand text, mpn text.
+- Бэкенд: ext-price/ext-products принимают brand/mpn (не затирают пустыми); POST /api/parse/catalog/backfill-brand-mpn — эвристика из названия (код в скобках / токен A-Z0-9 с цифрой → mpn; первое слово не-глагол → brand), до 40×500. build v128-2026-09-05.
+- Расширение v1.6: extractOnPage берёт brand (x.brand.name) и mpn из JSON-LD → ext-price; extractLinksOnPage строит category из ПУТИ URL (точное дерево как на сайте, напр. Herramientas > Herramientas electricas portatiles > … > Taladros con cable), fallback H1.
+- Фронт: убран заголовок «🌐 Парсинг сайтов»; каталог сворачивается (▸/▾, catOpen); новый столбец «Производитель» (brand жирным + mpn mono под ним); кнопка «🏷 Бренды» (backfillBrands).
+
+## v128.1 (2026-09-05) — сворачивание только списка + усиленный backfill брендов
+- Фронт: {catOpen && (<>} перенесён ПОД блок sitemap — кнопки sitemap всегда видимы, сворачивается дерево+поиск+таблица.
+- Бэкенд backfill-brand-mpn v2: выбирает строки где brand IS NULL OR mpn IS NULL (не затирает заполненное); KNOWN_BRANDS (30+ брендов, поиск в первых 45 символах, канонизация регистра); MPN: (код в скобках) → смешанный токен с цифрой+буквой ≥4 → чисто цифровой 5–9 знаков сразу после бренда (EINHELL 4259825). build v128.1-2026-09-05.
+- ВАЖНО: если колонки brand/mpn не созданы в SQL — update молча падает (updated=0). Перезапуск v119-парсинг.sql обязателен.
+
+## v129 (2026-09-05) — справочник брендов с /productos/marcas/
+- SQL (ПЕРЕЗАПУСТИТЬ): create table parse_brands (site,name unique, url).
+- Бэкенд: POST /api/parse/ext-brands (upsert по site,name); GET /api/parse/brands; backfill-brand-mpn теперь берёт список брендов из parse_brands + встроенный fallback, сортировка по длине (BLACK+DECKER раньше BLACK), каноническое написание из справочника. build v129-2026-09-05.
+- Расширение v1.7: кнопка «🏷 Обновить справочник брендов» — открывает /productos/marcas/ фоном, скроллит, extractBrandsOnPage собирает ссылки /productos/marcas/<slug>/ (имя из aria-label/text/img.alt/slug), шлёт на ext-brands.
+- Фронт: у кнопки «🏷 Бренды» подпись «справочник: N брендов».
+
+## v129.1 — понятная ошибка при отсутствии parse_brands
+- ext-brands: при missing table возвращает подсказку «выполните v119-парсинг.sql повторно в Supabase». build v129.1-2026-09-05.
+
+## v129.2 (2026-09-05) — справочник брендов сервером из sitemap-searchdex
+- Бренды есть в НЕзащищённом sitemap-searchdex1..3.xml как /productos/marcas/<slug>/… — расширение не нужно.
+- Бэкенд: POST /api/parse/brands/sync (axios, ≤80МБ, upsert parse_brands, humanize slug); канонизация ALL-CAPS → Title Case (METABO→Metabo, BLACK+DECKER сохраняется); MPN ≥5 символов и отсев единиц (710W, 18V, 3.0AH). build v129.2-2026-09-05.
+- Фронт: кнопка «⇪ Справочник» рядом со счётчиком брендов.
+
+## v1.8 расширение (2026-09-05) — очередь разделов из файла
+- runSectionOnce (тело) + runSection (обёртка-флаги) + runSectionQueue: popup принимает .txt (URL на строку, # комментарии, дедуп), кнопка «📂 Парсить разделы из файла»; разделы идут по очереди с паузой 4–7 с, прогресс «Раздел N/M», общий стоп работает.
+
+## v1.8.1 расширение (2026-09-06) — фикс «Leroy Merlin» вместо товара при парсинге из файла
+- extractLinksOnPage: карточка = ближайший компактный контейнер (li/article/[data-testid*=product]/[class*=product-card]); если innerText > 600 — берём саму ссылку/родителя (защита от захвата шапки); img фильтруется по logo/leroy; имя: aria-label/text ссылки → img.alt; «Leroy Merlin» отсекается; fallback — slug из URL.
+
+## v130 (2026-09-06) — столбцы Фото/Дата, сортировка, серверный отсев мусора
+- Каталог: новые столбцы «Фото» (отдельно от названия) и «Дата» (last_seen; в title — first_seen/price_at); сортировка кликом по ЛЮБОМУ заголовку (▲/▼), серверная через sort/dir (whitelist: image,name,article,brand,mpn,category,price,date); сортировка сохраняется в catParamsRef и при автообновлении.
+- ext-products: серверный отсев мусора витрины — имя «Leroy Merlin» заменяется читаемым slug из URL, изображения с logo/leroy-merlin отбрасываются (защита даже от старой версии расширения).
+- backfill-brand-mpn: пред-чистка строк name='Leroy Merlin' (до 5000) — имя из slug, logo-image → NULL, brand/mpn сброшены и пересчитаны; ответ включает cleaned, alert показывает.
+- build: 'v130-2026-09-06'.
+
+## v130.1 + расширение v1.8.2 (2026-09-06) — критфикс фото
+- Причина пропавших фото: фильтр /logo|leroy/i резал ВСЕ изображения — фото товаров лежат на CDN leroymerlin. Фильтр сужен до /logo/i (расширение + серверный отсев + backfill-чистка).
+
+## v131 (2026-09-06) — выгрузка каталога в файл
+- GET /api/parse/catalog/export: CSV (разделитель «;», BOM для Excel, до 50000 строк) с теми же фильтрами q/priced/category и сортировкой sort/dir. Колонки: Фото, Товар, Артикул, Производитель, Номер производителя, Раздел, Цена, Валюта, Источник цены, Дата парсинга, URL.
+- Каталог: кнопка «⬇ Скачать» рядом с 🔄 — открывает export с текущими параметрами из catParamsRef (скачивание браузером).
+
+## v132 (2026-09-06) — выгрузка брендов + локальный скрипт распознавания
+- GET /api/parse/brands/export: CSV справочника parse_brands (Бренд;URL). Кнопка «⬇ Бренды» в каталоге.
+- Локальный офлайн-скрипт заполнить-бренды-mpn.py: проход 1 — бренд из справочника ищется в названии (слово целиком, longest-first, первые 70 символов); проход 2 — MPN: кандидаты (скобки, буквы+цифры, пары «БУКВЫ цифры» GBH 2-26), отсев единиц/размеров, скоринг по «форме» (shape: A=буква,9=цифра) из файла бренды-mpn-примеры.csv + самообучение по заполненным строкам; порог score>0 против ложных («Oscuro 38» отклонён).
+- бренды-mpn-примеры.csv: 25 брендов с примером номера и комментарием формата.
+
+## Локальный AI для брендов/MPN (2026-09-06)
+- Эвристика заполнить-бренды-mpn.py дала мусор (бренды «Convertidor/Panel», MPN «Fuegos 50») → заменена на ai-бренды-mpn.py: локальная Ollama (qwen2.5:7b-instruct), пачки по 10 названий, JSON {brand, mpn}, бренд сверяется со справочником (новые → «-новые-бренды.csv»), MPN чистится (не артикул 5-9 цифр, не W/V/размеры). Резюме: заполненные пропускаются, --all для полного перезапуска.
+
+## v133 (2026-09-06) — импорт AI-файла в базу
+- POST /api/parse/catalog/import-brand-mpn (admin/manager): items [{article,brand,mpn}] ≤500; ключ — article+site; обновляет brand/mpn только при изменении; ответ {matched, updated, notFound}.
+- Каталог: кнопка «⇪ В базу» (скрытый file input, свой CSV-парсер с кавычками/BOM), батчи по 500, прогресс в setErr, итоговый alert.
+
+## Файл форматов MPN (2026-09-06)
+- бренды-mpn-форматы.csv: 547 брендов (база — файл пользователя brand_example.txt), 173 бренда обогащены реальными форматами и 3-6 примерами номеров (Bosch 0 601 XXX XXX/GBH 2-26 DRE; Victron SCC+12 цифр/SmartSolar MPPT 150/70; Xunzel SOLARX-240/SOLARPOWER-XUNZEL-120W; Pylontech US3000C/UP2500; U-Power UP-8OPZS800; Grohe 8 цифр; Hansgrohe 7; Roca A5A…; Geberit 111.XXX.XX.X; Gardena 1830-20; Karcher 1.XXX-230.0 и т.д.). Источники: веб-поиск (Victron/Xunzel/Pylontech/U-Power) + знания брендов.
+- ai-бренды-mpn.py: 3-й аргумент = файл форматов; подсказки подставляются в промпт ТОЛЬКО для брендов, встречающихся в текущей пачке названий (динамический few-shot, ≤12 строк), примеры с «-001» и без цифр игнорируются.
+
+## Новые бренды из AI-прогона (2026-09-06)
+- новые-бренды-форматы.csv: 18 брендов из отчёта «-новые-бренды.csv» с форматами MPN (DEDRA DED7850/DED7042; Dnipro-M DTD-201BC; FUXTEC FX-E1RH20; Graphite 58G868; HIKOKI DH40MEY2Z; Powerplus POWX1170; RATIO MR1050ND; Scheppach AB1600/5908201901; Silverline 6 цифр; Vertex VMW900RED). BEXTCOK/MellWin/SucceBuy/TEKMAQUINAS — noname без системы. ⚠ «DS Plus» и «KH» — НЕ бренды (хвост SDS Plus и префикс модели Metabo).
+
+## Локальная загрузка brand/MPN в Supabase (2026-09-06)
+- загрузить-в-supabase.py: CSV (Артикул/Производитель/Номер производителя) → REST Supabase напрямую (без деплоя). env SUPABASE_URL + SUPABASE_KEY (service_role). Пачки по 100 артикулов, PATCH только при изменении, статистика. Дублирует веб-кнопку «⇪ В базу» (v133) для локального сценария.
+
+## v133.1 + расширение v1.8.3 (2026-09-07) — фикс lazy-load фото
+- Причина «нет фото»: img.src в карточках = лоадер loader-v2.svg, реальный URL в data-src/srcset. srcOf переписан: сначала data-src/data-lazy-src/data-original/data-srcset/srcset, потом currentSrc/src; отсев BAD_IMG (loader|placeholder|blank|spinner|gif|svg).
+- Сервер ext-products: отсев image с loader/placeholder/svg. Backfill-чистка: image с %.svg/%loader%/%placeholder% → NULL.
+
+## Расширение v1.9 (2026-09-07) — «раз и навсегда»: MAIN-world JSON-состояние
+- Причина вечных сбоев фото/цен: DOM-скрапинг + lazy-load. Решение: collectStateProducts() запускается с world:'MAIN' и обходит весь граф состояния страницы (__NEXT_DATA__/__PRELOADED_STATE__/__APOLLO_STATE__/__NUXT__/любые window.*state*/JSON-LD), ищет «товароподобные» объекты (URL с -NNNNN.html + name≥8), вытаскивает image (включая images[]/media[]), price (price/currentPrice/pricing… рекурсивно ≤3), brand, mpn/reference. Мерж по URL: состояние приоритетнее DOM (фото/цена/бренд/mpn перезаписывают), DOM-only товары остаются. Бюджет 300k узлов, WeakSet от циклов.
+
+## Расширение v1.9.1 + backend v133.2 (2026-09-07) — фото товара, не этикетка
+- collectStateProducts: фото = ПЕРВОЕ из images[]/media[] (раньше бралось поле image = этикетка энергоэффективности); BAD_PHOTO банит etiqueta/energetic/energy/efficien/clase-ener/eeli/svg; цена + offers/массивы/lowPrice.
+- DOM: бан энергоэтикеток по alt/src/data-src; цена — без «€/ед» (€/kg, €/m²), подъём по ≤3 компактным предкам если в карточке нет.
+- Сервер: тот же бан в ext-products; backfill-чистка обнуляет image с etiqueta/energetic/efficien/eeli.
+
+## v134 + расширение v1.10 (2026-09-07) — столбец MPN + извлечение из строки
+- Каталог: отдельный сортируемый столбец «№ производителя» (mpn, mono).
+- deriveMpn (расширение) + серверный дубль в ext-products: MPN из названия — код в скобках → пара «БУКВЫ цифры» после бренда (GBH 2-26) → одиночный токен буквы+цифры (DHP453); отсев единиц/размеров/8-значного артикула.
+
+## v135 + расширение v1.11 (2026-09-07) — полнота данных, ревизия кнопок, статусы
+- Расширение: collectOne — до 3 попыток пока нет цены И фото (ожидание+скролл; капча сразу стоп). runSectionOnce — до 3 проходов по странице, пока >20% без фото/цены (скролл 400px/250ms + повторная экстракция DOM+MAIN, добор только пустых полей). Прогресс: «Стр. N: X товаров · с ценой · с фото · с брендом · отправлено».
+- Каталог: убраны кнопки «🔢 Артикулы» и «💶 ×10» (мёртвая, 403 без прокси); счётчик брендов в «⇪ Справочник (N)». Блок «📂 Что уже спарсено» — чипы верхних разделов с количеством товаров (клик = фильтр) + бейдж «спарсено путей: N».
+
+## v136 / ext v1.12 (2026-09-07)
+- Причина плохих цен: на карточке LM три числа — бейдж «-1.991 €» (абсолют скидки), зачёркнутая 4.990 €, итоговая 2.999 €; старый regex требовал десятичные и брал «последнюю».
+- Новый __visualPrice(root) в background.js (дублируется внутри extractOnPage и extractLinksOnPage — injected funcs без замыканий): исключает бейджи «-X €»/«-X %», зачёркнутые (del/s/strike, class tachad/strike/old/antes/was/previous/regular/original, computed line-through), цены за единицу (€/kg); текущая цена = незачёркнутый кандидат с максимальным font-size; «2.999»+<sup>€</sup> склеивается; __num понимает тысячные точки.
+- collectStateProducts: price_original из originalPrice/listPrice/pvp/regularPrice/previousPrice/priceBeforeDiscount/crossedPrice/wasPrice, discount_pct из discountPercentage/Percent; abs досчитывается.
+- Backend v136: ext-price/ext-products принимают price_original/discount_pct/discount_abs, досчёт недостающего (из orig+price, abs, pct); сортировка price_original/discount_pct/discount_abs; CSV export +3 колонки.
+- Frontend v136: 3 новых сортируемых столбца «Без скидки» (зачёркнутая), «−%», «−€».
+- МИГРАЦИЯ supabase-migration-v136.sql: alter table parse_products add price_original/discount_pct/discount_abs numeric + notify pgrst.
+- Тест jsdom: case1 (2999/4990/39.9%/1991) ✅ case2 (10.99/26.95/59%/15.96) ✅ case3 (цена за кг исключена) ✅
+
+## v136.1 / ext v1.12.1 (2026-09-07)
+- БАГ: целые цены («142 €», «2.999 €» без десятичных) не совпадали с regex → цены не парились вообще. Добавлена альтернатива \d{1,6}(?=\s*€).
+- Backend: если миграция v136 не выполнена — ext-price/ext-products повторяют запись БЕЗ новых колонок (цены не теряются).
+- Тесты jsdom: 142/159/−17€/10.7% ✅ 10.99/26.95/−59% ✅ 89 € ✅ 2999/4990/−1991€ ✅
+
+## v137 / ext v1.13 (2026-09-07)
+- Backend: POST /api/parse/ext-log (запись журнала), GET /api/parse/logs?limit, PATCH /api/parse/catalog/:id (ручное редактирование name/article/brand/mpn/category/image/currency/url + price/price_original/discount_pct/discount_abs; price→price_source='manual'; отказоустойчиво без миграции v136).
+- МИГРАЦИЯ supabase-migration-v137.sql: create table parse_logs (created_at, site, url, category, total, with_photo, with_brand, with_mpn, with_price, sent) + disable RLS.
+- Extension v1.13: runSectionOnce накапливает статистику раздела и шлёт в ext-log в конце (и при остановке).
+- Frontend v137: строка таблицы — вместо 💶/🤖 одна ✏️ (модал редактирования всех столбцов); убраны кнопки «🤖 AI-цены ×10» и «🏷 Бренды»; блок «🛠 Sitemap-синхронизация и разделы каталога» сворачиваемый (по умолчанию свёрнут); сворачиваемый «📜 Журнал парсинга» с колонками Дата/Раздел(клик→фильтр, 🔗→сайт)/Товаров/💶%/📷/🏷/№ и рекомендацией «🔄 Перепарсить» (цен <80% или старше 7 дней).
+
+## v138 / ext v1.14 (2026-09-07)
+- Перезапуск парсера из приложения: manifest externally_connectable → householder-web-production.up.railway.app; background onMessageExternal: cmd parse-section{url}/status/stop; api+token из chrome.storage.local.
+- Frontend: extSend() (ID расширения в localStorage 'lm_ext_id'), extReparse(url); в журнале «🔄 Перепарсить» — кнопка запуска парсинга раздела; ⚙ рядом с заголовком журнала — ввод ID расширения.
+
+## v139 / ext v1.15 (2026-09-07)
+- Причина «нет прогресса при репарсинге»: прогресс показывался ТОЛЬКО в popup расширения. Теперь background хранит lastProgress и отдаёт в cmd 'status'; App.js после «🔄 Перепарсить» опрашивает status каждые 4 с и показывает живую строку прогресса в журнале (жёлтая=идёт, зелёная=готово + автообновление журнала).
+- Меню вкладок (.tabs-inline): убран серый фон-прямоугольник и pill у активной — инлайн-переопределение: фон none, кнопки без рамок, активная = синий жирный текст + подчёркивание.
+
+## v140 / ext v1.16 (2026-09-07)
+- Причина зависания: прокрутка страницы (executeScript Promise) без таймаута → running=true навсегда, новые запуски = busy. Теперь: Promise.race с sleep(12–15с) на всех прокрутках; isStuck() (2 мин без прогресса) самосбрасывает running в parse-section/status/popup-хендлерах.
+- Причина «одинаковый результат при репарсинге»: на витрине у товаров-вариантов цены нет физически. v1.16: после раздела добор цен со СТРАНИЦ товаров (collectOne), до 40 шт за проход, стоп при 3 капчах, прогресс «💶 Добор цены N/M».
+- Меню: переопределение усилено специфичностью (.mini-header .tabs-inline …) + инлайн style на <nav> (background:none, boxShadow:none) — внешний CSS больше не рисует подложку.
+
+## v141 (2026-09-07) — вкладка «⚖️ Цены»
+- Backend GET /api/compare/lm?store=leroy&days=365&limit: берёт receipts (items jsonb: name/quantity/price/total) по store_name ilike + receipt_date, собирает до 400 позиций (пропуск итогов/IVA).
+- Сопоставление с parse_products (site www.leroymerlin.es): 1) точное по артикулу (7–9 цифр в названии позиции, пачки in(100)); 2) fuzzy: ilike по самому длинному значимому токену (≥3 симв., стоп-слова ES, без акцентов NFD), 60 кандидатов, score = покрытие токенов позиции, порог 60%.
+- Ответ: rows (date, name, qty, price_paid, match{name,url,article,price,price_original,discount_pct,method,score}, diff, diff_pct) + summary (items/matched/spent/catalog/delta).
+- Frontend: вкладка compare (TAB_LABELS '⚖️ Цены', кнопка после Парсинга), компонент CompareLmTab в конце App.js: фильтры магазин/период, карточки итогов (потрачено/каталог/Δ), чипы Все/Дороже/Дешевле/Та же/Не найдено, таблица с вердиктами и ссылками на LM, выгрузка CSV.
+
+## v142 (2026-09-07) — артикул магазина в чеках
+- Промпт распознавания: в items добавлено поле "article" (артикул магазина/SKU/ref, 6–9 цифр; НЕ EAN-13, НЕ № транзакции; null если нет).
+- /api/compare/lm: матчинг теперь по it.article из позиции чека (приоритет), запасной — цифры из названия, далее fuzzy. В rows добавлено article.
+- Frontend: таблица позиций чека — столбец «Артикул» (mono); вкладка «⚖️ Цены» — столбец «Артикул магазина» + в CSV.
+
+## v143 (2026-09-07) — физическая колонка receipts.articles
+- МИГРАЦИЯ supabase-migration-v143.sql: alter table receipts add articles text[] + разовое заполнение из jsonb (только 4+ цифр) + GIN-индекс receipts_articles_gin.
+- Backend: articlesFromItems(items) — сбор уникальных артикулов из позиций; записывается при: сохранении нового чека, перераспознавании (полном и постраничном), ручном редактировании items (PUT /api/receipts/:id). filterRecordByColumns сам пропустит поле после миграции (getTableColumns из БД).
+
+## v144 (2026-09-08) — усиление распознавания позиций чека (ТОВАРЫ (0))
+Причина бага: чек LM распознавался с полным raw_text, но items=[] — промпт v142 ошибочно требовал артикул «6–9 цифр», а у LM артикулы 10–13 цифр после маркеров M*/M/H* («M* 3276007874082 179,00»); модель обнуляла позиции.
+- ОБА промпта (buildReceiptPrompt + buildDocumentSummaryPrompt): формат чека LM (2 строки на позицию: название + «M* <артикул> <цена>»), article = 6–14 цифр, «Promo operacion»/«Dto.» = позиции с отрицательной суммой, ecotasa = позиция, ЖЁСТКОЕ ПРАВИЛО: есть товары с ценами → items НИКОГДА не [] и document_type receipt/invoice.
+- Пример JSON в buildReceiptPrompt: добавлено поле article.
+- extractItemsFallback: захват кода 8–14 цифр в article (не выбрасывается), срез маркера M*/H* из имени; склейка с pendingName покрывает 2-строчный формат LM. Тест: обе позиции с артикулами извлекаются.
+- Гейт фолбэка (сводка документа): добавлены leroy|merlin как валидный сигнал чека.
+- /api/compare/lm: артикул 6–14 цифр (было 6–9 — 13-значные коды LM не матчились с parse_products.article).
+
+## v145 (2026-09-08) — фикс проверки local-mac-ocr (КРИТИЧНО)
+Ошибка «Бэкенд householder-api устарел… build v52+» на свежем бэке: фронт сравнивал build СТРОКОЙ (`h.build < 'v52'`) → 'v144' < 'v52' лексикографически ('1'<'5'). Локальный OCR ломался в ЛЮБОЙ версии ≥ v100. Исправлено на числовое сравнение parseInt(build.replace(/^v/,'')) >= 52 в ДВУХ местах (одиночная загрузка ~6249, пакетная ~6707). ПРАВИЛО: build никогда не сравнивать строкой!
+
+## v146 (2026-09-08) — прогресс-бар пакетного перераспознавания
+Вкладка Фактуры → «🔄 Перераспознать»: состояние reprocessProg {total,done,ok,failed,currentName,startedAt,finished,lastError}; панель под bulk-кнопками: полоса прогресса (done/total %), текущий чек (магазин + дата), этапы «OCR → AI → сохранение», счётчики ✔/✖, по завершении — итог + время + кнопка ✕. Ошибки по каждому чеку считаются из ответа /api/reprocess-receipt.
+
+## v146-backend (2026-09-08) — salvage items из JSON-фрагмента (локальная AI)
+Баг: при local-mac-ocr в raw_text попадал готовый JSON «"items":[{name,article,price,…}]» (ответ локальной модели), items=[] в карточке; regex-фолбэк не ловит строки «"price": 175.00,».
+- Новая salvageItemsFromJsonText(txt): ищет ВСЕ «"items": […]» в тексте, балансировка скобок с учётом строк/экранов, JSON.parse, маппинг в {name,name_ru,article,quantity,price,total} (до 300). Подключена в finalizeReceiptFromPageTexts ДО extractItemsFallback; если нет name_ru — translateItemNames.
+- buildReceiptTextPrompt (локальный путь!): добавлено поле article (6–14 цифр, LM M*/H*), правило «вход уже содержит JSON с items → скопируй каждый объект», never-empty items; пример JSON — с article.
+- build: 'v146-2026-09-08'.
+
+## v147 (2026-09-08) — централизованное спасение items (ВСЕ пути распознавания)
+Корневая причина «ТОВАРЫ (0) при 100% распознавании»: модель клала JSON с позициями в raw_text или JSON ответа обрывался → parseAIResponse возвращал items:[] и терял позиции.
+- parseAIResponse: success-ветка — если items пусты, salvageItemsFromJsonText(jsonStr); catch-ветка (JSON сломан) — items: normalizeItems(salvageItemsFromJsonText(text)) вместо []. Теперь items спасаются на ЛЮБОМ пути (vision, reprocess, OCR-текст, сводка).
+- salvageItemsFromJsonText: ремонт ОБРЕЗАННОГО массива — если нет закрывающей ], берётся до последнего целого объекта (depth==1) и ']' достраивается. Тест: обрыв на 3-й позиции → 2 целые спасены.
+- Промпты: vision — запрет вставлять JSON-структуры в raw_text; локальный текстовый — блок «КРИТИЧЕСКИ ВАЖНО»: items обязательный и непустой, входной JSON → вернуть тот же список позиций, не теряя ни одной.
+- build: 'v147-2026-09-08'.
+
+## v148 (2026-09-08) — форс-редеплой (контент v147 backend + v146 frontend)
+Railway не подтянул v146/v147. Бамп build: 'v148-2026-09-08' (backend) и v148 в шапке (frontend) + новый redeploy-trigger комментарий. Код = v147 (центральное спасение items) + v146 (прогресс-бар, salvage).
+
+## v149 (2026-09-08) — артикул из колонки «Nº Art.» + итог суммой строк
+Фактура MediaMarkt: табличный формат (Pos/Cant./Nº Art./Designación) — модель не брала артикул из колонки, total_amount=0 (итога на фото нет).
+- parseAIResponse: если total_amount null/0 и есть items → итог = Σ строк (все пути), лог «v149: итог восстановлен суммой строк».
+- Все 3 промпта: артикул = колонка «Nº Art.»/«Artículo»/«Ref»/«Código» в табличных фактурах; НЕ путать с «Nº Serie/IMEI». Правило: нет ИТОГО → просуммировать позиции в total_amount.
+- build: 'v149-2026-09-08'.
+
+## v150 (2026-09-08) — фикс падения reprocess без model
+/api/reprocess-receipt: model из body мог быть undefined → model.startsWith → TypeError → 500 «не парсится». Теперь String(req.body.model || 'auto'). Smoke-тест parseAIResponse: валидный JSON (items+article+итог), битый JSON (2 позиции спасены).
+
+## v151 (2026-09-08) — глобальный перехват ошибок на фронте
+«Ничего не происходит» при живом сервере → добавлен window error/unhandledrejection hook: красный баннер снизу с текстом ошибки (тап — скрыть). Диагностика без F12.
+
+## v152 (2026-09-08) — редактируемый пользовательский промпт для AI
+Frontend: вкладка Загрузка → кнопка «📝 Свой промпт для AI» (сворачиваемый textarea, localStorage hh_custom_prompt, бейдж АКТИВЕН, сброс). Уходит как custom_prompt во всех FormData загрузки (одиночная/папка/Mac OCR) и в body /api/reprocess-receipt.
+Backend: custom_prompt (≤4000 симв.) → customPrompt проброшен в buildReceiptPrompt / buildReceiptTextPrompt как блок «ДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ ПОЛЬЗОВАТЕЛЯ (приоритет выше базовых, JSON-схема неизменна)»; threading через recognizeWithGemini/Groq/OpenAICompat/GeminiAuto/Fallback и finalizeReceiptFromPageTexts; читается в /api/upload-receipt, /api/upload-receipts (multi) и /api/reprocess-receipt.
+
+## v153 (2026-09-08) — просмотр базового промпта в UI
+Backend: GET /api/prompts/current?token&currency&docType → {prompt: buildReceiptPrompt(...)} (requireAuth).
+Frontend: редактор промпта: сверху read-only textarea с ТЕКУЩИМ базовым промптом (выделяемый, кнопка ↻ Обновить, учитывает выбранные Валюту/Тип), снизу — редактируемые доп. инструкции.
+
+## v154 (2026-09-08) — санитайзер времени (date/time field value out of range)
+Postgres отвергал receipt_time «20:04:69» (сек>59). normalizeTime(): парсит HH:MM[:SS], компонент вне диапазона → «00» (правило пользователя из его промпта), не-время → null. Применено в parseAIResponse (все пути распознавания) и в PUT /api/receipts/:id (ручное редактирование). Тесты: 20:04:69→20:04:00, 25:10→00:10, 9:5→09:05.
+
+## v155 (2026-09-08) — сшивка длинного чека из нескольких фото
+Причина бага (New Balance: итог 1.09 вместо 1099.26): 3 фото ОДНОГО чека уходили в ДОКУМЕНТНЫЙ конвейер (правило «>2 страниц») — позиции терялись, итог склеивался неверно.
+- looksLikeReceiptPages(): ≥4 ценовых строки + кассовые слова (total/ticket/factura/iva/aed…) → чековый конвейер НЕЗАВИСИМО от числа фото (отчётность/налоговые формы — по-прежнему документный).
+- stitchReceiptPages(): сшивка перекрывающихся кадров — «якорь» = максимум совпадающих подряд строк хвоста сшитого текста с началом нового фото (допускается 1 содержательная строка); повтор отбрасывается; фото-дубликат (>60% строк уже есть) пропускается. Вызов в finalizeReceiptFromPageTexts до сборки raw_text/перевода.
+- Тест: 3 кадра с перекрытиями и дубликатом → единый текст без повторов.
+
+## v156 (2026-09-08) — форс-редеплой (контент = v155 backend + v153 frontend)
+Бамп обоих до v156: сшивка многофоточных чеков + просмотр базового промпта + все предыдущие фиксы.
+
+## v157 (2026-09-08) — контроль «итог vs сумма строк»
+Кейс New Balance: total_amount=1.09 при Σ items=1099.26. parseAIResponse: если total в разы меньше суммы позиций (sum−t>5 и t<0.6·sum) → итог = сумма строк; без итога — как раньше. Промпты (vision + текстовый): правило самопроверки — total_amount сопоставим с суммой позиций, запрет малых случайных чисел. Тест: 1.09 → 1099.26.
+
+## v158 (2026-09-08) — форс-редеплой (контент = v157 backend + frontend)
+
+## v159 (2026-09-08) — валюта по адресу (справочник) + сводная таблица позиций
+Backend: CURRENCY_BY_LOCATION (Dubai/ОАЭ→AED, Испания→EUR, Россия→RUB, UK→GBP, США→USD) в enforceCurrencyAndTotal — приоритет над угадыванием модели; вызов enforceCurrencyAndTotal добавлен на vision-пути (upload + reprocess). Промпты: строгая привязка валюты к адресу («адрес важнее символов»).
+Frontend: карточка документа — над постраничной таблицей позиций СВОДНАЯ таблица всех позиций со строкой ИТОГО (Σ кол-во, Σ сумма) — итоги карточки сверять с ней.
+
+## v160 (2026-09-09)
+- Frontend: сводная таблица позиций теперь ВСЕГДА первая в блоке «Товары/Позиции» (убрана зависимость от постраничности), заголовок «📊 Сводная таблица».
+- Карточка чека в списке: кнопки «Просмотр»/«Удалить» заменены на маленькие круглые ярлыки 👁 / 🗑 (title-подсказки сохранены).
+- Backend: только бамп build v160 для контроля деплоя.
+
+## v161 (2026-09-09)
+- Мультимагазинный каталог парсинга: чипы-переключатели Leroy Merlin / MediaMarkt Canarias / Worten Canarias / Mercadona. Таблица parse_products общая, разделение по site (host). Все запросы каталога/брендов/экспорта/импорта шлют site=CAT_STORE.host.
+- Артикул из URL расширен: кроме LM "-NNN.html" — число в конце URL (MediaMarkt/Worten).
+- Mercadona: у них нет sitemap — официальный API tienda.mercadona.es. Новые эндпоинты: GET /api/parse/mercadona/tree (2-уровневые разделы), POST /api/parse/mercadona/sync {id,path} (товары раздела сразу с ценами EUR, price_source='mercadona-api'). Фронт: «🌳 Загрузить разделы» → чипы разделов + «Синхронизировать ВСЕ».
+- БД: миграций НЕ нужно (та же parse_products, onConflict site,url).
+
+## v162 (2026-09-09)
+- Решение по архитектуре каталога: ОДНА таблица parse_products (выбор пользователя). Защита: supabase-migration-v162-rls.sql — RLS enable + deny для anon/authenticated (service_role бэкенда не затронут), view на каждый магазин (v_products_leroymerlin / _mediamarkt / _worten / _mercadona) для ручного редактирования, триггер-страж против массового DELETE >500 строк за операцию.
+
+## v163 (2026-09-09, FIX)
+- RLS deny-политика v162 заблокировала upsert бэкенда («new row violates row-level security policy»). FIX: supabase-migration-v163-rls-fix.sql — drop deny, create policy parse_products_app_all (using true) для anon/authenticated/service_role. RLS остаётся включённым; view и триггер-страж сохранены. v162-файл исправлен, чтобы не ломал при повторном применении.
