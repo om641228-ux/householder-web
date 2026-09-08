@@ -124,7 +124,12 @@ function extractOnPage() {
       .match(/(?:\bMPN\b|\bRef(?:erencia)?\b(?!\w)|\bModelo\b(?!\w)|N[ºo°]\s*de\s*art[íi]culo)\s*[:.\-]?\s*((?=[\w.\-\/]*\d)[A-Z0-9][\w.\-\/]{3,30})/i);
     if (m) out.mpn = m[1];
   }
-  if (!out.mpn && out.gtin) out.mpn = out.gtin; // v1.18.1: штрихкод gtin13 как запасной № производителя
+  // v1.18.2: № производителя = поле «Modelo» из характеристик (Worten); EAN/gtin НЕ используем
+  if (!out.mpn) {
+    const bt = String(document.body ? document.body.innerText.slice(0, 40000) : '');
+    const mm = bt.match(/(?:^|\n)\s*Modelo\s*(?:\n|:)\s*([^\n]{2,60})/);
+    if (mm) out.mpn = mm[1].trim();
+  }
   if (!out.price) {
     const mp = document.querySelector('meta[property="product:price:amount"],meta[name="og:price:amount"]');
     if (mp) out.price = parseFloat(mp.content.replace(',', '.')) || null;
