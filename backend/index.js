@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v158-2026-09-08', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v159-2026-09-08', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -589,7 +589,7 @@ function buildReceiptPrompt(currency, docType, customPrompt) {
   const currencyHint = currency === 'auto' 
     ? `Определи валюту АВТОМАТИЧЕСКИ по месту и содержимому документа:
        - символы: € → EUR, $ → USD, £ → GBP, ₽/руб → RUB, د.إ/Dhs → AED
-       - страна/адрес магазина: Испания/Европа → EUR, ОАЭ (Dubai, Abu Dhabi) → AED, США → USD, Россия → RUB
+       - страна/адрес магазина — СТРОГАЯ ПРИВЯЗКА: Dubai/Abu Dhabi/Sharjah/ОАЭ/UAE/Эмираты → AED (даже если суммы выглядят «как евро»!); Испания (Tenerife, Madrid, Barcelona…)/Европа → EUR; США → USD; Россия → RUB; UK → GBP. Адрес на чеке ВАЖНЕЕ символов: если адрес Дубай — валюта AED.
        - слова на чеке: "EUR", "EURO", "IVA", "IGIC" → EUR; "AED", "VAT 5%" (ОАЭ) → AED
        Верни ISO-код валюты (EUR, USD, AED, RUB, GBP...).` 
     : `Валюта: ${currency}.`;
@@ -1915,8 +1915,26 @@ async function translateItemNames(items) {
 function enforceCurrencyAndTotal(data, rawText) {
   if (!data || typeof data !== 'object') return data;
   const text = String(rawText || '');
+  // v159: справочник «физический адрес/город → валюта» (приоритет выше угадывания модели)
+  const CURRENCY_BY_LOCATION = [
+    { re: /dubai|abu\s*dhabi|sharjah|ajman|ras\s*al|fujairah|united\s*arab\s*emirates|\bu\.?a\.?e\b|дубай|оаэ|эмират/i, currency: 'AED' },
+    { re: /tenerife|spain|espa[ñn]a|madrid|barcelona|valencia|sevilla|adeje|santa\s+cruz|испани|тенерифе/i, currency: 'EUR' },
+    { re: /moscow|saint\s*petersburg|russia|россия|москва|петербург/i, currency: 'RUB' },
+    { re: /london|manchester|united\s*kingdom|\buk\b|лондон|великобритани/i, currency: 'GBP' },
+    { re: /new\s*york|los\s*angeles|\busa\b|united\s*states|сша/i, currency: 'USD' }
+  ];
+  const addrText = [data.supply_address, data.country, data.store_name, text.slice(0, 3000)].filter(Boolean).join('\n');
+  for (const rule of CURRENCY_BY_LOCATION) {
+    if (rule.re.test(addrText)) {
+      if (data.currency !== rule.currency) {
+        console.log(`v159: валюта ${data.currency} → ${rule.currency} (адрес/город из справочника)`);
+        data.currency = rule.currency;
+      }
+      break; // первое (самое приоритетное) совпадение
+    }
+  }
   const looksSpanish = /€|\bCIF\b|\bNIF\b|\bIGIC\b|\bIVA\b|FACTURA|ESPAÑA|ESPANA|TENERIFE|SANTA CRUZ|ADEJE|MADRID|BARCELONA/i.test(text);
-  if (looksSpanish && data.currency !== 'EUR') {
+  if (looksSpanish && data.currency !== 'EUR' && !CURRENCY_BY_LOCATION.some(r => r.currency !== 'EUR' && r.re.test(addrText))) {
     if (data.currency) console.log(`v53: валюта ${data.currency} → EUR (признаки Испании в тексте)`);
     data.currency = 'EUR';
   }
@@ -2277,7 +2295,7 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
 function buildReceiptTextPrompt(text, currency, docType, customPrompt) {
   const currencyHint = currency === 'auto'
     ? `Определи валюту АВТОМАТИЧЕСКИ: символы € → EUR, $ → USD, £ → GBP, ₽/руб → RUB, د.إ/Dhs → AED;
-       страна/адрес: Испания/Европа → EUR, ОАЭ → AED, США → USD, Россия → RUB; слова "IVA"/"IGIC" → EUR.
+       страна/адрес — СТРОГО: Dubai/Abu Dhabi/ОАЭ/UAE → AED; Испания/Европа → EUR; США → USD; Россия → RUB; UK → GBP; слова "IVA"/"IGIC" → EUR. Адрес важнее символов.
        Верни ISO-код валюты.`
     : `Валюта: ${currency}.`;
   const docTypeHint = docType === 'auto'
@@ -3458,6 +3476,8 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
       }
     }
     
+    // v159: справочник «адрес → валюта» и контроль итога — на vision-пути тоже
+    enforceCurrencyAndTotal(receiptData, receiptData.raw_text || '');
     // Гарантия перевода: если модель опустила raw_text_ru — дозапрашиваем перевод отдельно
     receiptData = await ensureRawTextRu(receiptData);
 
@@ -4170,6 +4190,8 @@ app.post('/api/reprocess-receipt', requireAuth, async (req, res) => {
       receiptData = auto.data;
     }
 
+    // v159: справочник «адрес → валюта» и контроль итога — на vision-пути тоже
+    enforceCurrencyAndTotal(receiptData, receiptData.raw_text || '');
     // Гарантия перевода: если модель опустила raw_text_ru — дозапрашиваем перевод отдельно
     receiptData = await ensureRawTextRu(receiptData);
 

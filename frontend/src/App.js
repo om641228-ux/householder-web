@@ -2247,7 +2247,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v158 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v159 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -9416,7 +9416,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-08 · v158 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-08 · v159 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9429,7 +9429,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-08 · v158</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-08 · v159</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
@@ -10200,6 +10200,39 @@ ${bodyHtml}
                   return (
                 <div className="info-block">
                   <h3>{['invoice', 'proposal', 'bill'].includes(viewModal.document_type) ? 'Позиции' : 'Товары'} ({allItems.length})</h3>
+                  {/* v159: СВОДНАЯ таблица по ВСЕМ страницам — над постраничной; итоги карточки считаются из неё */}
+                  {paged && (() => {
+                    const sumQty = allItems.reduce((a, it) => a + (Number(it && it.quantity) || 0), 0);
+                    const sumTotal = Math.round(allItems.reduce((a, it) => a + (Number(it ? (it.total ?? it.price) : 0) || 0), 0) * 100) / 100;
+                    return (
+                      <div style={{ marginBottom: 12, border: '1px solid #d5d5da', borderRadius: 10, overflow: 'hidden' }}>
+                        <div style={{ background: '#f5f5f7', padding: '6px 10px', fontSize: 12.5, fontWeight: 700, color: '#1d1d1f' }}>
+                          📊 Сводная по всем страницам ({allItems.length} поз.) — итог: <span style={{ color: '#0071e3' }}>{sumTotal} {viewModal.currency || ''}</span>
+                        </div>
+                        <table className="items-table" style={{ marginBottom: 0 }}>
+                          <thead><tr><th>№</th><th>Артикул</th><th>Товар</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead>
+                          <tbody>
+                            {allItems.map((item, i) => (
+                              <tr key={i}>
+                                <td>{i + 1}</td>
+                                <td style={{ fontFamily: 'monospace', fontSize: 11, color: item.article ? '#1d1d1f' : '#c7c7cc', whiteSpace: 'nowrap' }}>{item.article || '—'}</td>
+                                <td><HighlightText text={item.name_ru || item.name || '—'} query={searchQuery} /></td>
+                                <td>{item.quantity}</td>
+                                <td>{item.price}</td>
+                                <td>{item.total}</td>
+                              </tr>
+                            ))}
+                            <tr style={{ fontWeight: 700, background: '#fafafa' }}>
+                              <td colSpan={3} style={{ textAlign: 'right' }}>ИТОГО:</td>
+                              <td>{sumQty}</td>
+                              <td></td>
+                              <td>{sumTotal}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })()}
                   {paged && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '2px 0 10px' }}>
                       <button onClick={() => setItemsPage(cur - 1)} disabled={cur <= 1} style={{ ...pageBtn, opacity: cur <= 1 ? 0.35 : 1 }}>‹</button>
