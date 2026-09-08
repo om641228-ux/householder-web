@@ -2626,3 +2626,6 @@ Backend: custom_prompt (≤4000 симв.) → customPrompt проброшен �
 ## v153 (2026-09-08) — просмотр базового промпта в UI
 Backend: GET /api/prompts/current?token&currency&docType → {prompt: buildReceiptPrompt(...)} (requireAuth).
 Frontend: редактор промпта: сверху read-only textarea с ТЕКУЩИМ базовым промптом (выделяемый, кнопка ↻ Обновить, учитывает выбранные Валюту/Тип), снизу — редактируемые доп. инструкции.
+
+## v154 (2026-09-08) — санитайзер времени (date/time field value out of range)
+Postgres отвергал receipt_time «20:04:69» (сек>59). normalizeTime(): парсит HH:MM[:SS], компонент вне диапазона → «00» (правило пользователя из его промпта), не-время → null. Применено в parseAIResponse (все пути распознавания) и в PUT /api/receipts/:id (ручное редактирование). Тесты: 20:04:69→20:04:00, 25:10→00:10, 9:5→09:05.

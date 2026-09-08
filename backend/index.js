@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v153-2026-09-08', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v154-2026-09-08', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -2643,7 +2643,7 @@ function parseAIResponse(text) {
       store_name: data.store_name || data.store || data.merchant_name || null,
       store_name_ru: data.store_name_ru || data.store_ru || null,
       receipt_date: normalizeDate(data.receipt_date || data.date || data.purchase_date),
-      receipt_time: data.receipt_time || data.time || null,
+      receipt_time: normalizeTime(data.receipt_time || data.time || null), // v154
       total_amount: parseAmount(data.total_amount || data.total || data.amount),
       subtotal: parseAmount(data.subtotal || data.sub_total),
       tax_amount: parseAmount(data.tax_amount || data.tax || data.vat),
@@ -2744,6 +2744,21 @@ function parseAIResponse(text) {
       raw_text: text
     };
   }
+}
+
+// v154: время с чека может быть битым («20:04:69» — 69 секунд). Postgres time это отвергает
+// (date/time field value out of range). Правило: компонент вне диапазона → «00»; не время → null.
+function normalizeTime(timeStr) {
+  if (!timeStr) return null;
+  const m = String(timeStr).trim().match(/^(\d{1,2})[:.](\d{1,2})(?:[:.](\d{1,2}))?/);
+  if (!m) return null;
+  let h = parseInt(m[1], 10), mi = parseInt(m[2], 10);
+  let se = m[3] != null ? parseInt(m[3], 10) : null;
+  if (h > 23) h = 0;
+  if (mi > 59) mi = 0;
+  if (se != null && se > 59) se = 0;
+  const pad = n => String(n).padStart(2, '0');
+  return se != null ? `${pad(h)}:${pad(mi)}:${pad(se)}` : `${pad(h)}:${pad(mi)}`;
 }
 
 function normalizeDate(dateStr) {
@@ -6488,6 +6503,7 @@ app.post('/api/receipts/:id/recognize-failed-pages', requireAuth, requireRole('a
 // ========== UPDATE RECEIPT (редактирование полей документа) ==========
 app.put('/api/receipts/:id', requireAuth, requireRole('admin', 'manager', 'buchhalter', 'user'), writeTabGuard('list'), async (req, res) => {
   try {
+    if (req.body && req.body.receipt_time) req.body.receipt_time = normalizeTime(req.body.receipt_time); // v154
     const EDITABLE = ['store_name', 'store_name_ru', 'receipt_date', 'receipt_time',
       'total_amount', 'subtotal', 'tax_amount', 'currency', 'country', 'payment_method',
       'object', 'document_type', 'subtype', 'payment_status', 'provider', 'valid_from', 'valid_to',
