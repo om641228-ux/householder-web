@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v154-2026-09-08', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v155-2026-09-08', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -1720,10 +1720,72 @@ async function extractPageTextsFromWordFile(buffer, filename) {
 // Маршрутизация по текстам страниц: 3+ страниц — документный конвейер;
 // 1-2 страницы — чековая схема, КРОМЕ годовой отчётности и налоговых форм (v34):
 // короткие формы (Modelo 130/303 на 1-2 стр.) тоже идут документным конвейером с касильями
+// v155: страницы — это ЧЕК/ФАКТУРА (много ценовых строк + кассовые слова)?
+// Длинный чек, сфотографированный на 3+ фото, НЕ должен уходить в документный конвейер
+// (там items берутся из сводки и теряются, итог склеивается неверно — кейс New Balance 1.09 вместо 1099.26)
+function looksLikeReceiptPages(pageTexts) {
+  const joined = (Array.isArray(pageTexts) ? pageTexts.join('\n') : String(pageTexts || '')).slice(0, 40000);
+  const priceLines = (joined.match(/\d+[.,]\d{2}/g) || []).length;
+  const kw = /total|итого|ticket|factura|recibo|sale\b|iva\b|vat\b|igic|cambio|tax\s+invoice|invoice|\bAED\b|\bEUR\b|\bUSD\b/i;
+  return priceLines >= 4 && kw.test(joined);
+}
+
 function shouldUseDocumentPipeline(pageTexts) {
-  if (pageTexts.length > 2) return true;
   const joined = pageTexts.join('\n').slice(0, 40000);
-  return looksLikeAnnualAccounts(joined) || looksLikeTaxForm(joined);
+  if (looksLikeAnnualAccounts(joined) || looksLikeTaxForm(joined)) return true;
+  if (looksLikeReceiptPages(pageTexts)) return false; // v155
+  if (pageTexts.length > 2) return true;
+  return false;
+}
+
+// v155: сшивка длинного чека из нескольких фото.
+// Каждое фото распознано отдельно; соседние кадры ПЕРЕКРЫВАЮТСЯ (хвост фото N = начало фото N+1).
+// Правило: ищем максимальное перекрытие (2+ совпадающие строки подряд) хвоста уже принятого
+// текста с началом новой страницы — повтор выкидываем; страницу, почти полностью
+// повторяющую уже принятое (>60% строк), пропускаем целиком (дубликат кадра).
+// Совпадающий фрагмент — «якорь» сшивки.
+function stitchReceiptPages(pageTexts) {
+  const norm = (l) => String(l).trim().toLowerCase().replace(/\s+/g, ' ');
+  const pages = (Array.isArray(pageTexts) ? pageTexts : []).map(t => String(t || '').split('\n'));
+  const accepted = []; // строки уже сшитого текста
+  const contributions = [];
+  for (let i = 0; i < pages.length; i++) {
+    let lines = pages[i];
+    if (accepted.length) {
+      const curNorm = lines.map(norm);
+      const nonEmptyIdx = lines.map((l, idx) => (norm(l) ? idx : -1)).filter(idx => idx >= 0);
+      let cutAt = 0;
+      const maxK = Math.min(12, nonEmptyIdx.length);
+      const tail = accepted.map(norm).filter(Boolean).slice(-40);
+      // якорь: максимум совпадающих подряд строк (допускаем и ОДНУ строку — последняя строка
+      // кадра часто повторяется первой строкой следующего; но строка должна быть содержательной)
+      for (let k = maxK; k >= 1 && !cutAt; k--) {
+        const headIdx = nonEmptyIdx.slice(0, k);
+        const head = headIdx.map(idx => curNorm[idx]);
+        if (k === 1 && (head[0].length < 4 || !/[a-zа-яё0-9]/i.test(head[0]))) break; // мусорный якорь — не сшиваем
+        outer: for (let st = 0; st + k <= tail.length; st++) {
+          for (let j = 0; j < k; j++) if (tail[st + j] !== head[j]) continue outer;
+          cutAt = headIdx[k - 1] + 1; // якорь найден: отбрасываем повтор
+          break;
+        }
+      }
+      if (cutAt) {
+        console.log(`v155: сшивка фото ${i + 1}/${pages.length}: якорь ${cutAt} строк(и) перекрытия отброшены`);
+        lines = lines.slice(cutAt);
+      } else {
+        const prevSet = new Set(accepted.map(norm).filter(Boolean));
+        const ne = lines.filter(l => norm(l));
+        const dup = ne.filter(l => prevSet.has(norm(l))).length;
+        if (ne.length > 0 && dup / ne.length > 0.6) {
+          console.log(`v155: фото ${i + 1}/${pages.length} повторяет уже сшитое (${dup}/${ne.length} строк) — кадр-дубликат пропущен`);
+          continue;
+        }
+      }
+    }
+    accepted.push(...lines);
+    contributions.push(lines);
+  }
+  return contributions;
 }
 
 // Сборка документа из готовых текстов страниц: перевод по страницам + модули + JSON-сводка
@@ -2295,6 +2357,11 @@ ${text}
 // Карточка чека/фактуры из готовых OCR-текстов страниц (v28.5):
 // чековая схема (с товарами) + те же запасные варианты, что у документного конвейера
 async function finalizeReceiptFromPageTexts(pageTexts, currency, docType, customPrompt) {
+  // v155: многофоточный чек — сначала сшиваем перекрывающиеся тексты страниц
+  if (pageTexts.length > 1) {
+    const stitched = stitchReceiptPages(pageTexts);
+    if (stitched.length) pageTexts = stitched.map(lines => lines.join('\n'));
+  }
   const pageCount = pageTexts.length;
   const raw_text = pageCount > 1
     ? pageTexts.map((t, i) => `══════ СТРАНИЦА ${i + 1} из ${pageCount} ══════\n${t}`).join('\n\n')
