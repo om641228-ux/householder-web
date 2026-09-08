@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v156-2026-09-08', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v157-2026-09-08', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -614,6 +614,7 @@ function buildReceiptPrompt(currency, docType, customPrompt) {
 7. Суммы: извлеки точные числа, убери символы валют.
 8. Товары: если quantity не указан, используй 1.
 9. Подытог (subtotal) и налог (tax_amount) — если есть на чеке. Если ИТОГО/TOTAL на документе не напечатано или не читается — ПРОСУММИРУЙ суммы всех позиций items и запиши результат в total_amount (total_amount НИКОГДА не 0 и не null, если есть позиции).
+   КОНТРОЛЬ САМОПРОВЕРКИ: total_amount — ФИНАЛЬНАЯ сумма к оплате по ВСЕМУ документу. Она ОБЯЗАНА быть сопоставима с суммой позиций: total_amount ≥ суммы items минус явные скидки. ЗАПРЕЩЕНО писать в total_amount маленькие числа из середины чека (цену последнего товара, сдачу, номер). Если твой total_amount в разы меньше суммы позиций — это ОШИБКА: замени его суммой позиций.
 10. Способ оплаты (payment_method) — если указан.
 11. Адрес магазина (country) — если указан.
 
@@ -2292,7 +2293,7 @@ function buildReceiptTextPrompt(text, currency, docType, customPrompt) {
 
 ВАЖНЫЕ ПРАВИЛА:
 1. Найди магазин (store_name — ВСЕГДА оригинальное название как напечатано, без перевода; перевод — в store_name_ru), дату (receipt_date в формате YYYY-MM-DD), время (receipt_time), итоговую сумму (total_amount).
-2. Найди ВСЕ товары — каждый товар это объект: name (оригинал), name_ru (перевод на русский), article (АРТИКУЛ МАГАЗИНА — цифровой код 6–14 знаков рядом с товаром; у Leroy Merlin — 10–13 цифр после маркера M*/M/H* на отдельной строке «M* 3276007874082 179,00»; в табличных фактурах — колонка «Nº Art.»/«Artículo»/«Ref»; если нет — null), quantity (количество, если не указано — 1), price (цена за единицу), total (сумма за товар). Выведи КАЖДЫЙ товар, без пропусков. Если итога (TOTAL/ИТОГО) в тексте нет — просуммируй позиции и запиши в total_amount. ЖЁСТКОЕ ПРАВИЛО: если в тексте есть товары с ценами — массив items НИКОГДА не пустой.
+2. Найди ВСЕ товары — каждый товар это объект: name (оригинал), name_ru (перевод на русский), article (АРТИКУЛ МАГАЗИНА — цифровой код 6–14 знаков рядом с товаром; у Leroy Merlin — 10–13 цифр после маркера M*/M/H* на отдельной строке «M* 3276007874082 179,00»; в табличных фактурах — колонка «Nº Art.»/«Artículo»/«Ref»; если нет — null), quantity (количество, если не указано — 1), price (цена за единицу), total (сумма за товар). Выведи КАЖДЫЙ товар, без пропусков. Если итога (TOTAL/ИТОГО) в тексте нет — просуммируй позиции и запиши в total_amount. КОНТРОЛЬ: total_amount обязан быть сопоставим с суммой позиций — если он в разы меньше суммы items, это ошибка, замени суммой позиций. ЖЁСТКОЕ ПРАВИЛО: если в тексте есть товары с ценами — массив items НИКОГДА не пустой.
    ОСОБЫЙ СЛУЧАЙ: если во входном тексте уже есть JSON-фрагмент вида "items": [ {...} ] — это готовые позиции от предыдущего шага: скопируй КАЖДЫЙ объект в массив items ответа (name, name_ru, article, quantity, price, total), ничего не теряя.
 3. ${currencyHint}
 4. Если не уверен в значении — используй null, НЕ используй "Unknown" или 0 без причины.
@@ -2769,12 +2770,21 @@ function parseAIResponse(text) {
         : (data.raw_text_ru || data.raw_text_translation || null)
     };
 
-    // v149: нет ИТОГО на документе (или модель вернула 0) — итог = сумма строк items
-    if ((result.total_amount == null || result.total_amount === 0) && result.items.length) {
-      const sum = result.items.reduce((a, it) => a + (Number(it.total ?? it.price) || 0), 0);
+    // v149+v157: контроль итога по сумме строк items.
+    // а) итога нет/0 → итог = сумма строк;
+    // б) итог В РАЗЫ меньше суммы позиций (модель выдернула случайную цифру — кейс 1.09 вместо 1099.26)
+    //    → доверяем сумме строк (скидка >40% на чеке невозможна без отрицательных позиций, а они учтены в сумме).
+    if (result.items.length) {
+      const sum = Math.round(result.items.reduce((a, it) => a + (Number(it.total ?? it.price) || 0), 0) * 100) / 100;
       if (sum > 0) {
-        result.total_amount = Math.round(sum * 100) / 100;
-        console.log(`v149: итог не найден на документе — восстановлен суммой строк: ${result.total_amount}`);
+        const t = result.total_amount;
+        if (t == null || t === 0) {
+          result.total_amount = sum;
+          console.log(`v157: итог отсутствовал — восстановлен суммой строк: ${sum}`);
+        } else if (sum - t > 5 && t < sum * 0.6) {
+          console.log(`v157: итог ${t} несуразно меньше суммы позиций ${sum} — исправлен на сумму строк`);
+          result.total_amount = sum;
+        }
       }
     }
     // v147: модель вернула валидный JSON, но items потерялись/пусты — спасаем из сырого ответа
