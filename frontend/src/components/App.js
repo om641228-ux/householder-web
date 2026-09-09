@@ -1,9 +1,31 @@
+// redeploy-trigger: 2026-09-09-v171-browser-sitemap
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import './App.css';
 import './apple-theme.css'; // Apple-стиль (apple.com): пилюльные кнопки, мягкие карточки, #0071e3 — v31
 import { Capacitor, registerPlugin } from '@capacitor/core';
 
 const API_URL = 'https://householder-api-production.up.railway.app';
+
+// v151/v158: глобальный перехват ошибок — если кнопка «ничего не делает», ошибка показывается баннером,
+// а не тонет в консоли. Помогает диагностике без F12.
+if (typeof window !== 'undefined' && !window.__hhErrHook) {
+  window.__hhErrHook = true;
+  const showErr = (msg) => {
+    try {
+      let el = document.getElementById('hh-err-banner');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'hh-err-banner';
+        el.style.cssText = 'position:fixed;left:12px;right:12px;bottom:12px;z-index:99999;background:#d70015;color:#fff;padding:10px 14px;border-radius:10px;font:13px/1.4 -apple-system,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.3)';
+        el.onclick = () => el.remove();
+        document.body.appendChild(el);
+      }
+      el.textContent = '⚠ Ошибка: ' + String(msg).slice(0, 300) + '  (нажмите, чтобы скрыть)';
+    } catch (_) {}
+  };
+  window.addEventListener('error', (e) => showErr(e.message || e.error));
+  window.addEventListener('unhandledrejection', (e) => showErr((e.reason && (e.reason.message || e.reason)) || 'unhandled rejection'));
+}
 // Локальный OCR (Unlimited-OCR на llama-server пользователя): браузер обращается к нему
 // НАПРЯМУЮ — сервер и браузер на одном ноутбуке. localhost для браузера — доверенный
 // контекст, поэтому запросы с HTTPS-сайта на http://127.0.0.1 разрешены.
@@ -913,7 +935,7 @@ const fmtDocDate = (iso) => iso ? iso.split('-').reverse().join('.') : '';
 // v74: вкладка «👥 Пользователи» (только admin) — управление доступом: роли, разделы документов, объекты
 function UsersTab({ token, objectsList }) {
   const SEC_LABELS = { home: '🏠 Дома', auto: '🚗 Авто', personal: '👤 Личное' };
-  const TAB_LABELS = { upload: '📤 Загрузка', list: '🧾 Чеки/документы', links: '🔗 Связи', analysis: '📊 Анализ', taxes: '🧾 Налоги', cash: '💵 Cash', crm: '🤝 CRM', docs: '📁 Документы', chat: '💬 Чат', log: '📋 Журнал' };
+  const TAB_LABELS = { upload: '📤 Загрузка', list: '🧾 Чеки/документы', links: '🔗 Связи', parse: '🌐 Парсинг', analysis: '📊 Анализ', taxes: '🧾 Налоги', cash: '💵 Cash', crm: '🤝 CRM', docs: '📁 Документы', compare: '⚖️ Цены', chat: '💬 Чат', log: '📋 Журнал' };
   const [list, setList] = useState([]);
   const [err, setErr] = useState('');
   const [edit, setEdit] = useState(null); // {id,name,password,role,sections[],objects[],disabled,isNew}
@@ -1176,6 +1198,7 @@ function DocsTab({ user, token }) {
   const [docsBusy, setDocsBusy] = useState(false);
   const [docsUpload, setDocsUpload] = useState(null); // v68.4: {phase:'prepare'|'upload'|'ocr', percent, done, total, currentFile}
   const [docsMove, setDocsMove] = useState(null); // v68.8.1: {total, target, status:'run'|'ok'|'err', msg}
+  const [docsOcrBatch, setDocsOcrBatch] = useState(null); // v116: пакетное распознавание {total, done, skipped, errors[], current, status}
   const docsXhrRef = useRef(null);   // v68.4: активный XHR — для кнопки «Остановить»
   const docsStopRef = useRef(false); // v68.4: флаг остановки цикла распознавания
   const [docsViewer, setDocsViewer] = useState(null); // {url, kind, name}
@@ -1710,6 +1733,38 @@ function DocsTab({ user, token }) {
     } catch (e) { alert('Не удалилось: ' + e.message); }
   };
 
+  // v116: распознать ВЫБРАННЫЕ файлы (оригинал + перевод на русский), текст сохраняется в карточке файла
+  const recognizeSelectedDocs = async () => {
+    if (docsOcrBatch && docsOcrBatch.status === 'run') return;
+    const map = {};
+    Object.values(sections).forEach(list => (list || []).forEach(e => { const m = docMediaOf(e); if (m && m.url) map[m.url] = m; }));
+    const items = selectedUrls.map(u => map[u]).filter(Boolean)
+      .filter(m => m.kind === 'photo' || m.kind === 'doc');
+    if (!items.length) return alert('Среди выбранных нет фото/PDF для распознавания');
+    const todo = items.filter(m => !(m.ocr && Array.isArray(m.ocr.pages) && m.ocr.pages.length));
+    const skipped = items.length - todo.length;
+    if (!todo.length) {
+      setDocsOcrBatch({ total: items.length, done: 0, skipped, errors: [], current: '', status: 'ok' });
+      return;
+    }
+    if (!window.confirm(`Распознать выбранные файлы: ${todo.length} шт.\n(оригинал + перевод на русский; уже распознанные пропускаются: ${skipped})\n\nЭто может занять несколько минут. Продолжить?`)) return;
+    setDocsOcrBatch({ total: todo.length, done: 0, skipped, errors: [], current: '', status: 'run' });
+    let done = 0; const errors = [];
+    for (const m of todo) {
+      setDocsOcrBatch(prev => prev ? { ...prev, current: m.name || 'Файл' } : prev);
+      try {
+        const { pages } = await recognizeFilePages(m);
+        const docDate = parseDocDateFromText((pages || []).map(p => p.original || '').join('\n'));
+        await saveDocOcr(docSection, m.url, pages, docDate);
+        done++;
+      } catch (e) {
+        errors.push(`${m.name || 'Файл'}: ${e.message}`);
+      }
+      setDocsOcrBatch(prev => prev ? { ...prev, done, errors: [...errors] } : prev);
+    }
+    setDocsOcrBatch(prev => prev ? { ...prev, status: 'ok', current: '' } : prev);
+  };
+
   // v57.6/v57.7: карточка «фото + текст по страницам». Если текст уже распознан и сохранён —
   // открываем мгновенно; иначе распознаём и СОХРАНЯЕМ в карточке файла (оригинал + перевод)
   const recognizeDoc = async (entry) => {
@@ -2076,6 +2131,8 @@ function DocsTab({ user, token }) {
                 </React.Fragment>
               ))}
             </select>
+            <button onClick={recognizeSelectedDocs} disabled={!selectedUrls.length || (docsOcrBatch && docsOcrBatch.status === 'run')} title="Распознать текст выбранных файлов (оригинал + перевод на русский, сохраняется в карточке)"
+              style={{ padding: '5px 14px', borderRadius: 980, border: 'none', background: selectedUrls.length ? '#34c759' : '#f0f0f2', color: selectedUrls.length ? '#fff' : '#8e8e93', fontWeight: 600, fontSize: 12.5, cursor: selectedUrls.length ? 'pointer' : 'not-allowed' }}>📝 Распознать</button>
             <button onClick={shareSelectedDocs} disabled={!selectedUrls.length} title="Публичная ссылка на выбранные файлы"
               style={{ padding: '5px 14px', borderRadius: 980, border: 'none', background: selectedUrls.length ? '#0071e3' : '#f0f0f2', color: selectedUrls.length ? '#fff' : '#8e8e93', fontWeight: 600, fontSize: 12.5, cursor: selectedUrls.length ? 'pointer' : 'not-allowed' }}>🔗 Ссылка</button>
             <button onClick={removeSelectedDocs} disabled={!selectedUrls.length}
@@ -2128,6 +2185,33 @@ function DocsTab({ user, token }) {
         </div>
       </div>
 
+      {docsOcrBatch && (
+        <div onClick={() => { if (docsOcrBatch.status !== 'run') setDocsOcrBatch(null); }} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 205, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: '18px 20px', width: 380, maxWidth: '92vw', boxShadow: '0 12px 40px rgba(0,0,0,0.25)' }}>
+            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>
+              {docsOcrBatch.status === 'run' && '📝 Распознавание файлов…'}
+              {docsOcrBatch.status === 'ok' && '✅ Распознавание завершено'}
+            </div>
+            <div style={{ fontSize: 13, color: '#555', marginBottom: 4 }}>Готово: {docsOcrBatch.done} из {docsOcrBatch.total}{docsOcrBatch.skipped ? ` · пропущено (уже распознаны): ${docsOcrBatch.skipped}` : ''}</div>
+            {docsOcrBatch.status === 'run' && (
+              <>
+                <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{docsOcrBatch.current}</div>
+                <div style={{ height: 6, borderRadius: 3, background: '#f0f0f2', overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${docsOcrBatch.total ? Math.round(docsOcrBatch.done / docsOcrBatch.total * 100) : 0}%`, background: '#34c759', transition: 'width .3s' }} />
+                </div>
+              </>
+            )}
+            {docsOcrBatch.status === 'ok' && docsOcrBatch.errors.length > 0 && (
+              <div style={{ marginTop: 8, maxHeight: 120, overflowY: 'auto', fontSize: 12, color: '#e74c3c' }}>
+                {docsOcrBatch.errors.map((er, i) => <div key={i}>❌ {er}</div>)}
+              </div>
+            )}
+            {docsOcrBatch.status === 'ok' && (
+              <button onClick={() => { setDocsOcrBatch(null); setDocsSelected({}); setDocsSelectMode(false); }} style={{ marginTop: 12, width: '100%', padding: '8px', borderRadius: 980, border: 'none', background: '#0071e3', color: '#fff', fontWeight: 600, cursor: 'pointer' }}>Готово</button>
+            )}
+          </div>
+        </div>
+      )}
       {docsMove && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 410, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div style={{ background: '#fff', borderRadius: 16, padding: '24px 28px', width: 'min(420px, 92vw)', boxShadow: '0 20px 60px rgba(0,0,0,0.35)', textAlign: 'center' }}>
@@ -2164,7 +2248,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v109 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v171 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2582,7 +2666,932 @@ const LINK_TYPE_RU = {
 };
 const DOC_TYPE_COLORS = { receipt: '#0071e3', invoice: '#5e5ce6', contract: '#bf5af2', act: '#ff9f0a', ticket: '#30b0c7', bank: '#16a085', other: '#8e8e93' };
 const ENT_TYPE_COLORS = { company: '#34c759', person: '#ff9f0a', iban: '#0a84ff', tax_id: '#bf5af2', invoice_no: '#5e5ce6', contract_no: '#ff375f', poa: '#ff9500', cups: '#30b0c7', meter: '#30b0c7', amount_date: '#8e8e93' };
+const ENT_PALETTE = ['#e91e63', '#009688', '#ff5722', '#607d8b', '#795548', '#3f51b5', '#9c27b0', '#00bcd4'];
+const entColor = (type) => {
+  if (ENT_TYPE_COLORS[type]) return ENT_TYPE_COLORS[type];
+  let h = 0; for (let i = 0; i < String(type).length; i++) h = (h * 31 + String(type).charCodeAt(i)) >>> 0;
+  return ENT_PALETTE[h % ENT_PALETTE.length]; // v114: AI-открытые типы — стабильный цвет по имени
+};
 const ENT_TYPE_FILTERS = [ ['', 'Все'], ['company', '🏢 Компании'], ['person', '👤 Персоны'], ['contract_no', '📄 Договоры'], ['poa', '📜 Доверенности'], ['invoice_no', '🧾 № фактур'], ['iban', '💳 Счета'], ['tax_id', '🔢 Налоговые №'], ['amount_date', '💶 Суммы'] ];
+
+// ========== v119: вкладка «🌐 Парсинг» — источники, проверка robots.txt, запуск парсера ==========
+// v127: общая панель страниц — «← 1 … 5 6 7 … 45 →», точки прыгают в середину пропуска
+function PageBar({ page, totalPages, onGo, style }) {
+  if (!totalPages || totalPages <= 1) return null;
+  const btn = (key, label, target, opts = {}) => (
+    <button key={key} onClick={() => onGo(target)} disabled={!!opts.disabled} title={opts.title || ('Страница ' + target)}
+      style={{ minWidth: 30, padding: '4px 8px', borderRadius: 8, border: opts.active ? 'none' : '1px solid #d0d0d5', background: opts.active ? '#0071e3' : '#fff', color: opts.active ? '#fff' : '#333', fontSize: 12, fontWeight: opts.active ? 700 : 400, cursor: opts.disabled ? 'not-allowed' : 'pointer', opacity: opts.disabled ? 0.45 : 1 }}>{label}</button>
+  );
+  const items = [];
+  items.push(btn('prev', '←', Math.max(1, page - 1), { disabled: page === 1, title: 'Предыдущая' }));
+  const show = [...new Set([1, totalPages, page - 1, page, page + 1])].filter(p => p >= 1 && p <= totalPages).sort((a, b) => a - b);
+  let prev = 0;
+  for (const p of show) {
+    if (p - prev > 1) {
+      const mid = prev + Math.ceil((p - prev) / 2);
+      items.push(btn('dots' + prev + '_' + p, '…', mid, { title: 'К странице ' + mid }));
+    }
+    items.push(btn('p' + p, String(p), p, { active: p === page }));
+    prev = p;
+  }
+  items.push(btn('next', '→', Math.min(totalPages, page + 1), { disabled: page === totalPages, title: 'Следующая' }));
+  return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 4, flexWrap: 'wrap', ...(style || {}) }}>{items}</div>;
+}
+
+function ParseTab({ token, isMobileView, canRun }) {
+  const [sources, setSources] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState('');
+  const [url, setUrl] = useState('');
+  const [name, setName] = useState('');
+  const [busyId, setBusyId] = useState(null);
+  const [hist, setHist] = useState({}); // source_id -> results[]
+  const [robotsInfo, setRobotsInfo] = useState(null); // {url, allowed, note, sitemaps}
+  const [kind, setKind] = useState('page'); // v119.1: page | sitemap
+  const [filter, setFilter] = useState('');
+  const [pasteFor, setPasteFor] = useState(null); // source id, для которого вставляем HTML
+  const [pasteHtml, setPasteHtml] = useState('');
+  const [pasteBusy, setPasteBusy] = useState(false);
+  const [autoHelpFor, setAutoHelpFor] = useState(null); // v120: модалка «🔗 Авто» с букмарклетом
+  // v121: каталог из sitemap
+  const LM_SITEMAPS = [1, 2, 3, 4].map(n => `https://www.leroymerlin.es/sitemap-productos${n}.xml`);
+  // v161: мультимагазинный каталог — таблица parse_products общая, разделение по site
+  const CAT_STORES = {
+    lm:         { title: 'Leroy Merlin',        emoji: '🗂', host: 'www.leroymerlin.es',    sitemaps: [1, 2, 3, 4].map(n => `https://www.leroymerlin.es/sitemap-productos${n}.xml`) },
+    mediamarkt: { title: 'MediaMarkt Canarias', emoji: '🛒', host: 'canarias.mediamarkt.es', sitemaps: ['https://canarias.mediamarkt.es/sitemap.xml'] },
+    worten:     { title: 'Worten Canarias',     emoji: '🛒', host: 'canarias.worten.es',     sitemaps: ['https://www.worten.pt/_/sitemap/sitemap_index_wortenic.xml'] }, // v165: /sitemap.xml отдаёт 403; рабочий индекс из robots.txt
+    mercadona:  { title: 'Mercadona',           emoji: '🛒', host: 'tienda.mercadona.es',    sitemaps: [] }, // у Mercadona нет sitemap — каталог через их API
+    tutrebol:   { title: 'TuTrebol',            emoji: '🍀', host: 'www.tutrebol.es',        sitemaps: ['https://www.tutrebol.es/sitemap_index_shop_1.xml'] }, // v170: PrestaShop, sitemap в .xml.gz — backend распакует
+  };
+  const [catStore, setCatStore] = useState('lm');
+  const CAT_STORE = CAT_STORES[catStore] || CAT_STORES.lm;
+  const [mcatTree, setMcatTree] = useState(null);   // Mercadona: разделы [{id, path}]
+  const [mcatSync, setMcatSync] = useState({});     // id -> {status, msg}
+  const [mcatAll, setMcatAll] = useState(false);
+  const [catSync, setCatSync] = useState({}); // url -> {status:'run'|'ok'|'err', msg}
+  const [catQ, setCatQ] = useState('');
+  const [catSort, setCatSort] = useState({ key: '', dir: 'desc' }); // v130: сортировка каталога
+  const [catItems, setCatItems] = useState(null); // null = не искали
+  const [catTotal, setCatTotal] = useState(0);
+  const [catPriced, setCatPriced] = useState(false); // v123.1: показывать только с ценой
+  const [catPricedTotal, setCatPricedTotal] = useState(null);
+  // v126: структурный каталог — дерево разделов, пагинация, автообновление
+  const [catPage, setCatPage] = useState(0);
+  const [catLimit, setCatLimit] = useState(60);
+  const [catCat, setCatCat] = useState(''); // выбранный путь раздела
+  const [catBrand, setCatBrand] = useState(''); // v169: фильтр по производителю (клик по бренду)
+  const [catStats, setCatStats] = useState(null); // v169: сводка магазина {total, withPrice, processed, remaining, lastPriceAt}
+  const [catTree, setCatTree] = useState([]); // [{path, count}]
+  const [catLogs, setCatLogs] = useState(null); // v137: журнал парсинга
+  const [catLogsOpen, setCatLogsOpen] = useState(false);
+  const [catToolsOpen, setCatToolsOpen] = useState(false); // v137: sitemap + дерево свёрнуты
+  const [editProd, setEditProd] = useState(null); // v137: ручное редактирование товара
+  const [extStatus, setExtStatus] = useState(null); // v139: живой прогресс парсинга из расширения
+  const [catExpanded, setCatExpanded] = useState({});
+  const catParamsRef = useRef({});
+  const [catBusy, setCatBusy] = useState(false);
+  const [catOpen, setCatOpen] = useState(true); // v128: сворачиваемый каталог
+  const [brandsTotal, setBrandsTotal] = useState(null); // v129: размер справочника брендов
+  const [brandsBusy, setBrandsBusy] = useState(false);
+  const [priceBusy, setPriceBusy] = useState({}); // id -> bool
+
+  const loadSources = async () => {
+    setLoading(true); setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/parse/sources?token=${token}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setSources(j.sources || []);
+    } catch (e) { setErr(e.message); }
+    setLoading(false);
+  };
+  useEffect(() => { if (token) loadSources(); }, [token]);
+
+  const checkRobots = async (u) => {
+    const r = await fetch(`${API_URL}/api/parse/robots?token=${token}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: u })
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    return j;
+  };
+
+  const addSource = async () => {
+    const u = url.trim();
+    if (!u) return;
+    setErr('');
+    try {
+      let robots_ok = true, robots_note = '';
+      try {
+        const rb = await checkRobots(u);
+        robots_ok = !!rb.allowed; robots_note = rb.note || '';
+        setRobotsInfo({ ...rb, url: u });
+        if (!rb.allowed && !window.confirm('⚠️ robots.txt ЗАПРЕЩАЕТ парсинг этого пути.\n\nВсё равно добавить источник? (ответственность за использование — на вас)')) return;
+      } catch (re) { robots_note = 'robots.txt не проверен: ' + re.message; }
+      const r = await fetch(`${API_URL}/api/parse/sources?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: u, name: name.trim(), robots_ok, robots_note, kind, filter: filter.trim() })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setUrl(''); setName(''); setFilter('');
+      await loadSources();
+    } catch (e) { setErr(e.message); }
+  };
+
+  const runSource = async (id) => {
+    setBusyId(id); setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/parse/run?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      await loadSources();
+      if (hist[id]) loadHistory(id);
+    } catch (e) { setErr(e.message); }
+    setBusyId(null);
+  };
+
+  const removeSource = async (id) => {
+    if (!window.confirm('Удалить источник и все его результаты?')) return;
+    try {
+      const r = await fetch(`${API_URL}/api/parse/sources?token=${token}&id=${id}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      await loadSources();
+    } catch (e) { setErr(e.message); }
+  };
+
+  const loadHistory = async (id) => {
+    try {
+      const r = await fetch(`${API_URL}/api/parse/results?token=${token}&source=${id}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setHist(prev => ({ ...prev, [id]: j.results || [] }));
+    } catch (e) { setErr(e.message); }
+  };
+
+  const submitPaste = async () => {
+    if (!pasteFor || pasteHtml.length < 200) return;
+    setPasteBusy(true); setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/parse/paste?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: pasteFor, html: pasteHtml })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setPasteFor(null); setPasteHtml('');
+      await loadSources();
+      if (hist[pasteFor]) loadHistory(pasteFor);
+    } catch (e) { setErr(e.message); }
+    setPasteBusy(false);
+  };
+
+  const setAuto = async (id, hours) => {
+    try {
+      const r = await fetch(`${API_URL}/api/parse/sources?token=${token}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, auto_every_hours: hours })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      await loadSources();
+    } catch (e) { setErr(e.message); }
+  };
+  // v121: синк одного sitemap → parse_products
+  const syncSitemap = async (smUrl) => {
+    if (catSync[smUrl] && catSync[smUrl].status === 'run') return;
+    setCatSync(prev => ({ ...prev, [smUrl]: { status: 'run', msg: 'скачиваю и разбираю XML (файл большой, до 1–2 мин)…' } }));
+    try {
+      const r = await fetch(`${API_URL}/api/parse/catalog/sync?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: smUrl })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      if (j.isIndex) setCatSync(prev => ({ ...prev, [smUrl]: { status: 'ok', msg: `это индекс: ${j.subs.length} файлов — синхронизируйте по одному (кнопки ниже)`, subs: j.subs } }));
+      else setCatSync(prev => ({ ...prev, [smUrl]: { status: 'ok', msg: `✅ ${j.upserted} товаров в каталоге` } }));
+    } catch (e) {
+      // v171: сервер не достучался до сайта (блокировка IP Railway) — качаем sitemap ЧЕРЕЗ БРАУЗЕР расширением
+      try {
+        setCatSync(prev => ({ ...prev, [smUrl]: { status: 'run', msg: 'серверу отказали (' + e.message + ') — скачиваю через браузер…' } }));
+        const rr = await extSend({ cmd: 'sync-sitemap', url: smUrl });
+        if (rr && rr.ok && rr.result) {
+          const j = rr.result;
+          if (j.isIndex) setCatSync(prev => ({ ...prev, [smUrl]: { status: 'ok', msg: `это индекс: ${j.subs.length} файлов — синхронизируйте по одному (кнопки ниже)`, subs: j.subs } }));
+          else setCatSync(prev => ({ ...prev, [smUrl]: { status: 'ok', msg: `✅ ${j.upserted} товаров в каталоге (через браузер)` } }));
+          catSearch({ page: 0 }); loadCatStats();
+          return;
+        }
+        throw new Error((rr && rr.error) || 'расширение не ответило');
+      } catch (e2) {
+        setCatSync(prev => ({ ...prev, [smUrl]: { status: 'err', msg: '❌ ' + e.message + ' · через браузер: ' + (e2.message === 'no-ext' || e2.message === 'no-id' ? 'укажите ID расширения (⚙ рядом с журналом) и обновите его до v1.20+' : e2.message) } }));
+      }
+    }
+  };
+  const catSearch = async (over = {}) => {
+    const q = over.q !== undefined ? over.q : catQ;
+    const pr = over.priced !== undefined ? over.priced : catPriced;
+    const pg = over.page !== undefined ? over.page : catPage;
+    const lim = over.limit !== undefined ? over.limit : catLimit;
+    const cc = over.category !== undefined ? over.category : catCat;
+    const br = over.brand !== undefined ? over.brand : catBrand; // v169
+    const so = over.sort !== undefined ? over.sort : catSort; // v130
+    catParamsRef.current = { q, pr, pg, lim, cc, so, br };
+    if (!over.silent) { setCatBusy(true); setErr(''); }
+    try {
+      const r = await fetch(`${API_URL}/api/parse/catalog?token=${token}&q=${encodeURIComponent(q)}&site=${CAT_STORE.host}${pr ? '&priced=1' : ''}${cc ? '&category=' + encodeURIComponent(cc) : ''}${br ? '&brand=' + encodeURIComponent(br) : ''}${so.key ? '&sort=' + so.key + '&dir=' + so.dir : ''}&limit=${lim}&offset=${pg * lim}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      if (j.missing) setErr('Нет таблицы parse_products — выполните v119-парсинг.sql повторно в Supabase');
+      setCatItems(j.products || []); setCatTotal(j.total || 0);
+      if (j.pricedTotal != null) setCatPricedTotal(j.pricedTotal);
+    } catch (e) { if (!over.silent) setErr(e.message); }
+    if (!over.silent) setCatBusy(false);
+  };
+  // v129: размер справочника брендов
+  const loadBrandsCount = async () => {
+    try {
+      const r = await fetch(`${API_URL}/api/parse/brands?token=${token}&site=${CAT_STORE.host}`);
+      const j = await r.json();
+      if (r.ok && !j.missing) setBrandsTotal(j.total || 0);
+    } catch (e) { /* не критично */ }
+  };
+  // v169: сводка магазина для инфо-панели и прогресс-бара
+  const loadCatStats = async () => {
+    try {
+      const r = await fetch(`${API_URL}/api/parse/catalog/stats?token=${token}&site=${CAT_STORE.host}`);
+      const j = await r.json();
+      if (r.ok) setCatStats(j);
+    } catch (e) { /* не критично */ }
+  };
+  const toggleCatBrand = (b) => { // v169: клик по производителю — фильтр, повторный клик снимает
+    const nb = catBrand === b ? '' : b;
+    setCatBrand(nb); setCatPage(0); catSearch({ brand: nb, page: 0 });
+  };
+  // v126: дерево разделов каталога
+  const loadCatLogs = async () => { // v137: журнал парсинга
+    try {
+      const r = await fetch(`${API_URL}/api/parse/logs?token=${token}&limit=50&site=${CAT_STORE.host}`);
+      const j = await r.json();
+      if (r.ok) setCatLogs(j.logs || []);
+    } catch (e) { /* журнал не критичен */ }
+  };
+  const saveEditProd = async () => { // v137: ручное редактирование всех столбцов
+    if (!editProd) return;
+    try {
+      const r = await fetch(`${API_URL}/api/parse/catalog/${editProd.id}?token=${token}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(editProd) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setCatItems(prev => (prev || []).map(x => x.id === editProd.id ? { ...x, ...j.product } : x));
+      setEditProd(null);
+    } catch (e) { alert('❌ ' + e.message); }
+  };
+  const extSend = (msg) => new Promise((resolve, reject) => { // v138: команда в расширение Chrome
+    const id = localStorage.getItem('lm_ext_id') || '';
+    if (!id) { reject(new Error('no-id')); return; }
+    if (!window.chrome || !chrome.runtime || !chrome.runtime.sendMessage) { reject(new Error('no-ext')); return; }
+    try {
+      chrome.runtime.sendMessage(id, msg, (r) => {
+        const err = chrome.runtime.lastError;
+        if (err) reject(new Error(err.message)); else resolve(r);
+      });
+    } catch (e) { reject(e); }
+  });
+  const pollExtStatus = async () => { // v139: живой прогресс парсинга — опрос расширения
+    try {
+      const r = await extSend({ cmd: 'status' });
+      if (r && r.ok) {
+        setExtStatus({ running: !!r.running, last: r.last || '' });
+        if (r.running) setTimeout(pollExtStatus, 4000);
+        else setTimeout(loadCatLogs, 1500); // парсинг кончился — обновить журнал
+      }
+    } catch (e) {}
+  };
+  const extReparse = async (url) => { // v138: перезапуск парсинга раздела из приложения
+    try {
+      const r = await extSend({ cmd: 'parse-section', url });
+      if (r && r.ok) { setCatLogsOpen(true); setExtStatus({ running: true, last: '▶ Запуск парсинга раздела…' }); setTimeout(pollExtStatus, 3000); }
+      else if (r && r.error === 'busy') alert('⏳ Расширение уже занято другим парсингом — дождитесь окончания или остановите его в popup.');
+      else if (r && r.error === 'no-auth') alert('⚠️ В расширении не сохранены API URL и токен — откройте popup расширения и нажмите «Сохранить».');
+      else alert('⚠️ Расширение ответило: ' + ((r && r.error) || 'нет ответа'));
+    } catch (e) {
+      if (e.message === 'no-id') {
+        const id = prompt('Укажите ID расширения Chrome (откройте chrome://extensions → «Householder — сборщик цен» → скопируйте ID под названием):');
+        if (id && id.trim()) { localStorage.setItem('lm_ext_id', id.trim()); return extReparse(url); }
+      } else {
+        alert('❌ Не удалось связаться с расширением. Проверьте: 1) расширение v1.14+ установлено и включено (⟳ в chrome://extensions), 2) ID указан верно (⚙ рядом с журналом). Ошибка: ' + e.message);
+      }
+    }
+  };
+  const loadCatTree = async () => {
+    try {
+      const r = await fetch(`${API_URL}/api/parse/catalog/categories?token=${token}&site=${CAT_STORE.host}`);
+      const j = await r.json();
+      if (r.ok) setCatTree(j.categories || []);
+    } catch (e) { /* не критично */ }
+  };
+  const catChildrenOf = (prefix) => {
+    const agg = {};
+    for (const c of catTree) {
+      const rest = prefix ? (c.path.startsWith(prefix + ' > ') ? c.path.slice(prefix.length + 3) : null) : c.path;
+      if (rest == null || rest === '') continue;
+      const seg = rest.split(' > ')[0];
+      agg[seg] = (agg[seg] || 0) + c.count;
+    }
+    return Object.entries(agg).sort((a, b) => b[1] - a[1]);
+  };
+  const pickCat = (full) => { setCatCat(full); setCatPage(0); catSearch({ category: full, page: 0 }); };
+  // v130: кликабельный заголовок сортировки
+  const catTh = (key, label, extra) => (
+    <th onClick={() => { const nd = catSort.key === key && catSort.dir === 'desc' ? 'asc' : 'desc'; const ns = { key, dir: nd }; setCatSort(ns); setCatPage(0); catSearch({ sort: ns, page: 0 }); }}
+      title="Нажмите для сортировки"
+      style={{ padding: '6px 8px', cursor: 'pointer', userSelect: 'none', color: catSort.key === key ? '#0071e3' : undefined, ...(extra || {}) }}>
+      {label}{catSort.key === key ? (catSort.dir === 'asc' ? ' \u25b2' : ' \u25bc') : ''}
+    </th>
+  );
+  const renderCatLevel = (prefix, depth) => catChildrenOf(prefix).map(([seg, cnt]) => {
+    const full = prefix ? prefix + ' > ' + seg : seg;
+    const hasKids = catTree.some(c => c.path.startsWith(full + ' > '));
+    const open = !!catExpanded[full];
+    const active = catCat === full;
+    return (
+      <div key={full}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, paddingLeft: depth * 14, fontSize: 12, paddingTop: 2, paddingBottom: 2 }}>
+          {hasKids
+            ? <span onClick={() => setCatExpanded(prev => ({ ...prev, [full]: !prev[full] }))} style={{ cursor: 'pointer', width: 14, color: '#8e8e93', flexShrink: 0 }}>{open ? '▾' : '▸'}</span>
+            : <span style={{ width: 14, flexShrink: 0 }} />}
+          <span onClick={() => pickCat(full)} style={{ cursor: 'pointer', color: active ? '#0071e3' : '#333', fontWeight: active ? 700 : 400 }}>{seg}</span>
+          <span style={{ color: '#c7c7cc', fontSize: 11 }}>{cnt}</span>
+        </div>
+        {open && hasKids && renderCatLevel(full, depth + 1)}
+      </div>
+    );
+  });
+  // v123.1: каталог уже в базе — подгружаем при открытии вкладки, без пересинхронизации sitemap
+  // v126: автообновление каждые 15 с — товары, распознанные расширением прямо сейчас, появляются сверху сами
+  // v164: эффект зависит от магазина — при переключении ПОЛНЫЙ сброс и загрузка ЕГО данных.
+  // Интервал пересоздаётся на каждый магазин → устаревших замыканий нет.
+  useEffect(() => {
+    setCatItems(null); setCatCat(''); setCatBrand(''); setCatStats(null); setCatPage(0); setCatTree([]); setCatSync({}); setCatPricedTotal(null); setCatQ(''); setCatLogs(null);
+    catParamsRef.current = { q: '', pr: false, pg: 0, lim: 60, cc: '', so: { key: '', dir: 'desc' }, br: '' };
+    catSearch({ q: '', priced: false, page: 0, category: '', brand: '' });
+    loadCatTree(); loadBrandsCount(); loadCatLogs(); loadCatStats();
+    if (localStorage.getItem('lm_ext_id')) pollExtStatus(); // v169: сразу видно, работает ли расширение
+    const iv = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        const p = catParamsRef.current || {};
+        catSearch({ q: p.q || '', priced: !!p.pr, page: p.pg || 0, limit: p.lim || 60, category: p.cc || '', brand: p.br || '', sort: p.so || { key: '', dir: 'desc' }, silent: true });
+        loadCatTree(); loadCatStats(); // v169: живые цифры прогресса
+      }
+    }, 15000);
+    return () => clearInterval(iv);
+  }, [catStore]);
+  const fetchPrices = async (ids) => {
+    ids.forEach(id => setPriceBusy(prev => ({ ...prev, [id]: true })));
+    setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/parse/catalog/prices?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      const byId = {};
+      for (const it of (j.results || [])) byId[it.id] = it;
+      setCatItems(prev => (prev || []).map(p => byId[p.id] && byId[p.id].ok ? { ...p, price: byId[p.id].price, currency: byId[p.id].currency, name: byId[p.id].title || p.name } : p));
+      const fails = (j.results || []).filter(x => !x.ok);
+      if (fails.length) setErr('Не удалось получить цены: ' + fails.length + ' шт. Первая ошибка: ' + fails[0].error);
+    } catch (e) { setErr(e.message); }
+    ids.forEach(id => setPriceBusy(prev => ({ ...prev, [id]: false })));
+  };
+
+  // v122: цены через AI (веб-поиск Kimi)
+  const fetchAiPrices = async (ids) => {
+    ids.forEach(id => setPriceBusy(prev => ({ ...prev, [id]: true })));
+    setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/parse/catalog/ai-prices?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      const byId = {};
+      for (const it of (j.results || [])) byId[it.id] = it;
+      setCatItems(prev => (prev || []).map(p => byId[p.id] && byId[p.id].ok ? { ...p, price: byId[p.id].approx ? p.price : byId[p.id].price, price_estimate: byId[p.id].approx ? byId[p.id].price : p.price_estimate, currency: byId[p.id].currency, name: byId[p.id].title || p.name, price_source: byId[p.id].approx ? p.price_source : 'ai-search' } : p));
+      const fails = (j.results || []).filter(x => !x.ok);
+      if (fails.length) setErr('AI не нашёл цены: ' + fails.length + ' шт. (' + fails[0].error + ')');
+    } catch (e) { setErr(e.message); }
+    ids.forEach(id => setPriceBusy(prev => ({ ...prev, [id]: false })));
+  };
+  const syncBrands = async () => {
+    setBrandsBusy(true); setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/parse/brands/sync?token=${token}`, { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setBrandsTotal(j.total);
+      alert(`Справочник брендов обновлён: ${j.total} шт. (sitemap-searchdex, файлов: ${j.filesOk})`);
+    } catch (e) { setErr(e.message); }
+    setBrandsBusy(false);
+  };
+  const backfillBrands = async () => {
+    setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/parse/catalog/backfill-brand-mpn?token=${token}`, { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setErr('');
+      catSearch();
+      alert(`Готово: проверено ${j.scanned}, заполнено ${j.updated} (производитель/№ производителя)` + (j.cleaned ? `\n🧹 Почищено мусорных строк «Leroy Merlin»: ${j.cleaned}` : ''));
+    } catch (e) { setErr(e.message); }
+  };
+  // v133: загрузка заполненного AI-файла (CSV) обратно в базу — бренд + № производителя, ключ = артикул
+  const importFileRef = useRef(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const parseCsvText = (text) => {
+    const rows = [];
+    let row = [], cur = '', inQ = false;
+    const src = text.replace(/^\uFEFF/, '');
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i];
+      if (inQ) {
+        if (c === '"' && src[i + 1] === '"') { cur += '"'; i++; }
+        else if (c === '"') inQ = false;
+        else cur += c;
+      } else if (c === '"') inQ = true;
+      else if (c === ';') { row.push(cur); cur = ''; }
+      else if (c === '\n' || c === '\r') {
+        if (c === '\r' && src[i + 1] === '\n') i++;
+        row.push(cur); cur = '';
+        if (row.length > 1 || row[0] !== '') rows.push(row);
+        row = [];
+      } else cur += c;
+    }
+    if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
+    return rows;
+  };
+  const importBrandMpn = async (file) => {
+    if (!file || importBusy) return;
+    setImportBusy(true); setErr('');
+    try {
+      const text = await file.text();
+      const rows = parseCsvText(text);
+      const head = (rows[0] || []).map(h => h.trim());
+      const iA = head.indexOf('Артикул'), iB = head.indexOf('Производитель'), iM = head.indexOf('Номер производителя');
+      if (iA < 0 || iB < 0 || iM < 0) throw new Error('В файле нет колонок «Артикул», «Производитель», «Номер производителя» — нужен CSV из «⬇ Скачать», заполненный AI-скриптом');
+      const items = [];
+      for (const r of rows.slice(1)) {
+        const art = (r[iA] || '').trim();
+        if (!/^\d{4,}$/.test(art)) continue;
+        items.push({ article: art, brand: (r[iB] || '').trim(), mpn: (r[iM] || '').trim() });
+      }
+      if (!items.length) throw new Error('Не найдено строк с артикулом');
+      let matched = 0, updated = 0, notFound = 0;
+      for (let i = 0; i < items.length; i += 500) {
+        const r = await fetch(`${API_URL}/api/parse/catalog/import-brand-mpn?token=${token}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ site: CAT_STORE.host, items: items.slice(i, i + 500) })
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+        matched += j.matched; updated += j.updated; notFound += j.notFound;
+        setErr(`⇪ Загрузка в базу: ${Math.min(i + 500, items.length)}/${items.length}…`);
+      }
+      setErr('');
+      catSearch();
+      alert(`✅ Импорт в базу завершён:\nстрок в файле: ${items.length}\nнайдено по артикулу: ${matched}\nобновлено бренд/номер: ${updated}` + (notFound ? `\nне найдено в базе: ${notFound}` : ''));
+    } catch (e) { setErr(e.message); alert('❌ ' + e.message); }
+    setImportBusy(false);
+    if (importFileRef.current) importFileRef.current.value = '';
+  };
+  const backfillArticles = async () => {
+    setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/parse/catalog/backfill-articles?token=${token}`, { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      alert('✅ Артикулы извлечены из URL: ' + j.updated + ' шт.');
+    } catch (e) { setErr(e.message); }
+  };
+
+  const bookmarkletHref = () => {
+    const api = `${API_URL}/api/parse/paste-url?token=${encodeURIComponent(token)}`;
+    return "javascript:(()=>{fetch('" + api + "',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:location.href,html:document.documentElement.outerHTML})}).then(r=>r.json()).then(j=>{if(j.ok){var r=j.result||{};alert('✅ Сохранено: '+(r.title||'')+(r.price!=null?' — '+r.price+' '+(r.currency||'€'):''))}else{alert('❌ '+(j.error||'ошибка'))}}).catch(e=>alert('❌ '+e.message))})()";
+  };
+
+  const fmtDate = (d) => d ? new Date(d).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+
+  return (
+    <div style={{ padding: isMobileView ? '6px 10px 20px' : '6px 15px 20px' }}>
+      <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: 12, marginBottom: 12 }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+          {Object.entries(CAT_STORES).map(([k, st]) => (
+            <button key={k} onClick={() => setCatStore(k)}
+              style={{ fontSize: 12, padding: '3px 11px', borderRadius: 999, border: catStore === k ? 'none' : '1px solid #d0d0d5', background: catStore === k ? '#0071e3' : '#f5f5f7', color: catStore === k ? '#fff' : '#333', cursor: 'pointer', fontWeight: catStore === k ? 700 : 400 }}>
+              {st.emoji} {st.title}
+            </button>
+          ))}
+        </div>
+        {catStats && (
+          <div style={{ margin: '4px 0 8px', padding: '8px 12px', borderRadius: 10, background: '#f8f9fb', border: '1px solid #f0f0f2' }}>
+            <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12, color: '#333', alignItems: 'center' }}>
+              <span>📦 Всего товаров: <b>{catStats.total}</b></span>
+              <span style={{ color: '#1e7e34' }}>✅ Спарсено: <b>{catStats.processed}</b></span>
+              <span style={{ color: '#1e7e34' }}>💶 С ценой: <b>{catStats.withPrice}</b></span>
+              <span style={{ color: catStats.remaining > 0 ? '#d70015' : '#1e7e34' }}>⏳ Осталось спарсить: <b>{catStats.remaining}</b></span>
+              {catStats.lastPriceAt && <span style={{ color: '#8e8e93' }}>🕐 последняя цена: {new Date(catStats.lastPriceAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>}
+              {extStatus && extStatus.running
+                ? <span style={{ color: '#8a6d3b', background: '#fff8e6', borderRadius: 8, padding: '1px 8px', border: '1px solid #ffd699' }}>🧩 Расширение работает: {extStatus.last || 'сбор цен…'}</span>
+                : <span style={{ color: '#8e8e93' }}>🧩 расширение не активно{extStatus && extStatus.last ? ` · последнее: ${extStatus.last}` : ''}</span>}
+            </div>
+            <div title={`Спарсено с ценой ${catStats.withPrice} из ${catStats.total} (${catStats.total ? Math.round(catStats.withPrice / catStats.total * 100) : 0}%)`} style={{ marginTop: 6, height: 8, borderRadius: 6, background: '#e5e5ea', overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: (catStats.total ? Math.min(100, Math.round(catStats.withPrice / catStats.total * 100)) : 0) + '%', background: 'linear-gradient(90deg,#34c759,#0071e3)', borderRadius: 6, transition: 'width .5s' }} />
+            </div>
+            <div style={{ marginTop: 3, fontSize: 11, color: '#8e8e93' }}>{catStats.total ? Math.round(catStats.withPrice / catStats.total * 100) : 0}% собрано · цифры обновляются каждые 15 с автоматически</div>
+          </div>
+        )}
+        <div onClick={() => setCatOpen(o => !o)} style={{ fontSize: 13, fontWeight: 700, marginBottom: catOpen ? 8 : 0, cursor: 'pointer', userSelect: 'none' }}>{catOpen ? '▾' : '▸'} {CAT_STORE.emoji} Каталог товаров ({CAT_STORE.title}){!catOpen && catPricedTotal != null ? ` · с ценой: ${catPricedTotal}` : ''}</div>
+        <div onClick={() => setCatToolsOpen(o => !o)} style={{ fontSize: 12, fontWeight: 700, margin: '6px 0 2px', cursor: 'pointer', userSelect: 'none', color: '#6e6e73' }}>{catToolsOpen ? '▾' : '▸'} 🛠 Sitemap-синхронизация и разделы каталога</div>
+        {catToolsOpen && (<>
+        {catStore === 'mercadona' ? (
+          <div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <button onClick={async () => {
+                  setErr('');
+                  try {
+                    const r = await fetch(`${API_URL}/api/parse/mercadona/tree?token=${token}`);
+                    const j = await r.json();
+                    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+                    setMcatTree(j.categories || []);
+                  } catch (e) { alert('❌ ' + e.message); }
+                }}
+                style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>
+                🌳 Загрузить разделы Mercadona
+              </button>
+              {mcatTree && mcatTree.length > 0 && (
+                <button disabled={mcatAll} onClick={async () => {
+                    setMcatAll(true);
+                    let ok = 0, fail = 0;
+                    for (const c of mcatTree) {
+                      setMcatSync(prev => ({ ...prev, [c.id]: { status: 'run', msg: '…' } }));
+                      try {
+                        const r = await fetch(`${API_URL}/api/parse/mercadona/sync?token=${token}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: c.id, path: c.path }) });
+                        const j = await r.json();
+                        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+                        setMcatSync(prev => ({ ...prev, [c.id]: { status: 'ok', msg: `✅ ${j.upserted}` } }));
+                        ok++;
+                      } catch (e) { setMcatSync(prev => ({ ...prev, [c.id]: { status: 'err', msg: '❌ ' + e.message } })); fail++; }
+                    }
+                    setMcatAll(false);
+                    catSearch({ page: 0 });
+                    alert(`✅ Mercadona: разделов ок: ${ok}` + (fail ? `, ошибок: ${fail}` : ''));
+                  }}
+                  style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #0071e3', background: mcatAll ? '#e8f0fe' : '#0071e3', color: mcatAll ? '#0071e3' : '#fff', fontSize: 12, cursor: 'pointer' }}>
+                  {mcatAll ? '⏳ Синхронизация всех разделов…' : '⬇ Синхронизировать ВСЕ разделы (с ценами)'}
+                </button>
+              )}
+              <span style={{ fontSize: 11, color: '#8e8e93' }}>у Mercadona нет sitemap — каталог и цены берутся из официального API tienda.mercadona.es</span>
+            </div>
+            {mcatTree && (
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 8, maxHeight: 200, overflowY: 'auto' }}>
+                {mcatTree.map(c => (
+                  <button key={c.id} onClick={async () => {
+                      if (mcatSync[c.id] && mcatSync[c.id].status === 'run') return;
+                      setMcatSync(prev => ({ ...prev, [c.id]: { status: 'run', msg: '…' } }));
+                      try {
+                        const r = await fetch(`${API_URL}/api/parse/mercadona/sync?token=${token}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: c.id, path: c.path }) });
+                        const j = await r.json();
+                        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+                        setMcatSync(prev => ({ ...prev, [c.id]: { status: 'ok', msg: `✅ ${j.upserted}` } }));
+                        catSearch({ page: 0 });
+                      } catch (e) { setMcatSync(prev => ({ ...prev, [c.id]: { status: 'err', msg: '❌ ' + e.message } })); }
+                    }}
+                    title={c.path}
+                    style={{ fontSize: 11, padding: '2px 9px', borderRadius: 999, border: '1px solid #d0d0d5', background: mcatSync[c.id] && mcatSync[c.id].status === 'ok' ? '#e8f8ef' : '#f5f5f7', cursor: 'pointer' }}>
+                    {mcatSync[c.id] && mcatSync[c.id].status === 'run' ? '⏳ ' : ''}{c.path} {mcatSync[c.id] ? mcatSync[c.id].msg : ''}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          {CAT_STORE.sitemaps.map(u => (
+            <button key={u} onClick={() => syncSitemap(u)} disabled={catSync[u] && catSync[u].status === 'run'}
+              style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: catSync[u] && catSync[u].status === 'ok' ? '#e8f8ef' : '#fff', fontSize: 12, cursor: 'pointer' }}>
+              {catSync[u] && catSync[u].status === 'run' ? '⏳' : '⬇'} {u.split('/').pop()}
+            </button>
+          ))}
+          <span style={{ fontSize: 11, color: '#8e8e93' }}>каждый файл — тысячи товаров, синк 1–2 мин; если это индекс — откроются ссылки на файлы, синхронизируйте их по одному</span>
+        </div>
+        )}
+        {Object.entries(catSync).map(([u, st]) => (
+          <div key={u}>
+            <div style={{ fontSize: 12, marginTop: 4, color: st.status === 'err' ? '#e74c3c' : st.status === 'ok' ? '#1e7e34' : '#8e8e93' }}>{u.split('/').pop()}: {st.msg}</div>
+            {st.subs && (
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
+                {st.subs.map(su => (
+                  <button key={su} onClick={() => syncSitemap(su)} disabled={catSync[su] && catSync[su].status === 'run'}
+                    style={{ fontSize: 11, padding: '2px 9px', borderRadius: 999, border: '1px solid #d0d0d5', background: catSync[su] && catSync[su].status === 'ok' ? '#e8f8ef' : '#f5f5f7', cursor: 'pointer' }}>
+                    {catSync[su] && catSync[su].status === 'run' ? '⏳ ' : '⬇ '}{su.split('/').pop()}{catSync[su] && catSync[su].msg ? ' · ' + catSync[su].msg : ''}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+        </>)}
+        {catOpen && (<>
+        {catToolsOpen && catTree.length === 0 && catItems && (
+          <div style={{ marginTop: 10, fontSize: 12, color: '#8e8e93', padding: '6px 10px', background: '#f8f9fb', borderRadius: 8 }}>
+            🌳 Дерево разделов пока пусто — оно заполняется, когда расширение Chrome парсит разделы («🗂 Парсинг раздела» в popup): каждый товар получает путь вида «Productos › Herramientas › …». Товары из sitemap раздела не имеют.
+          </div>
+        )}
+        {catToolsOpen && catTree.length > 0 && (
+          <div style={{ marginTop: 10, border: '1px solid #f0f0f2', borderRadius: 10, padding: 8, maxHeight: 240, overflowY: 'auto' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12, fontWeight: 700 }}>🌳 Разделы каталога</span>
+              <span style={{ fontSize: 11, color: '#1e7e34', background: '#e8f8ef', borderRadius: 8, padding: '2px 8px' }}>✅ спарсено путей: {catTree.length}</span>
+              {catCat && <button onClick={() => { setCatCat(''); setCatPage(0); catSearch({ category: '', page: 0 }); }}
+                title="Сбросить фильтр по разделу"
+                style={{ fontSize: 11, border: '1px solid #e74c3c', color: '#e74c3c', background: '#fdecea', borderRadius: 8, padding: '2px 8px', cursor: 'pointer' }}>✕ {catCat}</button>}
+              {!catCat && <span style={{ fontSize: 11, color: '#8e8e93' }}>клик по разделу — товары этого раздела, ▸ — раскрыть вложенные</span>}
+            </div>
+            {renderCatLevel('', 0)}
+            {/* v135: уже спарсенные разделы верхнего уровня — чипы с количеством товаров */}
+            <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 8, borderTop: '1px solid #f0f0f2', paddingTop: 8 }}>
+              <span style={{ fontSize: 11, color: '#8e8e93', alignSelf: 'center' }}>📂 Что уже спарсено:</span>
+              {catChildrenOf('').map(([seg, cnt]) => (
+                <button key={seg} onClick={() => pickCat(seg)} title={`Открыть товары раздела «${seg}»`}
+                  style={{ fontSize: 11, padding: '2px 9px', borderRadius: 999, border: catCat === seg ? 'none' : '1px solid #d0d0d5', background: catCat === seg ? '#0071e3' : '#f5f5f7', color: catCat === seg ? '#fff' : '#333', cursor: 'pointer' }}>
+                  {seg} <b>{cnt}</b>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <div style={{ marginTop: 10, border: '1px solid #f0f0f2', borderRadius: 10, padding: 8 }}>
+          <div onClick={() => { const nv = !catLogsOpen; setCatLogsOpen(nv); if (nv && !catLogs) loadCatLogs(); }}
+            style={{ fontSize: 12, fontWeight: 700, cursor: 'pointer', userSelect: 'none', color: '#6e6e73' }}>
+            {catLogsOpen ? '▾' : '▸'} 📜 Журнал парсинга{catLogs ? ` (${catLogs.length})` : ''}
+            {catLogsOpen && <span onClick={(e) => { e.stopPropagation(); loadCatLogs(); }} title="Обновить журнал" style={{ marginLeft: 8, cursor: 'pointer' }}>🔄</span>}
+            {catLogsOpen && <span onClick={(e) => { e.stopPropagation(); const id = prompt('ID расширения Chrome (chrome://extensions → «Householder — сборщик цен» → ID):', localStorage.getItem('lm_ext_id') || ''); if (id != null) localStorage.setItem('lm_ext_id', id.trim()); }} title="Настроить связь с расширением — ID из chrome://extensions" style={{ marginLeft: 6, cursor: 'pointer' }}>⚙</span>}
+          </div>
+          {catLogsOpen && extStatus && extStatus.last && (
+            <div style={{ marginTop: 6, fontSize: 12, padding: '6px 10px', borderRadius: 8, background: extStatus.running ? '#fff8e6' : '#e8f8ef', color: extStatus.running ? '#8a6d3b' : '#1e7e34', border: '1px solid ' + (extStatus.running ? '#ffd699' : '#b7e4c7') }}>
+              {extStatus.running ? '⏳' : '✅'} {extStatus.last}
+            </div>
+          )}
+          {catLogsOpen && (
+            <div style={{ marginTop: 6, overflowX: 'auto' }}>
+              {!catLogs || !catLogs.length
+                ? <div style={{ fontSize: 12, color: '#8e8e93', padding: '4px 2px' }}>Журнал «{CAT_STORE.title}» пуст — записи появятся после парсинга расширением (v1.13+). Если backend вернул предупреждение — выполните supabase-migration-v137.sql.</div>
+                : (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                  <thead>
+                    <tr style={{ textAlign: 'left', color: '#8e8e93', borderBottom: '1px solid #f0f0f2' }}>
+                      <th style={{ padding: '4px 8px' }}>Дата</th>
+                      <th style={{ padding: '4px 8px' }}>Каталог / раздел</th>
+                      <th style={{ padding: '4px 8px' }}>Товаров</th>
+                      <th style={{ padding: '4px 8px' }}>💶 с ценой</th>
+                      <th style={{ padding: '4px 8px' }}>📷 с фото</th>
+                      <th style={{ padding: '4px 8px' }}>🏷 с брендом</th>
+                      <th style={{ padding: '4px 8px' }}>№ произв.</th>
+                      <th style={{ padding: '4px 8px' }}>Рекомендация</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {catLogs.map(l => {
+                      const ageDays = l.created_at ? (Date.now() - new Date(l.created_at).getTime()) / 864e5 : 0;
+                      const pricePct = l.total ? (l.with_price || 0) / l.total : 1;
+                      const needRe = l.total > 0 && (pricePct < 0.8 || ageDays > 7);
+                      return (
+                        <tr key={l.id} style={{ borderBottom: '1px solid #f5f5f7' }}>
+                          <td style={{ padding: '4px 8px', whiteSpace: 'nowrap', color: '#8e8e93' }}>{l.created_at ? new Date(l.created_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                          <td style={{ padding: '4px 8px' }}>
+                            {l.category
+                              ? <a onClick={() => pickCat(l.category)} style={{ color: '#0071e3', cursor: 'pointer' }}>{l.category}</a>
+                              : (l.url ? <a href={l.url} target="_blank" rel="noreferrer" style={{ color: '#0071e3' }}>{l.url.split('/').filter(Boolean).pop()}</a> : '—')}
+                            {l.url && <a href={l.url} target="_blank" rel="noreferrer" title="Открыть раздел на сайте" style={{ marginLeft: 5, textDecoration: 'none' }}>🔗</a>}
+                          </td>
+                          <td style={{ padding: '4px 8px' }}>{l.total}</td>
+                          <td style={{ padding: '4px 8px', color: pricePct < 0.8 ? '#d70015' : '#1e7e34' }}>{l.with_price}{l.total ? ` (${Math.round(pricePct * 100)}%)` : ''}</td>
+                          <td style={{ padding: '4px 8px' }}>{l.with_photo}</td>
+                          <td style={{ padding: '4px 8px' }}>{l.with_brand}</td>
+                          <td style={{ padding: '4px 8px' }}>{l.with_mpn}</td>
+                          <td style={{ padding: '4px 8px', whiteSpace: 'nowrap' }}>
+                            {needRe
+                              ? <button onClick={() => l.url && extReparse(l.url)} disabled={!l.url}
+                                  title={(pricePct < 0.8 ? 'Цена менее чем у 80% товаров. ' : 'Парсинг старше 7 дней — цены могли устареть. ') + 'Клик — запустить парсинг раздела в расширении Chrome'}
+                                  style={{ fontSize: 10.5, color: '#fff', background: '#d70015', border: 'none', borderRadius: 8, padding: '2px 8px', cursor: l.url ? 'pointer' : 'default' }}>🔄 Перепарсить{pricePct < 0.8 ? ' (мало цен)' : ' (устарело)'}</button>
+                              : <span style={{ fontSize: 10.5, color: '#1e7e34', background: '#e8f8ef', borderRadius: 8, padding: '2px 8px' }}>✅ Актуально</span>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                )}
+            </div>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+          <input value={catQ} onChange={e => setCatQ(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { setCatPage(0); catSearch({ page: 0 }); } }}
+            placeholder="Поиск по каталогу: напр. taladro black decker"
+            style={{ flex: 1, padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
+          <button onClick={() => { setCatPage(0); catSearch({ page: 0 }); }} disabled={catBusy}
+            style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#0071e3', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>{catBusy ? '⏳' : '🔍 Найти'}</button>
+          <button onClick={() => { const nv = !catPriced; setCatPriced(nv); setCatPage(0); catSearch({ priced: nv, page: 0 }); }} disabled={catBusy}
+            title="Показать только товары с фактической ценой (последние обновлённые первыми)"
+            style={{ padding: '8px 14px', borderRadius: 8, border: catPriced ? 'none' : '1px solid #34c759', background: catPriced ? '#34c759' : '#e8f8ef', color: catPriced ? '#fff' : '#1e7e34', fontWeight: 700, fontSize: 12.5, cursor: 'pointer' }}>💶 С ценой{catPricedTotal != null ? `: ${catPricedTotal}` : ''}</button>
+          {canRun && (
+            <button onClick={syncBrands} disabled={brandsBusy}
+              title="Собрать справочник брендов сервером из sitemap-searchdex (без расширения)"
+              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #0e7490', background: '#ecfeff', color: '#0e7490', fontSize: 12, cursor: 'pointer' }}>{brandsBusy ? '⏳' : `⇪ Справочник${brandsTotal != null ? ` (${brandsTotal})` : ''}`}</button>
+          )}
+          {brandsTotal > 0 && (
+            <button onClick={() => window.open(`${API_URL}/api/parse/brands/export?token=${token}&site=${CAT_STORE.host}`, '_blank')}
+              title="Скачать справочник брендов файлом CSV — для локального скрипта распознавания"
+              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #1e7e34', background: '#e8f5e9', color: '#1e7e34', fontSize: 12, cursor: 'pointer' }}>⬇ Бренды</button>
+          )}
+        </div>
+        {catItems && (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6, fontSize: 12, color: '#8e8e93' }}>
+              <span>{catPriced ? 'С ценой' : 'Найдено'}: {catTotal}{catCat ? ` · раздел «${catCat.split(' > ').pop()}»` : ''} · стр. {catPage + 1} из {Math.max(1, Math.ceil(catTotal / catLimit))}{catPricedTotal != null && !catPriced ? ` · с ценой в каталоге: ${catPricedTotal}` : ''}</span>
+              {catBrand && <button onClick={() => toggleCatBrand(catBrand)} title="Снять фильтр по производителю"
+                style={{ fontSize: 11, border: '1px solid #e74c3c', color: '#e74c3c', background: '#fdecea', borderRadius: 8, padding: '2px 8px', cursor: 'pointer' }}>✕ 🏷 {catBrand}</button>}
+              <select value={catLimit} onChange={e => { const lim = parseInt(e.target.value, 10); setCatLimit(lim); setCatPage(0); catSearch({ limit: lim, page: 0 }); }}
+                style={{ padding: '4px 8px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 12 }}>
+                <option value={60}>60 на страницу</option>
+                <option value={100}>100 на страницу</option>
+              </select>
+              <PageBar page={catPage + 1} totalPages={Math.max(1, Math.ceil(catTotal / catLimit))} onGo={(p) => { const pg = p - 1; setCatPage(pg); catSearch({ page: pg }); }} />
+              <button onClick={() => { catSearch(); loadCatTree(); }} title="Обновить (список сам обновляется каждые 15 с)"
+                style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>🔄</button>
+              <button onClick={() => { // v131: выгрузка спарсенного каталога в CSV на компьютер (с текущими фильтрами/сортировкой)
+                const p = catParamsRef.current || {};
+                const u = `${API_URL}/api/parse/catalog/export?token=${token}&q=${encodeURIComponent(p.q || '')}&site=${CAT_STORE.host}${p.pr ? '&priced=1' : ''}${p.cc ? '&category=' + encodeURIComponent(p.cc) : ''}${p.br ? '&brand=' + encodeURIComponent(p.br) : ''}${p.so && p.so.key ? '&sort=' + p.so.key + '&dir=' + p.so.dir : ''}`;
+                window.open(u, '_blank');
+              }} title="Скачать спарсенный каталог файлом CSV (открывается в Excel) — учитываются текущий поиск, раздел и сортировка"
+                style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #1e7e34', background: '#e8f5e9', color: '#1e7e34', fontSize: 12, cursor: 'pointer' }}>⬇ Скачать</button>
+              {canRun && (
+                <>
+                  <input ref={importFileRef} type="file" accept=".csv,text/csv" style={{ display: 'none' }}
+                    onChange={e => importBrandMpn(e.target.files && e.target.files[0])} />
+                  <button onClick={() => importFileRef.current && importFileRef.current.click()} disabled={importBusy}
+                    title="Загрузить заполненный AI-файл (CSV) обратно в базу: бренд и № производителя подтянутся по артикулу"
+                    style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #7c3aed', background: '#f5f3ff', color: '#7c3aed', fontSize: 12, cursor: 'pointer' }}>{importBusy ? '⏳' : '⇪ В базу'}</button>
+                </>
+              )}
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ textAlign: 'left', color: '#8e8e93', borderBottom: '2px solid #f0f0f2' }}>
+                    {catTh('image', 'Фото')}
+                    {catTh('name', 'Товар')}
+                    {catTh('article', 'Артикул', { whiteSpace: 'nowrap' })}
+                    {catTh('brand', 'Производитель', { whiteSpace: 'nowrap' })}
+                    {catTh('mpn', '№ производителя', { whiteSpace: 'nowrap' })}
+                    {catTh('category', 'Раздел')}
+                    {catTh('price', 'Цена', { whiteSpace: 'nowrap' })}
+                    {catTh('price_original', 'Без скидки', { whiteSpace: 'nowrap' })}
+                    {catTh('discount_pct', '−%', { whiteSpace: 'nowrap' })}
+                    {catTh('discount_abs', '−€', { whiteSpace: 'nowrap' })}
+                    {catTh('date', 'Дата', { whiteSpace: 'nowrap' })}
+                    {canRun && <th style={{ padding: '6px 8px', position: 'sticky', right: 0, background: '#fff', boxShadow: '-4px 0 6px rgba(0,0,0,.05)' }}></th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {catItems.map(p => (
+                    <tr key={p.id} style={{ borderBottom: '1px solid #f5f5f7' }}>
+                      <td style={{ padding: '6px 8px', width: 52 }}>
+                        {p.image
+                          ? <img src={p.image} alt="" loading="lazy" style={{ width: 44, height: 44, objectFit: 'contain', borderRadius: 6, background: '#fafafa' }} />
+                          : <span style={{ color: '#e5e5ea', fontSize: 11 }}>—</span>}
+                      </td>
+                      <td style={{ padding: '6px 8px', minWidth: 200, maxWidth: 340 }}>
+                        <a href={p.url} target="_blank" rel="noreferrer" title={p.name || p.url} style={{ color: '#0071e3', textDecoration: 'none', display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 3, overflow: 'hidden' }}>{p.name || p.url}</a>
+                      </td>
+                      <td style={{ padding: '6px 8px', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{p.article || '—'}</td>
+                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
+                        {p.brand
+                          ? <b onClick={() => toggleCatBrand(p.brand)} title="Клик — фильтр по этому производителю · повторный клик снимает фильтр"
+                              style={{ fontSize: 12, cursor: 'pointer', padding: '1px 7px', borderRadius: 7, background: catBrand === p.brand ? '#0071e3' : 'transparent', color: catBrand === p.brand ? '#fff' : '#333' }}>{p.brand}</b>
+                          : <span style={{ color: '#c7c7cc' }}>—</span>}
+                      </td>
+                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontFamily: 'monospace', fontSize: 11, color: '#444' }} title="Оригинальный номер производителя (MPN)">
+                        {p.mpn || <span style={{ color: '#c7c7cc' }}>—</span>}
+                      </td>
+                      <td style={{ padding: '6px 8px', color: '#8e8e93', fontSize: 11, maxWidth: 220 }} title={p.category || ''}>
+                        {p.category
+                          ? <span onClick={() => pickCat(p.category)} style={{ cursor: 'pointer' }}>{p.category.split(' > ').slice(-2).join(' › ')}</span>
+                          : '—'}
+                      </td>
+                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
+                        {p.price != null ? <b>{p.price} {p.currency || '€'}</b> : (p.price_estimate != null ? <span style={{ color: '#e67e22' }}>≈ {p.price_estimate} {p.currency || '€'} <span style={{ fontSize: 10 }}>(оценка)</span></span> : <span style={{ color: '#c7c7cc' }}>—</span>)}
+                        {p.price_source === 'ai-search' && <span title="Цена найдена AI через веб-поиск (подтверждена по артикулу)" style={{ fontSize: 10, color: '#7c3aed', marginLeft: 4 }}>🤖</span>}
+                        {(p.price_source === 'extension' || p.price_source === 'extension-list') && <span title={p.price_source === 'extension-list' ? 'Цена снята расширением с витрины раздела' : 'Цена собрана расширением со страницы товара'} style={{ fontSize: 10, color: '#16a34a', marginLeft: 4 }}>🧩</span>}
+                        {p.price_estimate != null && <span title="Есть оценка AI (price_estimate), не путать с фактической ценой" style={{ fontSize: 10, color: '#94a3b8', marginLeft: 4 }}>🤖≈</span>}
+                        {p.price_prev != null && p.price != null && Math.abs(p.price - p.price_prev) > 0.001 && <span title={`Было ${p.price_prev} ${p.currency || '€'}`} style={{ fontSize: 10, marginLeft: 4, color: p.price > p.price_prev ? '#e67e22' : '#1e7e34' }}>{p.price > p.price_prev ? '📈' : '📉'} было {p.price_prev}</span>}
+                      </td>
+                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontSize: 11, color: '#8e8e93', textDecoration: 'line-through' }} title="Цена без скидки (зачёркнутая на сайте)">
+                        {p.price_original != null ? p.price_original + ' ' + (p.currency || '€') : <span style={{ color: '#e5e5ea', textDecoration: 'none' }}>—</span>}
+                      </td>
+                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontSize: 11 }} title="Скидка в процентах (бейдж на сайте)">
+                        {p.discount_pct != null ? <b style={{ color: '#d70015' }}>−{p.discount_pct}%</b> : <span style={{ color: '#e5e5ea' }}>—</span>}
+                      </td>
+                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontSize: 11 }} title="Скидка в евро (например, при покупке онлайн)">
+                        {p.discount_abs != null ? <b style={{ color: '#d70015' }}>−{p.discount_abs} {p.currency || '€'}</b> : <span style={{ color: '#e5e5ea' }}>—</span>}
+                      </td>
+                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontSize: 11, color: '#8e8e93' }}
+                        title={p.last_seen ? ('Дата парсинга: ' + new Date(p.last_seen).toLocaleString('ru-RU') + (p.first_seen ? ' · впервые: ' + new Date(p.first_seen).toLocaleString('ru-RU') : '') + (p.price_at ? ' · цена: ' + new Date(p.price_at).toLocaleString('ru-RU') : '')) : ''}>
+                        {p.last_seen ? new Date(p.last_seen).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }) + ' ' + new Date(p.last_seen).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                      </td>
+                      {canRun && (
+                        <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', position: 'sticky', right: 0, background: '#fff', boxShadow: '-4px 0 6px rgba(0,0,0,.05)' }}>
+                          <button onClick={() => setEditProd({ ...p })} title="Редактировать товар вручную (все столбцы)"
+                            style={{ padding: '3px 9px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>✏️</button>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+        {editProd && (
+          <div onClick={() => setEditProd(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.35)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 18, width: 460, maxWidth: '94vw', maxHeight: '88vh', overflowY: 'auto' }}>
+              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>✏️ Редактирование товара</div>
+              {[['image', 'Фото (URL)'], ['name', 'Товар'], ['article', 'Артикул'], ['brand', 'Производитель'], ['mpn', '№ производителя'], ['category', 'Раздел'], ['price', 'Цена'], ['price_original', 'Без скидки'], ['discount_pct', 'Скидка %'], ['discount_abs', 'Скидка €'], ['currency', 'Валюта']].map(([k, label]) => (
+                <div key={k} style={{ marginBottom: 8 }}>
+                  <div style={{ fontSize: 11, color: '#8e8e93', marginBottom: 2 }}>{label}</div>
+                  <input value={editProd[k] == null ? '' : editProd[k]} onChange={e => setEditProd({ ...editProd, [k]: e.target.value })}
+                    style={{ width: '100%', padding: '7px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13, boxSizing: 'border-box' }} />
+                </div>
+              ))}
+              <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'flex-end' }}>
+                <button onClick={() => setEditProd(null)}
+                  style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 13, cursor: 'pointer' }}>Отмена</button>
+                <button onClick={saveEditProd}
+                  style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: '#0071e3', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>💾 Сохранить</button>
+              </div>
+            </div>
+          </div>
+        )}
+        </>)}
+      </div>
+
+      {err && <div style={{ background: '#fdecea', border: '1px solid #e74c3c', borderRadius: 10, padding: '10px 12px', fontSize: 13, marginBottom: 10, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>❌ {err}</div>}
+
+      {autoHelpFor && (
+        <div onClick={() => setAutoHelpFor(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 220, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 16, width: 620, maxWidth: '94vw', maxHeight: '88vh', overflowY: 'auto' }}>
+            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 8 }}>🔗 Автоотправка страницы в один клик</div>
+            <div style={{ fontSize: 13, marginBottom: 6 }}><b>Вариант 1 — букмарклет (Mac/ПК):</b> перетащи кнопку ниже на панель закладок браузера. На любой странице товара — один клик по закладке → название и цена сохранятся в истории источника (создаётся автоматически по URL).</div>
+            <div style={{ margin: '8px 0 12px' }}>
+              <a href={bookmarkletHref()} onClick={e => e.preventDefault()} title="Перетащи на панель закладок"
+                style={{ display: 'inline-block', padding: '8px 16px', borderRadius: 8, background: '#7c3aed', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'grab', textDecoration: 'none' }}>📌 → В Парсинг</a>
+              <span style={{ fontSize: 11, color: '#8e8e93', marginLeft: 8 }}>перетащи на панель закладок (клик здесь не сработает)</span>
+            </div>
+            <div style={{ fontSize: 13, marginBottom: 4 }}><b>Вариант 2 — iOS/Mac Shortcut (Команды):</b></div>
+            <ol style={{ fontSize: 12, color: '#3a3a3c', margin: '4px 0 10px', paddingLeft: 18 }}>
+              <li>«Команды» → новая команда → «Получить содержимое веб-страницы» (Safari: вход — «Страница из Быстрой команды»).</li>
+              <li>Добавь «Получить содержимое URL» (POST) с адресом:</li>
+            </ol>
+            <div style={{ fontSize: 11, fontFamily: 'monospace', background: '#f5f5f7', borderRadius: 6, padding: 8, wordBreak: 'break-all', userSelect: 'all' }}>{`${API_URL}/api/parse/paste-url?token=…`} (полная ссылка с токеном — в коде букмарклета выше)</div>
+            <ol start="3" style={{ fontSize: 12, color: '#3a3a3c', margin: '8px 0', paddingLeft: 18 }}>
+              <li>Тело JSON: url = URL страницы, html = содержимое страницы. Включи «Показывать в меню экспорта» → команда появится в «Поделиться» Safari.</li>
+            </ol>
+            <div style={{ fontSize: 12, color: '#8e8e93' }}>⏱ Автозапуск по расписанию (селектор в карточке) работает с сервера — для sitemap и сайтов без антибота. Для Leroy Merlin цены автоматом собираются через вариант 1/2.</div>
+            <button onClick={() => setAutoHelpFor(null)} style={{ marginTop: 12, width: '100%', padding: '9px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', cursor: 'pointer' }}>Закрыть</button>
+          </div>
+        </div>
+      )}
+      {pasteFor && (
+        <div onClick={() => !pasteBusy && setPasteFor(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 220, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 16, width: 640, maxWidth: '94vw' }}>
+            <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>📋 Вставить исходник страницы</div>
+            <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 8 }}>
+              Откройте страницу в браузере → правый клик → «Посмотреть исходный код» (или Cmd+S → сохранить) → скопируйте весь HTML сюда. Парсер извлечёт название, цену, фото — без обращения к сайту с сервера.
+            </div>
+            <textarea value={pasteHtml} onChange={e => setPasteHtml(e.target.value)} placeholder="<!DOCTYPE html>…"
+              style={{ width: '100%', boxSizing: 'border-box', height: 180, padding: 8, borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 11, fontFamily: 'monospace' }} />
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <button onClick={submitPaste} disabled={pasteBusy || pasteHtml.length < 200}
+                style={{ flex: 1, padding: '9px', borderRadius: 8, border: 'none', background: '#34c759', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>{pasteBusy ? '⏳ Извлекаю…' : '✅ Извлечь данные'}</button>
+              <button onClick={() => setPasteFor(null)} disabled={pasteBusy}
+                style={{ padding: '9px 16px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', cursor: 'pointer' }}>Отмена</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
   const [entities, setEntities] = useState([]);
@@ -2595,14 +3604,51 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
   const [err, setErr] = useState('');
 
   const [typeFilter, setTypeFilter] = useState('');
+  // v111: области графа (изолированные графы)
+  const [scopes, setScopes] = useState([]);
+  const [scopeId, setScopeId] = useState('');
+  const [scopeMgrOpen, setScopeMgrOpen] = useState(false);
+  const [nsName, setNsName] = useState('');
+  const [nsObjects, setNsObjects] = useState('');
+  const [nsInclude, setNsInclude] = useState('');
+  const [nsExclude, setNsExclude] = useState('');
+  // v112: дерево источников — визуальный выбор ✅ включить / ❌ игнорировать
+  const [scopeTree, setScopeTree] = useState(null);
+  const [entElsewhere, setEntElsewhere] = useState(null); // v117.1: сущности в других областях
+  const [treeSel, setTreeSel] = useState({ objects: {}, docTypes: {}, ibans: {}, cps: {} });
+  const loadTree = async () => {
+    try {
+      const r = await fetch(`${API_URL}/api/links/tree?token=${token}`);
+      const j = await r.json();
+      if (r.ok) setScopeTree(j.tree);
+    } catch (_) { /* дерево опционально */ }
+  };
+  const treeToggle = (group, name) => setTreeSel(prev => {
+    const cur = prev[group][name] || '';
+    const next = cur === '' ? 'inc' : cur === 'inc' ? 'exc' : '';
+    const g = { ...prev[group] };
+    if (next) g[name] = next; else delete g[name];
+    return { ...prev, [group]: g };
+  });
+  const [nsIbans, setNsIbans] = useState('');
+  const [bridges, setBridges] = useState(null);
+  const loadScopes = async () => {
+    try {
+      const r = await fetch(`${API_URL}/api/links/scopes?token=${token}`);
+      const j = await r.json();
+      if (r.ok && j.supported) setScopes(j.scopes || []);
+    } catch (_) { /* областей нет — работаем как раньше */ }
+  };
+  useEffect(() => { if (token) loadScopes(); }, [token]);
   const loadEntities = async (query, type) => {
     setLoading(true); setErr('');
     try {
       const t = type !== undefined ? type : typeFilter;
-      const r = await fetch(`${API_URL}/api/links/entities?token=${token}&q=${encodeURIComponent(query || '')}${t ? '&type=' + t : ''}`);
+      const r = await fetch(`${API_URL}/api/links/entities?token=${token}&q=${encodeURIComponent(query || '')}${t ? '&type=' + t : ''}${scopeId ? '&scope=' + scopeId : ''}`);
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
       setEntities(j.entities || []);
+      setEntElsewhere(typeof j.elsewhere === 'number' ? j.elsewhere : null); // v117.1
     } catch (e) { setErr(e.message); }
     setLoading(false);
   };
@@ -2612,13 +3658,175 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
   const build = async () => {
     setBuilding(true); setErr(''); setReport(null);
     try {
-      const r = await fetch(`${API_URL}/api/links/build?token=${token}`, { method: 'POST' });
+      const r = await fetch(`${API_URL}/api/links/build?token=${token}${scopeId ? '&scope=' + scopeId : ''}`, { method: 'POST' });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
       setReport(j.stats);
-      await loadEntities(q);
+      setQ(''); // v117.1: старый текст поиска мог скрывать свежие сущности
+      await loadEntities('');
     } catch (e) { setErr(e.message); }
     setBuilding(false);
+  };
+
+  // v110: AI сам читает все тексты документов → извлекает сущности → достраивает связи
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiProg, setAiProg] = useState(null);
+  // v115: пауза / продолжить / прервать
+  const aiPauseRef = useRef(false);
+  const aiAbortRef = useRef(false);
+  const [aiPaused, setAiPaused] = useState(false);
+  const [aiFreeMode, setAiFreeMode] = useState(false); // v118: AI сам придумывает типы сущностей
+  const aiExtract = async (startOffsetArg) => {
+    // v115.1: из onClick сюда попадает объект события — отсекаем всё, кроме числа
+    const startOffset = (typeof startOffsetArg === 'number' && isFinite(startOffsetArg)) ? startOffsetArg : null;
+    setAiBusy(true); setAiPaused(false); aiPauseRef.current = false; aiAbortRef.current = false;
+    setErr('');
+    if (startOffset == null) setAiProg({ done: 0, total: null, added: 0, links: 0, newTypes: 0, rels: 0 });
+    let offset = startOffset || 0, done = false;
+    let added = (aiProg && startOffset) ? aiProg.added : 0;
+    let links = (aiProg && startOffset) ? aiProg.links : 0;
+    let newTypes = (aiProg && startOffset) ? (aiProg.newTypes || 0) : 0;
+    let rels = (aiProg && startOffset) ? (aiProg.rels || 0) : 0;
+    let aborted = false;
+    try {
+      while (!done) {
+        if (aiAbortRef.current) { aborted = true; break; }
+        while (aiPauseRef.current && !aiAbortRef.current) await new Promise(r => setTimeout(r, 400));
+        if (aiAbortRef.current) { aborted = true; break; }
+        const r = await fetch(`${API_URL}/api/links/ai-extract?token=${token}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ offset, limit: 6, scope: scopeId || undefined, freeMode: aiFreeMode || undefined, extraTypes: (aiTypes && aiTypes.length) ? aiTypes : undefined })
+        });
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+        offset = j.nextOffset; done = j.done;
+        added += (j.stats && j.stats.entitiesAdded) || 0;
+        links += (j.stats && j.stats.linksAdded) || 0;
+        newTypes += (j.stats && j.stats.newTypes) || 0;
+        rels += (j.stats && j.stats.relsAdded) || 0;
+        setAiProg({ done: offset, total: j.total, added, links, newTypes, rels });
+      }
+      if (!aborted) await loadEntities(q);
+    } catch (e) { setErr(e.message); }
+    setAiBusy(false); setAiPaused(false);
+  };
+  const aiPauseResume = () => {
+    const next = !aiPauseRef.current;
+    aiPauseRef.current = next; setAiPaused(next);
+  };
+  const aiAbort = () => {
+    aiAbortRef.current = true; aiPauseRef.current = false; setAiPaused(false);
+  };
+
+  const createScope = async () => {
+    if (!nsName.trim()) return;
+    try {
+      const csv = (v) => v.split(',').map(x => x.trim()).filter(Boolean);
+      const pick = (g, mode) => Object.keys(treeSel[g]).filter(k => treeSel[g][k] === mode);
+      const r = await fetch(`${API_URL}/api/links/scopes?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: nsName.trim(), filter: {
+          objects: pick('objects', 'inc'), excludeObjects: pick('objects', 'exc'),
+          docTypes: pick('docTypes', 'inc'), excludeDocTypes: pick('docTypes', 'exc'),
+          ibans: pick('ibans', 'inc'), excludeIbans: pick('ibans', 'exc'),
+          includeNames: [...csv(nsInclude), ...pick('cps', 'inc')], excludeNames: [...csv(nsExclude), ...pick('cps', 'exc')]
+        } })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setNsName(''); setNsObjects(''); setNsInclude(''); setNsExclude(''); setNsIbans(''); setTreeSel({ objects: {}, docTypes: {}, ibans: {}, cps: {} });
+      await loadScopes();
+      if (j.scope) setScopeId(j.scope.id);
+    } catch (e) { setErr(e.message); }
+  };
+  const deleteScope = async (id) => {
+    if (!window.confirm('Удалить область вместе с её графом?')) return;
+    try {
+      const r = await fetch(`${API_URL}/api/links/scopes?token=${token}&id=${id}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      if (scopeId === id) { setScopeId(''); setGraph(null); }
+      await loadScopes(); await loadEntities(q);
+    } catch (e) { setErr(e.message); }
+  };
+  const clearGraph = async () => {
+    const what = scopeId ? 'граф области «' + ((scopes.find(x => x.id === scopeId) || {}).name || scopeId) + '»' : 'ВЕСЬ граф «Все документы»';
+    if (!window.confirm('Очистить ' + what + '?\nСущности и связи будут удалены (документы и выписки не пострадают). Потом нажмите «🔄 Построить связи».')) return;
+    setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/links/clear?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope: scopeId || 'all' })
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) throw new Error(j.error || (j.errors || []).join('; ') || ('HTTP ' + r.status));
+      setGraph(null); setReport(null); setAiProg(null);
+      await loadEntities(q);
+    } catch (e) { setErr(e.message); }
+  };
+
+  // v114: AI-архитектор — разведка типов сущностей
+  const [aiDiscovering, setAiDiscovering] = useState(false);
+  const [aiTypes, setAiTypes] = useState(null);   // null = разведка не запускалась
+  const [aiClusters, setAiClusters] = useState([]);
+  const [aiSampled, setAiSampled] = useState(0);
+  const aiDiscover = async () => {
+    setAiDiscovering(true); setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/links/ai-discover?token=${token}`, { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setAiTypes(j.entityTypes || []);
+      setAiClusters(j.clusters || []);
+      setAiSampled(j.sampled || 0);
+    } catch (e) { setErr(e.message); }
+    setAiDiscovering(false);
+  };
+
+  // v117: автосоздание областей из AI-кластеров (AI сам подбирает фильтр по дереву источников)
+  const [aiScopesBusy, setAiScopesBusy] = useState(false);
+  const [aiScopeStat, setAiScopeStat] = useState([]); // [{name, st:'wait'|'run'|'ok'|'err', msg}]
+  const createScopesFromClusters = async (onlyIdx = null) => {
+    if (aiScopesBusy) return;
+    const list = onlyIdx == null ? aiClusters : aiClusters.filter((_, i) => i === onlyIdx);
+    if (!list.length) return;
+    if (!window.confirm(`AI создаст ${list.length === 1 ? 'область' : 'области'}: ${list.map(c => '«' + c.name + '»').join(', ')}\n\nAI сам подберёт источники (объекты, типы документов, счета, контрагенты) по дереву. После создания область можно поправить вручную через 🗂.`)) return;
+    setAiScopesBusy(true);
+    const stat = aiClusters.map(c => ({ name: c.name, st: (onlyIdx == null || list.includes(c)) ? 'wait' : 'skip', msg: '' }));
+    setAiScopeStat(stat);
+    for (const c of list) {
+      const row = stat.find(x => x.name === c.name);
+      row.st = 'run'; setAiScopeStat([...stat]);
+      try {
+        const rf = await fetch(`${API_URL}/api/links/ai-scope-filter?token=${token}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: c.name, what: c.what || '' })
+        });
+        const jf = await rf.json();
+        if (!rf.ok) throw new Error(jf.error || ('HTTP ' + rf.status));
+        if (!jf.picked) { row.st = 'err'; row.msg = 'AI не нашёл подходящих источников'; continue; }
+        const rs = await fetch(`${API_URL}/api/links/scopes?token=${token}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: c.name, filter: jf.filter })
+        });
+        const js = await rs.json();
+        if (!rs.ok) throw new Error(js.error || ('HTTP ' + rs.status));
+        row.st = 'ok'; row.msg = `источников: ${jf.picked}`;
+      } catch (e) { row.st = 'err'; row.msg = e.message; }
+      setAiScopeStat([...stat]);
+    }
+    await loadScopes();
+    setAiScopesBusy(false);
+  };
+
+  const loadBridges = async () => {
+    setBridges(null); setErr('');
+    try {
+      const r = await fetch(`${API_URL}/api/links/bridges?token=${token}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setBridges(j.bridges || []);
+    } catch (e) { setErr(e.message); }
   };
 
   const openGraph = async (id) => {
@@ -2652,7 +3860,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
     <button key={e.id} onClick={() => openGraph(e.id)}
       title={`${e.typeLabel}: ${e.label}`}
       style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: active ? '2px solid #0071e3' : '1px solid #d0d0d5', background: active ? '#eaf3fb' : '#fff', borderRadius: 20, padding: '5px 12px', fontSize: 13, cursor: 'pointer', margin: '0 6px 6px 0' }}>
-      <span style={{ width: 9, height: 9, borderRadius: '50%', background: ENT_TYPE_COLORS[e.type] || '#8e8e93', flexShrink: 0 }} />
+      <span style={{ width: 9, height: 9, borderRadius: '50%', background: entColor(e.type), flexShrink: 0 }} />
       <span style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.label}</span>
       <span style={{ color: '#8e8e93', fontSize: 12 }}>×{e.docs}</span>
     </button>
@@ -2664,13 +3872,225 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
         {!isMobileView && <h2 style={{ margin: 0 }}>🔗 Связи документов</h2>}
         <input type="text" value={q} onChange={e => setQ(e.target.value)} placeholder="Поиск сущности: компания, IBAN, № фактуры…"
           style={{ flex: '1 1 220px', minWidth: 0, padding: '8px 12px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 14 }} />
+        <select value={scopeId} onChange={e => { setScopeId(e.target.value); setGraph(null); setReport(null); setAiProg(null); setEntElsewhere(null); }}
+          title="Область графа: изолированный граф по выбранным документам"
+          style={{ padding: '8px 10px', borderRadius: 8, border: scopeId ? '2px solid #7c3aed' : '1px solid #d0d0d5', fontSize: 13, background: '#fff', maxWidth: 200 }}>
+          <option value="">🌐 Все документы</option>
+          {scopes.map(sc => <option key={sc.id} value={sc.id}>🗂 {sc.name}</option>)}
+        </select>
+        <button onClick={() => { setScopeMgrOpen(true); loadTree(); }} title="Управление областями"
+          style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 14, cursor: 'pointer' }}>🗂</button>
+        <button onClick={loadBridges} title="Сущности, встречающиеся сразу в нескольких областях"
+          style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 14, cursor: 'pointer' }}>🌉</button>
+        {canBuild && (
+          <button onClick={clearGraph} title="Очистить граф текущей области (сущности и связи; документы не трогаются)"
+            style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #f5c2c7', background: '#fff', fontSize: 14, cursor: 'pointer' }}>🧹</button>
+        )}
         {canBuild && (
           <button onClick={build} disabled={building}
             style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: building ? '#c7d7ea' : '#0071e3', color: '#fff', fontWeight: 700, fontSize: 14, cursor: building ? 'wait' : 'pointer' }}>
             {building ? '⏳ Строю граф…' : '🔄 Построить связи'}
           </button>
         )}
+        {canBuild && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 0 }}>
+            <button onClick={() => aiExtract()} disabled={aiBusy || building}
+              title={aiFreeMode ? 'СВОБОДНЫЙ режим: AI сам придумывает типы сущностей и связи между ними' : 'Режим схемы: AI извлекает сущности по заданному списку типов'}
+              style={{ padding: '8px 16px', borderRadius: '8px 0 0 8px', border: 'none', background: aiBusy ? '#d9ccee' : '#7c3aed', color: '#fff', fontWeight: 700, fontSize: 14, cursor: aiBusy ? 'wait' : 'pointer' }}>
+              {aiBusy ? `🤖 AI читает… ${aiProg ? aiProg.done + (aiProg.total ? '/' + aiProg.total : '') : ''}` : (aiFreeMode ? '🤖 AI-извлечение · свободный' : '🤖 AI-извлечение')}
+            </button>
+            <button onClick={() => !aiBusy && setAiFreeMode(v => !v)} disabled={aiBusy}
+              title={aiFreeMode ? 'Свободный режим ВКЛ: AI сам генерирует типы (клик — перейти к схеме)' : 'Режим схемы: типы заданы (клик — свободный режим, AI сам придумывает типы)'}
+              style={{ padding: '8px 10px', borderRadius: '0 8px 8px 0', border: 'none', borderLeft: '1px solid rgba(255,255,255,0.35)', background: aiBusy ? '#d9ccee' : (aiFreeMode ? '#5b21b6' : '#8b6cc9'), color: '#fff', fontWeight: 700, fontSize: 12, cursor: aiBusy ? 'not-allowed' : 'pointer' }}>
+              {aiFreeMode ? '🧠 свободный' : '🧷 схема'}
+            </button>
+          </span>
+        )}
+        {canBuild && (
+          <button onClick={aiDiscover} disabled={aiDiscovering || aiBusy || building}
+            title="AI читает образцы всех документов и сам определяет, какие типы сущностей искать (нотариусы, адреса, формы деклараций…)"
+            style={{ padding: '8px 16px', borderRadius: 8, border: 'none', background: aiDiscovering ? '#e3d5f7' : '#1d1d1f', color: '#fff', fontWeight: 700, fontSize: 14, cursor: aiDiscovering ? 'wait' : 'pointer' }}>
+            {aiDiscovering ? '🧠 Анализирую…' : '🧠 AI-архитектор'}
+          </button>
+        )}
       </div>
+      {bridges && (
+        <div style={{ background: '#fff8e6', border: '1px solid #f0ad4e', borderRadius: 10, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>
+          <b>🌉 Мосты между областями ({bridges.length})</b>
+          <button onClick={() => setBridges(null)} style={{ float: 'right', border: 'none', background: 'none', cursor: 'pointer' }}>✕</button>
+          <div style={{ maxHeight: 180, overflowY: 'auto', marginTop: 4 }}>
+            {bridges.length === 0 && <div style={{ color: '#8e8e93' }}>Пересечений нет — области полностью изолированы ✅</div>}
+            {bridges.map((b, i) => (
+              <div key={i} style={{ padding: '3px 0', borderBottom: '1px solid #f7ecd7' }}>
+                ⚠️ <b>{b.label}</b> <span style={{ color: '#8e8e93' }}>({b.typeLabel})</span> — в областях: {b.scopes.join(' · ')}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {scopeMgrOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={() => setScopeMgrOpen(false)}>
+          <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 18, maxWidth: 480, width: '100%', maxHeight: '80vh', overflowY: 'auto' }}>
+            <h3 style={{ margin: '0 0 10px' }}>🗂 Области графа</h3>
+            <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 10 }}>
+              Область = изолированный граф по своему набору документов. Пустой фильтр = все документы области.
+            </div>
+            {scopes.map(sc => (
+              <div key={sc.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', borderBottom: '1px solid #f0f0f2', fontSize: 13 }}>
+                <span style={{ flex: 1 }}><b>{sc.name}</b>
+                  <span style={{ color: '#8e8e93', fontSize: 11 }}>
+                    {sc.filter && sc.filter.objects && sc.filter.objects.length ? ' · объекты: ' + sc.filter.objects.join(', ') : ''}
+                    {sc.filter && sc.filter.includeNames && sc.filter.includeNames.length ? ' · только: ' + sc.filter.includeNames.join(', ') : ''}
+                    {sc.filter && sc.filter.excludeNames && sc.filter.excludeNames.length ? ' · кроме: ' + sc.filter.excludeNames.join(', ') : ''}
+                    {sc.filter && sc.filter.ibans && sc.filter.ibans.length ? ' · счета: ' + sc.filter.ibans.join(', ') : ''}
+                  </span>
+                </span>
+                <button onClick={() => deleteScope(sc.id)} style={{ border: 'none', background: 'none', color: '#e74c3c', cursor: 'pointer' }}>✕</button>
+              </div>
+            ))}
+            <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
+              <input value={nsName} onChange={e => setNsName(e.target.value)} placeholder="Название (напр. Личное без Alcojora)"
+                style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
+              <div style={{ border: '1px solid #e3e6ea', borderRadius: 10, padding: 10, background: '#fafafa' }}>
+                <div style={{ fontSize: 12, color: '#8e8e93', marginBottom: 6 }}>Источники графа — клик по строке: ⚪ не выбрано → ✅ включить → ❌ игнорировать. Если есть хоть одно ✅ — в граф попадёт только отмеченное.</div>
+                {!scopeTree && <div style={{ fontSize: 12, color: '#8e8e93' }}>⏳ Загружаю структуру…</div>}
+                {scopeTree && [
+                  ['🧾 Фактуры и Доки — объекты', 'objects', scopeTree.objects],
+                  ['📄 Фактуры и Доки — типы документов', 'docTypes', scopeTree.docTypes],
+                  ['🏦 Выписки банка — счета (IBAN)', 'ibans', scopeTree.ibans],
+                  ['🏢 Контрагенты (топ-100)', 'cps', scopeTree.counterparties]
+                ].map(([title, group, items]) => {
+                  const selCount = Object.keys(treeSel[group]).length;
+                  const bulkSet = (mode) => setTreeSel(prev => {
+                    const g = {};
+                    if (mode) (items || []).forEach(it => { g[it.name] = mode; });
+                    return { ...prev, [group]: g };
+                  });
+                  return (
+                    <details key={group} style={{ marginBottom: 6 }} open={selCount > 0}>
+                      <summary style={{ fontSize: 13, fontWeight: 600, cursor: 'pointer', padding: '4px 0', listStyle: 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span>▸ {title}</span>
+                        {selCount > 0 && <span style={{ color: '#7c3aed' }}>({selCount})</span>}
+                        <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 4 }} onClick={e => e.preventDefault()}>
+                          <button onClick={() => bulkSet('inc')} title="Включить все" style={{ border: '1px solid #34c759', background: '#e8f8ef', borderRadius: 5, fontSize: 11, cursor: 'pointer', padding: '1px 6px' }}>✅ все</button>
+                          <button onClick={() => bulkSet('exc')} title="Игнорировать все" style={{ border: '1px solid #e74c3c', background: '#fdecea', borderRadius: 5, fontSize: 11, cursor: 'pointer', padding: '1px 6px' }}>❌ все</button>
+                          <button onClick={() => bulkSet('')} title="Сбросить выбор" style={{ border: '1px solid #d0d0d5', background: '#fff', borderRadius: 5, fontSize: 11, cursor: 'pointer', padding: '1px 6px' }}>⚪</button>
+                        </span>
+                      </summary>
+                      <div style={{ maxHeight: 130, overflowY: 'auto', margin: '4px 0 4px 8px' }}>
+                        {(items || []).map(it => {
+                          const st = treeSel[group][it.name] || '';
+                          return (
+                            <div key={it.name} onClick={() => treeToggle(group, it.name)}
+                              style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 6px', borderRadius: 6, cursor: 'pointer', fontSize: 13,
+                                background: st === 'inc' ? '#e8f8ef' : st === 'exc' ? '#fdecea' : 'transparent' }}>
+                              <span style={{ width: 18, textAlign: 'center' }}>{st === 'inc' ? '✅' : st === 'exc' ? '❌' : '⚪'}</span>
+                              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                textDecoration: st === 'exc' ? 'line-through' : 'none', color: st === 'exc' ? '#c0392b' : '#1d1d1f' }}>{it.name}</span>
+                              <span style={{ color: '#8e8e93', fontSize: 11 }}>{it.count}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </details>
+                  );
+                })}
+              </div>
+              <input value={nsInclude} onChange={e => setNsInclude(e.target.value)} placeholder="Включить по названию (напр. Alcojora) — через запятую, пусто = все"
+                style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
+              <input value={nsExclude} onChange={e => setNsExclude(e.target.value)} placeholder="Исключить по названию (напр. Alcojora) — через запятую"
+                style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }} />
+              <button onClick={createScope} disabled={!nsName.trim()}
+                style={{ padding: '9px', borderRadius: 8, border: 'none', background: nsName.trim() ? '#7c3aed' : '#d9ccee', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>
+                ＋ Создать область
+              </button>
+            </div>
+            <button onClick={() => setScopeMgrOpen(false)} style={{ marginTop: 10, width: '100%', padding: '8px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', cursor: 'pointer' }}>Закрыть</button>
+          </div>
+        </div>
+      )}
+      {aiTypes !== null && (
+        <div style={{ background: '#f5f5f7', border: '1px solid #1d1d1f', borderRadius: 10, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>
+          <b>🧠 AI-архитектор: проанализировано {aiSampled} образцов</b>
+          <button onClick={() => setAiTypes(null)} style={{ float: 'right', border: 'none', background: 'none', cursor: 'pointer' }}>✕</button>
+          {aiTypes.length === 0 && <div style={{ color: '#8e8e93', marginTop: 4 }}>Дополнительных типов не найдено — хватает базовых (персоны, компании, IBAN, фактуры, договоры, доверенности).</div>}
+          {aiTypes.length > 0 && (
+            <div style={{ margin: '6px 0' }}>
+              <div style={{ color: '#3a3a3c', marginBottom: 4 }}>AI нашёл новые типы сущностей в твоих документах:</div>
+              {aiTypes.map(t => (
+                <span key={t.type} title={t.example ? 'Пример: ' + t.example : ''}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5, border: '1px solid #d0d0d5', background: '#fff', borderRadius: 14, padding: '3px 10px', fontSize: 12, margin: '0 6px 6px 0' }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: entColor(t.type) }} />
+                  <b>{t.label}</b>{t.example ? <span style={{ color: '#8e8e93' }}>· {t.example}</span> : null}
+                </span>
+              ))}
+              <div style={{ marginTop: 4 }}>
+                <button onClick={() => aiExtract()} disabled={aiBusy}
+                  style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: '#7c3aed', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+                  ▶ Извлечь эти типы из всех документов
+                </button>
+                <span style={{ color: '#8e8e93', fontSize: 12, marginLeft: 8 }}>запустит 🤖 AI-извлечение с расширенной схемой</span>
+              </div>
+            </div>
+          )}
+          {aiClusters.length > 0 && (
+            <div style={{ marginTop: 6, borderTop: '1px solid #e3e6ea', paddingTop: 6 }}>
+              <div style={{ color: '#3a3a3c', marginBottom: 4 }}>AI видит кластеры документов (кандидаты в области):</div>
+              {aiClusters.map((c, i) => (
+                <div key={i} style={{ padding: '2px 0', color: '#3a3a3c', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ flex: 1 }}>🗂 <b>{c.name}</b> — <span style={{ color: '#8e8e93' }}>{c.what}</span></span>
+                  <button onClick={() => createScopesFromClusters(i)} disabled={aiScopesBusy} title="Создать область только из этого кластера"
+                    style={{ border: '1px solid #d0d0d5', background: '#fff', borderRadius: 6, fontSize: 11, cursor: 'pointer', padding: '2px 8px', flexShrink: 0 }}>⚡ область</button>
+                </div>
+              ))}
+              <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <button onClick={() => createScopesFromClusters()} disabled={aiScopesBusy}
+                  style={{ padding: '6px 14px', borderRadius: 8, border: 'none', background: '#1d1d1f', color: '#fff', fontWeight: 700, fontSize: 13, cursor: aiScopesBusy ? 'wait' : 'pointer' }}>
+                  {aiScopesBusy ? '⏳ Создаю области…' : '⚡ Создать области из всех кластеров'}
+                </button>
+                <span style={{ color: '#8e8e93', fontSize: 11 }}>AI сам подберёт источники по дереву; потом можно поправить вручную через 🗂</span>
+              </div>
+              {aiScopeStat.length > 0 && (
+                <div style={{ marginTop: 6, fontSize: 12 }}>
+                  {aiScopeStat.map((r, i) => (
+                    <div key={i} style={{ padding: '1px 0', color: r.st === 'err' ? '#e74c3c' : r.st === 'ok' ? '#1e7e34' : '#8e8e93' }}>
+                      {r.st === 'ok' ? '✅' : r.st === 'err' ? '❌' : r.st === 'run' ? '⏳' : r.st === 'skip' ? '➖' : '⚪'} {r.name}{r.msg ? ` — ${r.msg}` : ''}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      {aiProg && (aiBusy || aiProg.done > 0) && (
+        <div style={{ background: '#f5f0fa', border: '1px solid #7c3aed', borderRadius: 10, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>
+          🤖 AI-извлечение: обработано {aiProg.done}{aiProg.total ? ' из ' + aiProg.total : ''} документов · сущностей добавлено {aiProg.added} · AI-связей {aiProg.links}{aiProg.newTypes ? ` · 🧠 новых типов: ${aiProg.newTypes}` : ''}{aiProg.rels ? ` · связей сущностей: ${aiProg.rels}` : ''}
+          {aiBusy && (
+            <span style={{ marginLeft: 10 }}>
+              <button onClick={aiPauseResume}
+                style={{ padding: '3px 10px', borderRadius: 6, border: '1px solid #7c3aed', background: '#fff', color: '#7c3aed', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                {aiPaused ? '▶ Продолжить' : '⏸ Пауза'}
+              </button>
+              <button onClick={aiAbort}
+                style={{ padding: '3px 10px', borderRadius: 6, border: '1px solid #e74c3c', background: '#fff', color: '#e74c3c', fontSize: 12, fontWeight: 700, cursor: 'pointer', marginLeft: 6 }}>
+                ⏹ Прервать
+              </button>
+              <span style={{ color: '#7c3aed', marginLeft: 8 }}>{aiPaused ? '— на паузе' : '— идёт обработка…'}</span>
+            </span>
+          )}
+          {!aiBusy && aiProg.done > 0 && aiProg.total != null && aiProg.done < aiProg.total && (
+            <span style={{ marginLeft: 10 }}>
+              <button onClick={() => aiExtract(aiProg.done)}
+                style={{ padding: '3px 10px', borderRadius: 6, border: '1px solid #7c3aed', background: '#7c3aed', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                ▶ Продолжить с {aiProg.done}
+              </button>
+              <span style={{ color: '#8e8e93', marginLeft: 8 }}>— прервано, можно продолжить с места остановки</span>
+            </span>
+          )}
+        </div>
+      )}
       {report && (
         <div style={{ background: '#e8f8ef', border: '1px solid #34c759', borderRadius: 10, padding: '8px 12px', fontSize: 13, marginBottom: 10 }}>
           ✅ Граф построен: документов {report.docs} · 🏦 движений {report.movements != null ? report.movements : '—'} · новых сущностей {report.entitiesNew} · привязок {report.docEntities} · связей {report.links}
@@ -2685,7 +4105,9 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
       {loading && <div style={{ color: '#8e8e93', fontSize: 13, marginBottom: 8 }}>⏳ Загружаю сущности…</div>}
       {!loading && entities.length === 0 && !err && !graph && (
         <div style={{ color: '#8e8e93', fontSize: 14, margin: '20px 0' }}>
-          Сущностей пока нет. Нажмите «🔄 Построить связи» — граф соберётся из всех распознанных документов (без расхода AI-квоты).
+          {entElsewhere
+            ? <>В этой области сущностей нет, но в других областях есть <b>{entElsewhere}</b>.<br />Переключите область в селекторе выше (🌐 Все документы) или нажмите «🔄 Построить связи» для ТЕКУЩЕЙ области — граф строится отдельно в каждой области.</>
+            : <>Сущностей пока нет. Нажмите «🔄 Построить связи» — граф соберётся из всех распознанных документов (без расхода AI-квоты).</>}
         </div>
       )}
       <div style={{ margin: '0 0 8px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -2704,7 +4126,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
       {graph && !graphLoading && (
         <div>
           <div style={{ fontSize: 14, margin: '6px 0', color: '#1d1d1f' }}>
-            <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: ENT_TYPE_COLORS[graph.entity.type] || '#8e8e93', marginRight: 6 }} />
+            <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: entColor(graph.entity.type), marginRight: 6 }} />
             <b>{graph.entity.label}</b> <span style={{ color: '#8e8e93' }}>({graph.entity.typeLabel})</span>
             <span style={{ color: '#8e8e93' }}> — документов: {graph.docs.length}, связанных сущностей: {graph.relEntities.length}</span>
             <button onClick={() => setGraph(null)} style={{ marginLeft: 10, border: '1px solid #d0d0d5', background: '#fff', borderRadius: 6, padding: '2px 10px', fontSize: 12, cursor: 'pointer' }}>✕ Скрыть</button>
@@ -2718,7 +4140,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
                   const other = mineIsA ? l.b : l.a;
                   return (
                     <div key={i} style={{ padding: '3px 0', borderBottom: '1px solid #e9e0f5', color: '#3a3a3c' }}>
-                      <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: '50%', background: ENT_TYPE_COLORS[other.type] || '#8e8e93', marginRight: 6 }} />
+                      <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: '50%', background: entColor(other.type), marginRight: 6 }} />
                       {mineIsA
                         ? <span>{l.typeLabel} → <a onClick={() => openGraph(other.id)} style={{ color: '#0071e3', cursor: 'pointer', fontWeight: 600 }}>{other.label}</a> <span style={{ color: '#8e8e93' }}>({other.typeLabel})</span></span>
                         : <span><a onClick={() => openGraph(other.id)} style={{ color: '#0071e3', cursor: 'pointer', fontWeight: 600 }}>{other.label}</a> <span style={{ color: '#8e8e93' }}>({other.typeLabel})</span> → {l.typeLabel} → эта сущность</span>}
@@ -2733,13 +4155,13 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
               {/* связи документ-документ */}
               {visLinks.map((l, i) => {
                 const a = posByDocId.get(String(l.doc_a)), b = posByDocId.get(String(l.doc_b));
-                return <line key={'l' + i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#c7c7cc" strokeWidth={1.2} strokeDasharray={l.link_type === 'same_amount_date' ? '4 3' : undefined} />;
+                return <line key={'l' + i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={l.created_by === 'ai' ? '#7c3aed' : '#c7c7cc'} strokeWidth={1.2} strokeDasharray={(l.link_type === 'same_amount_date' || l.created_by === 'ai') ? '4 3' : undefined} />;
               })}
               {/* связи сущность-документ */}
               {docPos.map((p, i) => <line key={'c' + i} x1={CX} y1={CY} x2={p.x} y2={p.y} stroke="#0071e3" strokeOpacity={0.35} strokeWidth={1.5} />)}
               {/* центральная сущность */}
               <g>
-                <circle cx={CX} cy={CY} r={40} fill={ENT_TYPE_COLORS[graph.entity.type] || '#8e8e93'} />
+                <circle cx={CX} cy={CY} r={40} fill={entColor(graph.entity.type)} />
                 <text x={CX} y={CY - 46} textAnchor="middle" fontSize={14} fontWeight={700} fill="#1d1d1f">{String(graph.entity.label).slice(0, 28)}</text>
                 <text x={CX} y={CY + 5} textAnchor="middle" fontSize={11} fill="#fff">{graph.entity.typeLabel}</text>
               </g>
@@ -2763,7 +4185,7 @@ function LinksTab({ token, isMobileView, onOpenDoc, canBuild }) {
               {relPos.map((p, i) => (
                 <g key={'e' + i} onClick={() => openGraph(p.e.id)} style={{ cursor: 'pointer' }}>
                   <title>{p.e.typeLabel}: {p.e.label} — общих документов: {p.e.shared}</title>
-                  <rect x={p.x - 55} y={p.y - 14} width={110} height={28} rx={14} fill="#fff" stroke={ENT_TYPE_COLORS[p.e.type] || '#8e8e93'} strokeWidth={1.6} />
+                  <rect x={p.x - 55} y={p.y - 14} width={110} height={28} rx={14} fill="#fff" stroke={entColor(p.e.type)} strokeWidth={1.6} />
                   <text x={p.x} y={p.y + 4} textAnchor="middle" fontSize={10.5} fill="#1d1d1f">{String(p.e.label).slice(0, 16)} ×{p.e.shared}</text>
                 </g>
               ))}
@@ -4408,6 +5830,18 @@ function App() {
   const [scanResultOpen, setScanResultOpen] = useState(false);
   // По умолчанию — Kimi K3 (бывший дефолт Groq Llama 4 Scout снят Groq с поддержки)
   const [selectedModel, setSelectedModel] = useState('kimi-kimi-k3');
+  // v152: свой промпт для AI — редактируется во вкладке «Загрузка», хранится локально, уходит на сервер с каждым распознаванием
+  const [customPrompt, setCustomPrompt] = useState(() => { try { return localStorage.getItem('hh_custom_prompt') || ''; } catch (e) { return ''; } });
+  const [promptEditorOpen, setPromptEditorOpen] = useState(false);
+  const [basePrompt, setBasePrompt] = useState(''); // v153: базовый промпт (только просмотр/копирование)
+  const loadBasePrompt = async () => {
+    try {
+      const r = await fetch(`${API_URL}/api/prompts/current?token=${token}&currency=${currency || 'auto'}&docType=${docType || 'auto'}`);
+      const d = await r.json();
+      if (d.prompt) setBasePrompt(d.prompt);
+    } catch (e) { setBasePrompt('(не удалось загрузить: ' + e.message + ')'); }
+  };
+  const saveCustomPrompt = (v) => { setCustomPrompt(v); try { localStorage.setItem('hh_custom_prompt', v); } catch (e) {} };
   // Свой URL Mac OCR (v52.2): Safari/Chrome блокируют fetch с https-страницы на http://127.0.0.1 (mixed content).
   // Решение — HTTPS-туннель cloudflared на порт 8787; URL хранится в localStorage 'mac_ocr_url_v1'
   const [macOcrUrl, setMacOcrUrl] = useState(() => {
@@ -4674,6 +6108,7 @@ function App() {
   const mobileTabsOrder = [
     user?.role !== 'viewer' && tabAllowed('upload') && 'upload',
     tabAllowed('list') && 'list',
+    tabAllowed('parse') && 'parse',
     tabAllowed('cash') && 'cash',
     (user?.role === 'admin' || user?.role === 'manager' || user?.role === 'user') && tabAllowed('crm') && 'crm',
     tabAllowed('analysis') && 'analysis',
@@ -4999,7 +6434,8 @@ function App() {
         // Проверка, что бэкенд умеет принимать готовые тексты (v52+), иначе чек сохранится пустым
         try {
           const h = await fetch(`${API_URL}/api/health`).then(r => r.json());
-          if (!h.build || h.build < 'v52') throw new Error('old');
+          const hb = parseInt(String(h.build || '').replace(/^v/, ''), 10); // v144.1: ЧИСЛОВОЕ сравнение — 'v144' < 'v52' строкой!
+          if (!h.build || !(hb >= 52)) throw new Error('old');
         } catch (_) {
           throw new Error('Бэкенд householder-api устарел и не принимает локальный OCR. Запушьте новый index.js и сделайте redeploy (в /api/health должно быть build v52+).');
         }
@@ -5113,6 +6549,7 @@ function App() {
       }
       if (allowDuplicate) formData.append('allow_duplicate', '1');
       formData.append('model', textLayerOnly ? 'pdf-text-layer' : effModel);
+      if (customPrompt.trim()) formData.append('custom_prompt', customPrompt.trim());
       formData.append('currency', currency);
       formData.append('docType', docType);
       formData.append('subtype', subtype);
@@ -5270,6 +6707,7 @@ ${receiptData.failover.from} — недоступна
       formData.append('image', fileToUpload);
       if (allowDuplicate) formData.append('allow_duplicate', '1');
       formData.append('model', selectedModel);
+      if (customPrompt.trim()) formData.append('custom_prompt', customPrompt.trim());
       formData.append('currency', currency);
       formData.append('docType', docType);
       formData.append('subtype', subtype);
@@ -5456,7 +6894,8 @@ ${receiptData.failover.from} — недоступна
     if (selectedModel === 'local-mac-ocr') {
       try {
         const h = await fetch(`${API_URL}/api/health`).then(r => r.json());
-        if (!h.build || h.build < 'v52') throw new Error('old');
+        const hb = parseInt(String(h.build || '').replace(/^v/, ''), 10); // v144.1: ЧИСЛОВОЕ сравнение — 'v144' < 'v52' строкой!
+        if (!h.build || !(hb >= 52)) throw new Error('old');
       } catch (_) {
         alert('Бэкенд householder-api устарел и не принимает локальный OCR. Запушьте новый index.js и сделайте redeploy (в /api/health должно быть build v52+).');
         setRecognizing(false);
@@ -5490,6 +6929,7 @@ ${receiptData.failover.from} — недоступна
             fd.append('pages', up);
             fd.append('ocr_texts', JSON.stringify([j.text]));
             fd.append('model', 'local-mac-ocr');
+            if (customPrompt.trim()) fd.append('custom_prompt', customPrompt.trim());
             fd.append('currency', currency);
             fd.append('docType', docType);
             fd.append('subtype', subtype);
@@ -5529,6 +6969,7 @@ ${receiptData.failover.from} — недоступна
           const formData = new FormData();
           formData.append('image', fileToUpload);
           formData.append('model', selectedModel);
+      if (customPrompt.trim()) formData.append('custom_prompt', customPrompt.trim());
           formData.append('currency', currency);
           formData.append('docType', docType);
           formData.append('subtype', subtype);
@@ -7629,19 +9070,36 @@ ${bodyHtml}
     } catch (e) { console.error(e); }
   };
 
+  // v146: прогресс-бар пакетного перераспознавания
+  const [reprocessProg, setReprocessProg] = useState(null); // {total, done, ok, failed, currentName, startedAt, finished, lastError}
+
   const bulkReprocess = async () => {
     if (!window.confirm(`Перераспознать ${selectedReceiptIds.size} чеков?`)) return;
     setLoading(true);
     const ids = Array.from(selectedReceiptIds);
-    for (const id of ids) {
+    const nameOf = (id) => {
+      const r = receipts.find(x => x.id === id);
+      if (!r) return `#${id}`;
+      const dt = r.receipt_date ? new Date(r.receipt_date).toLocaleDateString('ru-RU') : '';
+      return `${r.store_name || 'Документ'}${dt ? ' · ' + dt : ''}`;
+    };
+    setReprocessProg({ total: ids.length, done: 0, ok: 0, failed: 0, currentName: nameOf(ids[0]), startedAt: Date.now(), finished: false, lastError: '' });
+    let ok = 0, failed = 0, lastError = '';
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      setReprocessProg(pr => pr ? { ...pr, currentName: nameOf(id), done: i } : pr);
       try {
-        await fetch(`${API_URL}/api/reprocess-receipt?token=${token}`, {
+        const res = await fetch(`${API_URL}/api/reprocess-receipt?token=${token}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ receiptId: id, model: selectedModel })
+          body: JSON.stringify({ receiptId: id, model: selectedModel, custom_prompt: customPrompt.trim() || undefined })
         });
-      } catch (e) { console.error('Reprocess error', e); }
+        if (res.ok) { ok++; }
+        else { failed++; const d = await res.json().catch(() => ({})); lastError = d.error || `HTTP ${res.status}`; }
+      } catch (e) { failed++; lastError = e.message; console.error('Reprocess error', e); }
+      setReprocessProg(pr => pr ? { ...pr, done: i + 1, ok, failed, lastError } : pr);
     }
+    setReprocessProg(pr => pr ? { ...pr, finished: true, currentName: '' } : pr);
     setSelectedReceiptIds(new Set());
     loadReceipts();
     setLoading(false);
@@ -8077,7 +9535,7 @@ ${bodyHtml}
 
   return (
     <div className="App" onTouchStart={onAppTouchStart} onTouchEnd={onAppTouchEnd}>
-      <header className="mini-header" style={{ borderRadius: 16, margin: '10px 12px 0', overflow: 'hidden' }}>
+      <header className="mini-header" style={{ borderRadius: 16, margin: '10px 12px 0' }}>
         <div className="header-left">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, width: '100%' }}>
             <div className="model-selector-wrap" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -8114,7 +9572,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-03 · v109 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-09 · v171 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -8127,10 +9585,10 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-03 · v109</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-09 · v171</div>
           )}
-          <style>{'.tabs-inline button.active{background:#0071e3 !important;color:#fff !important;border-color:#0071e3 !important;box-shadow:0 2px 8px rgba(0,113,227,0.3)}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}' + MOBILE_CSS}</style>
-          <nav className="tabs-inline">
+          <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
+          <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
             {user?.role !== 'viewer' && tabAllowed('upload') && (
               <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>Загрузка</button>
             )}
@@ -8173,6 +9631,18 @@ ${bodyHtml}
             {tabAllowed('list') && (
               <button className={activeTab === 'links' ? 'active' : ''} onClick={() => setActiveTab('links')}>
                 🔗 Связи
+              </button>
+            )}
+            {/* v119: вкладка «Парсинг» — свои парсеры сайтов */}
+            {tabAllowed('parse') && (
+              <button className={activeTab === 'parse' ? 'active' : ''} onClick={() => setActiveTab('parse')}>
+                🌐 Парсинг
+              </button>
+            )}
+            {/* v141: вкладка «Цены» — сравнение чеков/фактур со спарсенным каталогом */}
+            {tabAllowed('compare') && (
+              <button className={activeTab === 'compare' ? 'active' : ''} onClick={() => setActiveTab('compare')}>
+                ⚖️ Цены
               </button>
             )}
             {/* v83: чат с бейджем непрочитанных */}
@@ -8265,6 +9735,7 @@ ${bodyHtml}
             {tabAllowed('taxes') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('taxes'); loadReceipts(); loadBankMovements(); }}>🧾 Налоги</button>}
             {tabAllowed('docs') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('docs'); }}>📁 Документы</button>}
             {tabAllowed('list') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('links'); }}>🔗 Связи</button>}
+            {tabAllowed('parse') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('parse'); }}>🌐 Парсинг</button>}
             {tabAllowed('chat') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('chat'); }}>💬 Чат{chatUnreadTotal > 0 ? ` (${chatUnreadTotal})` : ''}</button>}
             {user?.role === 'admin' && <button onClick={() => { setMoreNavOpen(false); setActiveTab('users'); }}>👥 Доступ</button>}
             {user?.role === 'admin' && <button onClick={() => { setMoreNavOpen(false); setActiveTab('log'); }}>📋 Журнал</button>}
@@ -8885,6 +10356,39 @@ ${bodyHtml}
                   return (
                 <div className="info-block">
                   <h3>{['invoice', 'proposal', 'bill'].includes(viewModal.document_type) ? 'Позиции' : 'Товары'} ({allItems.length})</h3>
+                  {/* v160: СВОДНАЯ таблица — всегда первая в блоке товаров; итоги карточки считаются из неё */}
+                  {allItems.length > 0 && (() => {
+                    const sumQty = allItems.reduce((a, it) => a + (Number(it && it.quantity) || 0), 0);
+                    const sumTotal = Math.round(allItems.reduce((a, it) => a + (Number(it ? (it.total ?? it.price) : 0) || 0), 0) * 100) / 100;
+                    return (
+                      <div style={{ marginBottom: 12, border: '1px solid #d5d5da', borderRadius: 10, overflow: 'hidden' }}>
+                        <div style={{ background: '#f5f5f7', padding: '6px 10px', fontSize: 12.5, fontWeight: 700, color: '#1d1d1f' }}>
+                          📊 Сводная таблица ({allItems.length} поз.) — итог: <span style={{ color: '#0071e3' }}>{sumTotal} {viewModal.currency || ''}</span>
+                        </div>
+                        <table className="items-table" style={{ marginBottom: 0 }}>
+                          <thead><tr><th>№</th><th>Артикул</th><th>Товар</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead>
+                          <tbody>
+                            {allItems.map((item, i) => (
+                              <tr key={i}>
+                                <td>{i + 1}</td>
+                                <td style={{ fontFamily: 'monospace', fontSize: 11, color: item.article ? '#1d1d1f' : '#c7c7cc', whiteSpace: 'nowrap' }}>{item.article || '—'}</td>
+                                <td><HighlightText text={item.name_ru || item.name || '—'} query={searchQuery} /></td>
+                                <td>{item.quantity}</td>
+                                <td>{item.price}</td>
+                                <td>{item.total}</td>
+                              </tr>
+                            ))}
+                            <tr style={{ fontWeight: 700, background: '#fafafa' }}>
+                              <td colSpan={3} style={{ textAlign: 'right' }}>ИТОГО:</td>
+                              <td>{sumQty}</td>
+                              <td></td>
+                              <td>{sumTotal}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })()}
                   {paged && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '2px 0 10px' }}>
                       <button onClick={() => setItemsPage(cur - 1)} disabled={cur <= 1} style={{ ...pageBtn, opacity: cur <= 1 ? 0.35 : 1 }}>‹</button>
@@ -8894,11 +10398,12 @@ ${bodyHtml}
                     </div>
                   )}
                   <table className="items-table">
-                    <thead><tr><th>№</th><th>Товар</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead>
+                    <thead><tr><th>№</th><th>Артикул</th><th>Товар</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead>
                     <tbody>
                       {rowsIt.map(({ item, i }) => (
                         <tr key={i}>
                           <td>{i + 1}</td>
+                          <td style={{ fontFamily: 'monospace', fontSize: 11, color: item.article ? '#1d1d1f' : '#c7c7cc', whiteSpace: 'nowrap' }}>{item.article || '—'}</td>
                           <td><HighlightText text={item.name_ru || item.name || '—'} query={searchQuery} /></td>
                           <td>{item.quantity}</td>
                           <td>{item.price}</td>
@@ -9052,6 +10557,39 @@ ${bodyHtml}
             >
               🖥 Локально (Mac OCR, бесплатно)
             </button>
+            <div style={{ flexBasis: '100%', marginTop: 6 }}>
+              <button onClick={() => { setPromptEditorOpen(o => { if (!o && !basePrompt) loadBasePrompt(); return !o; }); }}
+                style={{ background: customPrompt.trim() ? '#fff3cd' : 'rgba(255,255,255,.7)', border: '1px solid #d5d5da', borderRadius: 10, padding: '5px 12px', fontSize: 12.5, cursor: 'pointer', color: '#1d1d1f' }}>
+                📝 Свой промпт для AI {customPrompt.trim() ? '· АКТИВЕН ✓' : ''} {promptEditorOpen ? '▴' : '▾'}
+              </button>
+              {promptEditorOpen && (
+                <div style={{ marginTop: 6, background: '#fff', border: '1px solid #d5d5da', borderRadius: 12, padding: 10 }}>
+                  <div style={{ fontSize: 12, color: '#6e6e73', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <b>Текущий базовый промпт</b> (только просмотр — текст можно выделять и копировать; учитывает выбранные Валюту и Тип)
+                    <button onClick={loadBasePrompt} style={{ marginLeft: 'auto', border: '1px solid #d5d5da', background: '#f5f5f7', borderRadius: 8, padding: '2px 10px', cursor: 'pointer', fontSize: 12 }}>↻ Обновить</button>
+                  </div>
+                  <textarea
+                    value={basePrompt || 'Загрузка…'}
+                    readOnly
+                    rows={10}
+                    onFocus={e => e.target.select()}
+                    style={{ width: '100%', boxSizing: 'border-box', fontFamily: 'monospace', fontSize: 11.5, color: '#48484a', background: '#f7f7f9', border: '1px solid #e5e5ea', borderRadius: 8, padding: 8, resize: 'vertical', marginBottom: 8 }}
+                  />
+                  <div style={{ fontSize: 12, color: '#6e6e73', marginBottom: 4 }}><b>Ваши дополнительные инструкции</b> (приоритет выше базовых правил):</div>
+                  <textarea
+                    value={customPrompt}
+                    onChange={e => saveCustomPrompt(e.target.value)}
+                    rows={6}
+                    placeholder={'Дополнительные инструкции для AI поверх базового промпта.\nНапример: «Артикул бери из колонки Nº Art. Если итога нет — суммируй позиции».\nПустое поле = стандартный промпт. Сохраняется автоматически.'}
+                    style={{ width: '100%', boxSizing: 'border-box', fontFamily: 'monospace', fontSize: 12.5, border: '1px solid #e5e5ea', borderRadius: 8, padding: 8, resize: 'vertical' }}
+                  />
+                  <div style={{ display: 'flex', gap: 8, marginTop: 6, alignItems: 'center', fontSize: 12, color: '#6e6e73' }}>
+                    <span>{customPrompt.trim() ? `Активен · ${customPrompt.trim().length} симв. — применяется ко ВСЕМ распознаваниям (загрузка, папка, перераспознать)` : 'Сейчас используется стандартный промпт'}</span>
+                    {customPrompt.trim() && <button onClick={() => saveCustomPrompt('')} style={{ marginLeft: 'auto', border: 'none', background: '#ffe5e5', color: '#d70015', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>Сбросить</button>}
+                  </div>
+                </div>
+              )}
+            </div>
             <div className="toolbar-controls hide-mobile">
               <div className="control-group compact">
                 <label>Валюта:</label>
@@ -9506,6 +11044,34 @@ ${bodyHtml}
                 )}
               </div>
 
+              {/* v146: прогресс пакетного перераспознавания */}
+              {reprocessProg && (
+                <div style={{ flexBasis: '100%', background: 'linear-gradient(180deg,#ffffff,#f4f4f8)', border: '1px solid #d5d5da', borderRadius: 12, padding: '10px 14px', marginTop: 8, fontSize: 13, color: '#1d1d1f' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
+                    <strong>{reprocessProg.finished ? '✅ Перераспознавание завершено' : '🔄 Перераспознавание…'}</strong>
+                    <span style={{ color: '#6e6e73' }}>{reprocessProg.done} / {reprocessProg.total}</span>
+                    <span style={{ color: '#0a7d00' }}>✔ {reprocessProg.ok}</span>
+                    {reprocessProg.failed > 0 && <span style={{ color: '#d70015' }}>✖ {reprocessProg.failed}</span>}
+                    <button onClick={() => setReprocessProg(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', fontSize: 15, cursor: 'pointer', color: '#8e8e93' }}>✕</button>
+                  </div>
+                  <div style={{ height: 8, borderRadius: 4, background: '#e5e5ea', overflow: 'hidden', marginBottom: 6 }}>
+                    <div style={{ height: '100%', width: `${reprocessProg.total ? Math.round(reprocessProg.done / reprocessProg.total * 100) : 0}%`, background: reprocessProg.failed > 0 ? 'linear-gradient(90deg,#5856d6,#ff9500)' : '#5856d6', transition: 'width .3s' }} />
+                  </div>
+                  {!reprocessProg.finished && (
+                    <div style={{ color: '#6e6e73', fontSize: 12.5 }}>
+                      Сейчас: <b>{reprocessProg.currentName}</b> — OCR → распознавание AI → сохранение в базу. Чеки обрабатываются по одному, страницу можно не закрывать.
+                    </div>
+                  )}
+                  {reprocessProg.finished && (
+                    <div style={{ color: '#6e6e73', fontSize: 12.5 }}>
+                      Готово: {reprocessProg.ok} из {reprocessProg.total}
+                      {reprocessProg.failed > 0 ? `, ошибок: ${reprocessProg.failed}${reprocessProg.lastError ? ' (последняя: ' + reprocessProg.lastError + ')' : ''}` : ''}.
+                      {' '}Заняло {Math.max(1, Math.round((Date.now() - reprocessProg.startedAt) / 1000))} c. Список обновлён.
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Нижняя строка — Сменить... во всю ширину */}
               <div className="bulk-actions-row bulk-actions-row-full" style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 <select className="bulk-select hide-mobile" style={{ flex: '0 0 auto' }} onChange={(e) => { const v = e.target.value; if (!v) return; bulkChangeObject(v); e.target.value = ''; }}>
@@ -9663,6 +11229,9 @@ ${bodyHtml}
             <p className="empty-state">Нет чеков. Загрузите первый!</p>
           ) : (
             <>
+              {itemsPerPage !== 'all' && totalPages > 1 && (
+                <PageBar page={currentPage} totalPages={totalPages} onGo={(p) => { setCurrentPage(p); window.scrollTo({ top: 0, behavior: 'smooth' }); }} style={{ marginBottom: 12 }} />
+              )}
               {dateRailGroups.length >= 2 && (
                 <div style={isMobileView
                   ? { position: 'fixed', left: 6, right: 6, bottom: 'calc(64px + env(safe-area-inset-bottom))', zIndex: 60, display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, background: 'rgba(255,255,255,0.94)', border: '1px solid #e3e6ea', borderRadius: 12, padding: '6px 10px', boxShadow: '0 2px 10px rgba(0,0,0,0.10)', overflowX: 'auto', overflowY: 'hidden', WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none', boxSizing: 'border-box' }
@@ -9795,10 +11364,12 @@ ${bodyHtml}
                       ) : (
                         <div className="no-image-thumb"> Чек</div>
                       )}
-                      <div className="receipt-actions">
-                        <button onClick={() => setViewModal(receipt)}> Просмотр</button>
+                      <div className="receipt-actions" style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
+                        <button onClick={() => setViewModal(receipt)} title="Просмотр" aria-label="Просмотр"
+                          style={{ width: 32, height: 32, borderRadius: '50%', border: '1px solid #d0d7de', background: '#fff', cursor: 'pointer', fontSize: 15, lineHeight: 1, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>👁</button>
                         {user?.role === 'admin' && (
-                          <button onClick={() => deleteReceipt(receipt.id)} className="danger"> Удалить</button>
+                          <button onClick={() => deleteReceipt(receipt.id)} title="Удалить" aria-label="Удалить" className="danger"
+                            style={{ width: 32, height: 32, borderRadius: '50%', border: '1px solid #f5c6c6', background: '#fff', color: '#d70015', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>🗑</button>
                         )}
                       </div>
                     </div>
@@ -9807,13 +11378,7 @@ ${bodyHtml}
                 })}
               </div>
 
-              {itemsPerPage !== 'all' && totalPages > 1 && (
-                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 20 }}>
-                  <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} style={{ padding: '8px 16px', borderRadius: 6, border: 'none', background: currentPage === 1 ? '#ddd' : '#3498db', color: 'white', cursor: currentPage === 1 ? 'not-allowed' : 'pointer' }}>◀ Назад</button>
-                  <span>Страница {currentPage} из {totalPages}</span>
-                  <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} style={{ padding: '8px 16px', borderRadius: 6, border: 'none', background: currentPage === totalPages ? '#ddd' : '#3498db', color: 'white', cursor: currentPage === totalPages ? 'not-allowed' : 'pointer' }}>Вперёд ▶</button>
-                </div>
-              )}
+
             </>
           )}
         </div>
@@ -10924,6 +12489,13 @@ ${bodyHtml}
         <LinksTab token={token} isMobileView={isMobileView} canBuild={user?.role === 'admin' || user?.role === 'manager'}
           onOpenDoc={(id) => { const r = receipts.find(x => String(x.id) === String(id)); if (r) setViewModal(r); else { alert('Документ не загружен в список — откройте вкладку «Фактуры» и найдите его там.'); } }} />
       )}
+      {activeTab === 'compare' && tabAllowed('compare') && (
+        <CompareLmTab API_URL={API_URL} token={token} />
+      )}
+
+      {activeTab === 'parse' && tabAllowed('parse') && (
+        <ParseTab token={token} isMobileView={isMobileView} canRun={user?.role === 'admin' || user?.role === 'manager'} />
+      )}
       {/* ===================== v90: ВКЛАДКА CASH — ОТДЕЛЬНАЯ структура (cash_movements) =====================
           Своя таблица, НЕ связана с банковскими выписками и налогами. Строки: дата, контрагент, сумма со знаком
           (− расход красным / + приход зелёным), выбор/удаление, добавление, привязка фактур через вкладку «Чеки». */}
@@ -11206,3 +12778,147 @@ ${bodyHtml}
 }
 
 export default App;
+
+// ========== v141: вкладка «⚖️ Цены» — сравнение позиций чеков/фактур со спарсенным каталогом ==========
+function CompareLmTab({ API_URL, token }) {
+  const [store, setStore] = useState('leroy');
+  const [days, setDays] = useState(365);
+  const [busy, setBusy] = useState(false);
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState('');
+  const [flt, setFlt] = useState('all');
+
+  const run = async () => {
+    setBusy(true); setErr(''); setData(null);
+    try {
+      const r = await fetch(`${API_URL}/api/compare/lm?token=${token}&store=${encodeURIComponent(store)}&days=${days}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      setData(j);
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+
+  const verdict = (r) => {
+    if (!r.match) return <span style={{ fontSize: 10.5, color: '#8e8e93', background: '#f5f5f7', borderRadius: 8, padding: '2px 8px' }}>❓ не найдено</span>;
+    if (r.diff == null) return <span style={{ fontSize: 10.5, color: '#8e8e93', background: '#f5f5f7', borderRadius: 8, padding: '2px 8px' }}>— нет цены</span>;
+    if (Math.abs(r.diff) < 0.011) return <span style={{ fontSize: 10.5, color: '#1e7e34', background: '#e8f8ef', borderRadius: 8, padding: '2px 8px' }}>✅ цена та же</span>;
+    if (r.diff > 0) return <span style={{ fontSize: 10.5, color: '#d70015', background: '#fdecea', borderRadius: 8, padding: '2px 8px' }}>🔻 в чеке дороже на {r.diff}</span>;
+    return <span style={{ fontSize: 10.5, color: '#0e7490', background: '#ecfeff', borderRadius: 8, padding: '2px 8px' }}>🔺 в чеке дешевле на {-r.diff}</span>;
+  };
+
+  const rows = (data && data.rows ? data.rows : []).filter(r => {
+    if (flt === 'over') return r.diff != null && r.diff > 0.01;
+    if (flt === 'under') return r.diff != null && r.diff < -0.01;
+    if (flt === 'same') return r.diff != null && Math.abs(r.diff) <= 0.01;
+    if (flt === 'none') return !r.match;
+    return true;
+  });
+
+  const exportCsv = () => {
+    const esc = (v) => { v = v == null ? '' : String(v); return /[";\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    const head = ['Дата', 'Чек', 'Товар из чека', 'Артикул магазина', 'Кол-во', 'Цена в чеке', 'Товар в каталоге', 'Артикул каталога', 'Цена каталога', 'Без скидки', 'Δ ед.', 'Δ %', 'Совпадение', 'URL'];
+    const lines = [head.join(';')];
+    for (const r of rows) lines.push([r.date, r.receipt_id, r.name, r.article || '', r.qty, r.price_paid, r.match ? r.match.name : '', r.match ? r.match.article : '', r.match ? r.match.price : '', r.match && r.match.price_original != null ? r.match.price_original : '', r.diff != null ? r.diff : '', r.diff_pct != null ? r.diff_pct : '', r.match ? r.match.method + ' ' + r.match.score + '%' : '', r.match ? r.match.url : ''].map(esc).join(';'));
+    const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'сравнение-цен.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  const sm = data && data.summary;
+  return (
+    <div style={{ padding: '6px 15px 20px' }}>
+      <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: 12, marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>⚖️ Сравнение цен чеков/фактур со спарсенным каталогом Leroy Merlin</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <input value={store} onChange={e => setStore(e.target.value)} placeholder="Магазин (store_name), напр. leroy"
+            style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13, width: 240 }} />
+          <select value={days} onChange={e => setDays(parseInt(e.target.value, 10))}
+            style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #d0d0d5', fontSize: 13 }}>
+            <option value={30}>за 30 дней</option>
+            <option value={90}>за 90 дней</option>
+            <option value={180}>за 180 дней</option>
+            <option value={365}>за год</option>
+            <option value={1095}>за 3 года</option>
+          </select>
+          <button onClick={run} disabled={busy}
+            style={{ padding: '8px 18px', borderRadius: 8, border: 'none', background: '#0071e3', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>{busy ? '⏳ Сопоставляю…' : '⚖️ Сравнить'}</button>
+          {data && <button onClick={exportCsv}
+            style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #1e7e34', background: '#e8f5e9', color: '#1e7e34', fontSize: 12, cursor: 'pointer' }}>⬇ CSV</button>}
+        </div>
+        {err && <div style={{ marginTop: 8, fontSize: 12, color: '#d70015' }}>❌ {err}</div>}
+        {sm && (
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 10 }}>
+            <div style={{ background: '#f5f5f7', borderRadius: 10, padding: '8px 14px', fontSize: 12 }}>Позиций: <b>{sm.items}</b></div>
+            <div style={{ background: '#e8f8ef', borderRadius: 10, padding: '8px 14px', fontSize: 12, color: '#1e7e34' }}>Найдено в каталоге: <b>{sm.matched}</b></div>
+            <div style={{ background: '#f5f5f7', borderRadius: 10, padding: '8px 14px', fontSize: 12 }}>Потрачено: <b>{sm.spent} €</b></div>
+            <div style={{ background: '#f5f5f7', borderRadius: 10, padding: '8px 14px', fontSize: 12 }}>По текущим ценам каталога: <b>{sm.catalog} €</b></div>
+            <div style={{ background: sm.delta > 0 ? '#fdecea' : '#ecfeff', borderRadius: 10, padding: '8px 14px', fontSize: 12, color: sm.delta > 0 ? '#d70015' : '#0e7490' }}>
+              {sm.delta > 0 ? 'Переплата vs каталог' : 'Экономия vs каталог'}: <b>{sm.delta > 0 ? '+' : ''}{sm.delta} €</b>
+            </div>
+          </div>
+        )}
+        {sm && (
+          <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap', fontSize: 12 }}>
+            {[['all', 'Все'], ['over', '🔻 Дороже'], ['under', '🔺 Дешевле'], ['same', '✅ Та же цена'], ['none', '❓ Не найдено']].map(([k, l]) => (
+              <button key={k} onClick={() => setFlt(k)}
+                style={{ padding: '4px 12px', borderRadius: 999, border: flt === k ? 'none' : '1px solid #d0d0d5', background: flt === k ? '#0071e3' : '#f5f5f7', color: flt === k ? '#fff' : '#333', fontSize: 12, cursor: 'pointer' }}>{l}</button>
+            ))}
+          </div>
+        )}
+      </div>
+      {data && (
+        <div style={{ background: '#fff', border: '1px solid #e3e6ea', borderRadius: 12, padding: 12, overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ textAlign: 'left', color: '#8e8e93', borderBottom: '2px solid #f0f0f2' }}>
+                <th style={{ padding: '6px 8px' }}>Дата</th>
+                <th style={{ padding: '6px 8px' }}>Товар из чека</th>
+                <th style={{ padding: '6px 8px' }}>Артикул магазина</th>
+                <th style={{ padding: '6px 8px' }}>Кол-во</th>
+                <th style={{ padding: '6px 8px' }}>Цена в чеке</th>
+                <th style={{ padding: '6px 8px' }}>Товар в каталоге</th>
+                <th style={{ padding: '6px 8px' }}>Цена каталога</th>
+                <th style={{ padding: '6px 8px' }}>Δ</th>
+                <th style={{ padding: '6px 8px' }}>Совпадение</th>
+                <th style={{ padding: '6px 8px' }}>Итог</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i} style={{ borderBottom: '1px solid #f5f5f7' }}>
+                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', color: '#8e8e93' }}>{r.date || '—'}</td>
+                  <td style={{ padding: '6px 8px', minWidth: 180 }}>{r.name}</td>
+                  <td style={{ padding: '6px 8px', fontFamily: 'monospace', fontSize: 11, whiteSpace: 'nowrap', color: r.article ? '#1d1d1f' : '#c7c7cc' }}>{r.article || '—'}</td>
+                  <td style={{ padding: '6px 8px' }}>{r.qty}</td>
+                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}><b>{r.price_paid} €</b></td>
+                  <td style={{ padding: '6px 8px', minWidth: 180 }}>
+                    {r.match
+                      ? <a href={r.match.url} target="_blank" rel="noreferrer" style={{ color: '#0071e3', textDecoration: 'none' }}>{r.match.name}</a>
+                      : <span style={{ color: '#c7c7cc' }}>—</span>}
+                  </td>
+                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
+                    {r.match && r.match.price != null ? <b>{r.match.price} €</b> : '—'}
+                    {r.match && r.match.price_original != null && <span style={{ marginLeft: 5, fontSize: 10.5, color: '#8e8e93', textDecoration: 'line-through' }}>{r.match.price_original} €</span>}
+                  </td>
+                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', color: r.diff == null ? '#c7c7cc' : r.diff > 0.01 ? '#d70015' : r.diff < -0.01 ? '#0e7490' : '#1e7e34' }}>
+                    {r.diff != null ? (r.diff > 0 ? '+' : '') + r.diff + ' €' + (r.diff_pct != null ? ' (' + (r.diff_pct > 0 ? '+' : '') + r.diff_pct + '%)' : '') : '—'}
+                  </td>
+                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontSize: 11, color: '#8e8e93' }}>
+                    {r.match ? `${r.match.method === 'артикул' ? '🔢' : '🔤'} ${r.match.score}%` : '—'}
+                  </td>
+                  <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>{verdict(r)}</td>
+                </tr>
+              ))}
+              {!rows.length && <tr><td colSpan={10} style={{ padding: 16, textAlign: 'center', color: '#8e8e93' }}>Нет позиций под выбранный фильтр</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
