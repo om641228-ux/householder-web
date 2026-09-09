@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Householder — сборщик цен",
-  "version": "1.18.6",
+  "version": "1.19.0",
   "description": "Открывает товары из каталога Householder в фоновых вкладках и отправляет точные цены в систему.",
   "permissions": [
     "tabs",
     "scripting",
     "storage",
-    "alarms"
+    "alarms",
+    "sidePanel"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -16,12 +17,14 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_popup": "popup.html",
-    "default_title": "Сбор цен"
+    "default_title": "Открыть панель сбора цен"
   },
   "externally_connectable": {
     "matches": [
       "https://householder-web-production.up.railway.app/*"
     ]
+  },
+  "side_panel": {
+    "default_path": "popup.html"
   }
 }

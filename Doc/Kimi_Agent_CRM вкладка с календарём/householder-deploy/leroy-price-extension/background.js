@@ -1,6 +1,10 @@
 let running = false, stopped = false;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let lastProgress = '', progressAt = 0; // v1.15/v1.16: последний прогресс + метка времени — для опроса из приложения и самосброса зависания
+// v1.19.0: клик по иконке открывает БОКОВУЮ ПАНЕЛЬ (как у Data Scraper), а не всплывающий попап
+try { chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }); } catch (e) {}
+chrome.runtime.onInstalled.addListener(() => { try { chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }); } catch (e) {} });
+
 const progress = (text) => {
   lastProgress = text; progressAt = Date.now();
   try { chrome.storage.local.set({ lastProgress, progressAt }); } catch (e) {}

@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v169-2026-09-09', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v170-2026-09-09', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4679,9 +4679,13 @@ app.post('/api/parse/catalog/sync', requireAuth, requireRole('admin', 'manager')
     if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'Нужен URL sitemap XML' });
     let site = new URL(url).hostname;
     await parseThrottle(url);
-    const r = await axios.get(url, { ...parseAxiosOpts(url), maxContentLength: 40 * 1024 * 1024, responseType: 'text' });
+    const r = await axios.get(url, { ...parseAxiosOpts(url), maxContentLength: 60 * 1024 * 1024, responseType: 'arraybuffer' });
     if (r.status >= 400) throw new Error('HTTP ' + r.status + ' при загрузке sitemap');
-    const xml = String(r.data || '');
+    let sbuf = Buffer.from(r.data || Buffer.alloc(0));
+    if (/\.gz(?:$|[?#])/i.test(url) || (sbuf.length > 2 && sbuf[0] === 0x1f && sbuf[1] === 0x8b)) {
+      try { sbuf = require('zlib').gunzipSync(sbuf); } catch (e) { throw new Error('Не удалось распаковать gzip-sitemap: ' + e.message); } // v170: PrestaShop отдаёт sitemap в .xml.gz
+    }
+    const xml = sbuf.toString('utf8');
     if (/<sitemapindex/i.test(xml)) {
       const subs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/gi)].map(m => m[1].trim());
       return res.json({ ok: true, isIndex: true, subs });
@@ -4692,9 +4696,9 @@ app.post('/api/parse/catalog/sync', requireAuth, requireRole('admin', 'manager')
     let upserted = 0, errs = 0;
     for (let i = 0; i < items.length; i += 500) {
       const rows = items.slice(i, i + 500).map(it => {
-        const am = it.url.match(/-(\d{5,})\.html?/i) || it.url.match(/\/(\d{5,})(?:\.html?)?(?:[?#].*)?$/i) || it.url.match(/-(\d{5,})(?:[?#].*)?$/i); // v122: артикул = число перед .html; v161: конец URL; v165: Worten «…-7252144»
+        const am = it.url.match(/-(\d{5,})\.html?/i) || it.url.match(/\/(\d{5,})(?:\.html?)?(?:[?#].*)?$/i) || it.url.match(/-(\d{5,})(?:[?#].*)?$/i) || it.url.match(/\/(\d{1,7})-[a-z0-9][a-z0-9\-]*\.html?$/i); // v122: артикул = число перед .html; v161: конец URL; v165: Worten «…-7252144»; v170: PrestaShop «/269-slug.html»
         if (!am) return null; // v167: без артикула — это SEO/бренд/инфо-страница, не товар
-        return { site, url: it.url, name: it.name.slice(0, 300), image: it.image, article: am[1] || am[2] || am[3], last_seen: new Date().toISOString() };
+        return { site, url: it.url, name: it.name.slice(0, 300), image: it.image, article: am[1] || am[2] || am[3] || am[4], last_seen: new Date().toISOString() };
       }).filter(Boolean);
       const { error } = await supabaseAdmin.from('parse_products').upsert(rows, { onConflict: 'site,url' });
       if (error) {
