@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v171-2026-09-09', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v172-2026-09-09', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4699,6 +4699,23 @@ app.post('/api/parse/catalog/sync', requireAuth, requireRole('admin', 'manager')
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// v172: бренд и № производителя из НАЗВАНИЯ (MediaMarkt: «… - LG 65QNED72B6B, …» / «Samsung Galaxy S26, …»)
+function deriveBrandMpn(name, site) {
+  const res = { brand: null, mpn: null };
+  let seg = String(name || '').trim();
+  if (!seg) return res;
+  const parts = seg.split(/\s+-\s+/);
+  const hasDash = parts.length >= 2;
+  if (hasDash) seg = parts[1].trim();
+  else if (!/mediamarkt|tutrebol/i.test(String(site || ''))) return res; // без тире доверяем только магазинам с форматом «Бренд Модель, …»
+  const m = seg.match(/^([A-Za-zА-Яа-я&][\w&.\-]{0,29})\s+(.{2,60}?)(?:\s*,|\s*\(|$)/);
+  if (!m) return res;
+  const brand = m[1].trim(), mpn = m[2].trim();
+  if (brand.length < 2 || !/\d/.test(mpn)) return res; // в номере обязательна цифра — отсекает мусор
+  res.brand = brand.slice(0, 60); res.mpn = mpn.slice(0, 60);
+  return res;
+}
+
 // v171: общий разбор XML sitemap → parse_products (используется серверным синком и синком ЧЕРЕЗ БРАУЗЕР)
 async function upsertSitemapXml(xml, srcUrl) {
   if (/<sitemapindex/i.test(xml)) {
@@ -4714,7 +4731,8 @@ async function upsertSitemapXml(xml, srcUrl) {
     const rows = items.slice(i, i + 500).map(it => {
       const am = it.url.match(/-(\d{5,})\.html?/i) || it.url.match(/\/(\d{5,})(?:\.html?)?(?:[?#].*)?$/i) || it.url.match(/-(\d{5,})(?:[?#].*)?$/i) || it.url.match(/\/(\d{1,7})-[a-z0-9][a-z0-9\-]*\.html?$/i); // v122: артикул = число перед .html; v161: конец URL; v165: Worten «…-7252144»; v170: PrestaShop «/269-slug.html»
       if (!am) return null; // v167: без артикула — это SEO/бренд/инфо-страница, не товар
-      return { site, url: it.url, name: it.name.slice(0, 300), image: it.image, article: am[1] || am[2] || am[3] || am[4], last_seen: new Date().toISOString() };
+      const d = deriveBrandMpn(it.name, site); // v172: бренд/№ из названия
+      return { site, url: it.url, name: it.name.slice(0, 300), image: it.image, article: am[1] || am[2] || am[3] || am[4], brand: d.brand, mpn: d.mpn, last_seen: new Date().toISOString() };
     }).filter(Boolean);
     const { error } = await supabaseAdmin.from('parse_products').upsert(rows, { onConflict: 'site,url' });
     if (error) {
@@ -4857,6 +4875,34 @@ app.get('/api/parse/catalog', requireAuth, tabGuard('list'), async (req, res) =>
       pricedTotal = (await pq).count || 0;
     } catch (e) { /* колонок ещё нет — не критично */ }
     res.json({ products: data || [], total: count || 0, pricedTotal });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v172: дозаполнить brand/mpn из названий для уже собранных товаров магазина
+app.post('/api/parse/catalog/derive-brand-mpn', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const site = String((req.body && req.body.site) || '').trim();
+    if (!site) return res.status(400).json({ error: 'Нужен site' });
+    let scanned = 0, updated = 0, lastId = 0;
+    for (;;) {
+      const { data, error } = await supabaseAdmin.from('parse_products').select('id, name')
+        .eq('site', site).gt('id', lastId).or('brand.is.null,mpn.is.null').order('id', { ascending: true }).limit(500);
+      if (error) throw error;
+      if (!data || !data.length) break;
+      for (const r of data) {
+        lastId = r.id; scanned++;
+        const d = deriveBrandMpn(r.name, site);
+        const u = {};
+        if (d.brand) u.brand = d.brand;
+        if (d.mpn) u.mpn = d.mpn;
+        if (Object.keys(u).length) {
+          const { error: ue } = await supabaseAdmin.from('parse_products').update(u).eq('id', r.id);
+          if (!ue) updated++;
+        }
+      }
+      if (scanned >= 100000) break;
+    }
+    res.json({ ok: true, scanned, updated });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

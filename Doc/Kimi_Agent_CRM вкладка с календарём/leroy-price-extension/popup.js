@@ -69,3 +69,19 @@ chrome.runtime.onMessage.addListener((m) => {
     $('st').textContent = m.text + '\n' + $('st').textContent.split('\n').slice(0, 6).join('\n');
   }
 });
+// v1.20.1: ЖИВОЙ статус — панель опрашивает фон каждые 2 с, видно что сборщик работает даже если сообщение потерялось
+setInterval(async () => {
+  try {
+    const r = await chrome.runtime.sendMessage({ type: 'status' });
+    if (!r || !r.ok) return;
+    const ind = r.running ? '▶ ИДЁТ СБОР' : '■ остановлен';
+    if ($('runind')) $('runind').textContent = ind;
+    if ($('runind')) $('runind').style.color = r.running ? '#1e7e34' : '#8e8e93';
+    if (r.last) {
+      const ago = r.progressAt ? Math.round((Date.now() - r.progressAt) / 1000) : '?';
+      const cur = $('st').textContent || '';
+      const line = r.last + (r.running ? `  (обновлено ${ago} с назад)` : '');
+      if (!cur.startsWith(r.last)) $('st').textContent = line + '\n' + cur.split('\n').slice(0, 6).join('\n');
+    }
+  } catch (e) {}
+}, 2000);

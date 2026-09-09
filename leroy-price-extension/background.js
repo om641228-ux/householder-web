@@ -199,6 +199,22 @@ function extractOnPage() {
     const cm = String(document.body ? document.body.innerText.slice(0, 15000) : '').match(/\bcod\.?\s*([A-Z0-9][\w.\-]{3,20})/i); // «cod. 017487»
     if (cm) out.mpn = cm[1];
   }
+  // v1.21.1: бренд и № из ЗАГОЛОВКА товара (MediaMarkt: «… - LG 65QNED72B6B, …» / «Samsung Galaxy S26, …»)
+  if (!out.brand || !out.mpn) {
+    const ttl = String((document.querySelector('h1') || {}).textContent || document.title || '').trim();
+    let seg = ttl;
+    const parts = ttl.split(/\s+-\s+/);
+    const isMm = /mediamarkt|tutrebol/i.test(location.hostname);
+    if (parts.length >= 2) seg = parts[1].trim();
+    else if (!isMm) seg = '';
+    if (seg) {
+      const m = seg.match(/^([A-Za-zА-Яа-я&][\w&.\-]{0,29})\s+(.{2,60}?)(?:\s*,|\s*\(|$)/);
+      if (m && m[1].trim().length >= 2 && /\d/.test(m[2])) {
+        if (!out.brand) out.brand = m[1].trim().slice(0, 60);
+        if (!out.mpn) out.mpn = m[2].trim().slice(0, 60);
+      }
+    }
+  }
   if (!out.gtin) {
     const em = String(document.body ? document.body.innerText.slice(0, 15000) : '').match(/\bEAN\b\s*[:.]?\s*(\d{8,14})/i);
     if (em) out.gtin = em[1];

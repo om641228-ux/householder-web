@@ -1,4 +1,8 @@
 let running = false, stopped = false;
+// v1.21.0: параллельные очереди сбора цен — по одной на магазин (site). Разделы/бренды по-прежнему эксклюзивны (running).
+const activeRuns = new Set(); // ключи 'q:<site>'
+const stopReq = new Set();    // остановить конкретную очередь
+let stopAllQ = false;         // остановить все очереди
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let lastProgress = '', progressAt = 0; // v1.15/v1.16: последний прогресс + метка времени — для опроса из приложения и самосброса зависания
 // v1.19.0: клик по иконке открывает БОКОВУЮ ПАНЕЛЬ (как у Data Scraper), а не всплывающий попап
@@ -8,7 +12,7 @@ chrome.runtime.onInstalled.addListener(() => { try { chrome.sidePanel.setPanelBe
 const progress = (text) => {
   lastProgress = text; progressAt = Date.now();
   try { chrome.storage.local.set({ lastProgress, progressAt }); } catch (e) {}
-  try { chrome.action.setBadgeText({ text: running ? '●' : '' }); chrome.action.setBadgeBackgroundColor({ color: '#0071e3' }); } catch (e) {}
+  try { chrome.action.setBadgeText({ text: (running || activeRuns.size) ? '●' : '' }); chrome.action.setBadgeBackgroundColor({ color: '#0071e3' }); } catch (e) {} // v1.21.0: ● если идёт ХОТЯ БЫ один сбор
   chrome.runtime.sendMessage({ type: 'progress', text }).catch(() => {});
 };
 const isStuck = () => running && progressAt && (Date.now() - progressAt > 120000); // v1.16: 2 мин без прогресса = завис
@@ -166,6 +170,55 @@ function extractOnPage() {
     const mp = document.querySelector('meta[property="product:price:amount"],meta[name="og:price:amount"]');
     if (mp) out.price = parseFloat(mp.content.replace(',', '.')) || null;
   }
+  // v1.20.1: PrestaShop (TuTrebol) — цена в спец-блоках, бренд в строке «Marca», внутренний код «cod.»
+  if (out.price == null) {
+    const pel = document.querySelector('[itemprop="price"][content], .current-price, #our_price_display, .product-price, [class*="product-price" i] [class*="price" i]');
+    if (pel) {
+      const raw = String(pel.getAttribute('content') || pel.textContent || '');
+      const pm = raw.replace(/\u00a0/g, ' ').match(/(\d+(?:[ .]\d{3})*(?:[,.]\d{1,2})?)\s*(?:€|EUR)?/);
+      if (pm) { const n = parseFloat(pm[1].replace(/\s/g, '').replace('.', '').replace(',', '.')) || parseFloat(pm[1].replace(',', '.')); if (isFinite(n) && n > 0 && n < 1000000) { out.price = n; out.currency = out.currency || 'EUR'; } }
+    }
+  }
+  if (!out.brand) {
+    const bm = document.querySelector('[itemprop="brand"] [itemprop="name"], [itemprop="brand"], meta[name="product:brand"]');
+    if (bm) out.brand = String(bm.getAttribute('content') || bm.textContent || '').trim();
+    if (!out.brand) {
+      for (const el of document.querySelectorAll('th,td,dt,span,li')) { // строка характеристик «Marca»
+        const t = String(el.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!/^Marca\b/i.test(t) || t.length > 25) continue;
+        let v = '';
+        const sib = el.nextElementSibling;
+        if (sib) v = String(sib.textContent || '').trim();
+        if (!v && el.parentElement) { const c = el.parentElement.querySelector('dd, td:last-child'); if (c && c !== el) v = String(c.textContent || '').trim(); }
+        v = v.replace(/\s+/g, ' ').trim();
+        if (v && v.length >= 2 && v.length <= 60 && !/^Marca$/i.test(v)) { out.brand = v; break; }
+      }
+    }
+  }
+  if (!out.mpn) {
+    const cm = String(document.body ? document.body.innerText.slice(0, 15000) : '').match(/\bcod\.?\s*([A-Z0-9][\w.\-]{3,20})/i); // «cod. 017487»
+    if (cm) out.mpn = cm[1];
+  }
+  // v1.21.1: бренд и № из ЗАГОЛОВКА товара (MediaMarkt: «… - LG 65QNED72B6B, …» / «Samsung Galaxy S26, …»)
+  if (!out.brand || !out.mpn) {
+    const ttl = String((document.querySelector('h1') || {}).textContent || document.title || '').trim();
+    let seg = ttl;
+    const parts = ttl.split(/\s+-\s+/);
+    const isMm = /mediamarkt|tutrebol/i.test(location.hostname);
+    if (parts.length >= 2) seg = parts[1].trim();
+    else if (!isMm) seg = '';
+    if (seg) {
+      const m = seg.match(/^([A-Za-zА-Яа-я&][\w&.\-]{0,29})\s+(.{2,60}?)(?:\s*,|\s*\(|$)/);
+      if (m && m[1].trim().length >= 2 && /\d/.test(m[2])) {
+        if (!out.brand) out.brand = m[1].trim().slice(0, 60);
+        if (!out.mpn) out.mpn = m[2].trim().slice(0, 60);
+      }
+    }
+  }
+  if (!out.gtin) {
+    const em = String(document.body ? document.body.innerText.slice(0, 15000) : '').match(/\bEAN\b\s*[:.]?\s*(\d{8,14})/i);
+    if (em) out.gtin = em[1];
+  }
   // v1.12: визуальный блок цены — главный источник (JSON-LD бывает без скидки/устаревшим)
   try {
     const vp = __visualPrice(document.body || document.documentElement);
@@ -273,41 +326,46 @@ async function collectOne(api, token, p) {
 
 // v124: continuous = крутить пачки до конца очереди (режим «Собрать ВСЕ»)
 async function run(api, token, batch, mode, staleDays, continuous, site) {
-  if (running) return;
-  running = true; stopped = false;
+  // v1.21.0: очереди разных магазинов работают ПАРАЛЛЕЛЬНО; дубль той же очереди — игнор
+  const runKey = 'q:' + (site || '*');
+  const tag = site ? '[' + site.replace(/^(www\.|canarias\.|tienda\.)/, '').replace(/\..*$/, '').toUpperCase() + '] ' : '[ВСЕ] ';
+  if (running || activeRuns.has(runKey)) { progress(tag + 'эта очередь уже собирается — дождитесь конца или остановите'); return; }
+  activeRuns.add(runKey);
+  let myStop = false;
+  const stoppedNow = () => myStop || stopAllQ || stopReq.has(runKey);
   let totalDone = 0, totalOk = 0, totalChanges = 0, rounds = 0;
   try {
     for (;;) {
-      if (stopped) break;
+      if (stoppedNow()) break;
       const lim = Math.min(100, Math.max(1, batch || 20));
       const { items, total } = await fetchQueue(api, token, lim, mode, staleDays, site);
       if (!items.length) {
-        progress(rounds ? `✅ ВСЁ собрано: обработано ${totalDone}, цен ${totalOk}, изменений ${totalChanges}` : (mode === 'stale' ? '✅ Устаревших цен нет' : '✅ Все товары с ценами — очередь пуста'));
+        progress(tag + (rounds ? `✅ ВСЁ собрано: обработано ${totalDone}, цен ${totalOk}, изменений ${totalChanges}` : (mode === 'stale' ? '✅ Устаревших цен нет' : '✅ Все товары с ценами — очередь пуста')));
         break;
       }
       rounds++;
       let done = 0, captchaStreak = 0, fails = 0;
       for (const p of items) {
-        if (stopped) { progress(`⏹ Остановлено: всего обработано ${totalDone}, цен ${totalOk}`); break; }
-        progress(`⏳ ${totalDone + 1}${total != null && !continuous ? '/' + total : ''} (пачка ${rounds}, ок ${totalOk}, изм ${totalChanges}, неудач ${fails}): ${p.name || p.url}`);
+        if (stoppedNow()) { progress(tag + `⏹ Остановлено: всего обработано ${totalDone}, цен ${totalOk}`); break; }
+        progress(tag + `⏳ ${totalDone + 1}${total != null && !continuous ? '/' + total : ''} (пачка ${rounds}, ок ${totalOk}, изм ${totalChanges}, неудач ${fails}): ${p.name || p.url}`);
         const r0 = await collectOne(api, token, p);
         if (r0.saved) totalOk++;
         if (r0.chg) { totalChanges++; progress(`${r0.chg.to > r0.chg.from ? '📈' : '📉'} ${p.name || p.url}: ${r0.chg.from} → ${r0.chg.to}`); }
         if (r0.failReason) {
           fails++;
           captchaStreak = r0.failReason === 'captcha' ? captchaStreak + 1 : 0;
-          if (captchaStreak >= 3) { progress('🛑 DataDome показал капчу 3 раза подряд — сбор остановлен. Откройте leroymerlin.es в обычной вкладке, пройдите проверку и запустите снова через 10–15 минут.'); stopped = true; break; }
+          if (captchaStreak >= 3) { progress(tag + '🛑 Капча 3 раза подряд — ЭТА очередь остановлена. Откройте сайт в обычной вкладке, пройдите проверку и запустите снова через 10–15 минут.'); myStop = true; break; }
         }
         done++; totalDone++;
         await sleep(2000 + Math.random() * 1500); // вежливая пауза 2–3,5 с
       }
-      if (stopped || !continuous) break;
+      if (stoppedNow() || !continuous) break;
       await sleep(3000 + Math.random() * 2000); // пауза между пачками
     }
-    if (!stopped && rounds) progress(`✅ Готово: обработано ${totalDone}, цен сохранено ${totalOk}, изменений цен ${totalChanges}${continuous ? ' — очередь исчерпана' : '. Можно запустить ещё раз.'}`);
-  } catch (e) { progress('❌ ' + e.message); }
-  running = false;
-  try { chrome.action.setBadgeText({ text: '' }); } catch (e2) {}
+    if (!stoppedNow() && rounds) progress(tag + `✅ Готово: обработано ${totalDone}, цен сохранено ${totalOk}, изменений цен ${totalChanges}${continuous ? ' — очередь исчерпана' : '. Можно запустить ещё раз.'}`);
+  } catch (e) { progress(tag + '❌ ' + e.message); }
+  activeRuns.delete(runKey); stopReq.delete(runKey);
+  if (!activeRuns.size && !running) { try { chrome.action.setBadgeText({ text: '' }); } catch (e2) {} }
 }
 
 // v1.3: извлечение карточек товаров со страницы раздела/списка
@@ -808,22 +866,26 @@ chrome.runtime.onMessageExternal.addListener((m, sender, sendResponse) => {
         else sendResponse({ ok: true, result: jj });
       } else if (m && m.cmd === 'status') {
         if (isStuck()) { running = false; } // v1.16: самосброс
-        sendResponse({ ok: true, running, last: lastProgress, stuckCleared: true });
+        sendResponse({ ok: true, running: running || activeRuns.size > 0, queues: activeRuns.size, last: lastProgress, stuckCleared: true });
       } else if (m && m.cmd === 'stop') {
-        stopped = true; sendResponse({ ok: true });
+        stopped = true; stopAllQ = true; sendResponse({ ok: true });
       } else sendResponse({ ok: false, error: 'unknown-cmd' });
     } catch (e) { sendResponse({ ok: false, error: e.message }); }
   })();
   return true; // ответ асинхронный
 });
 
+chrome.runtime.onMessage.addListener((m, sender, sendResponse) => { // v1.20.1: панель опрашивает статус каждые 2 с
+  if (m && m.type === 'status') { sendResponse({ ok: true, running: running || activeRuns.size > 0, queues: activeRuns.size, last: lastProgress, progressAt }); return; }
+});
 chrome.runtime.onMessage.addListener((m) => {
   if (isStuck()) { running = false; stopped = false; } // v1.16: зависший сбор не блокирует новые запуски
   if (m.type === 'section' && !running) runSection(m.api, m.token, m.url);
   if (m.type === 'sections' && !running) runSectionQueue(m.api, m.token, m.urls || []);
   if (m.type === 'brands' && !running) runBrands(m.api, m.token);
   if (m.type === 'start' && !running) run(m.api, m.token, m.batch, m.mode, m.staleDays, !!m.continuous, m.site || '');
-  if (m.type === 'stop') stopped = true;
+  if (m.type === 'stop') { stopped = true; stopAllQ = true; } // v1.21.0: стоп = все очереди
+  if (m.type === 'start') { stopAllQ = false; stopReq.clear(); } // новый запуск снимает общий стоп
   if (m.type === 'schedule') { // v124: планировщик — часы между запусками (0 = выкл)
     chrome.storage.local.set({ schedHours: m.hours });
     chrome.alarms.clear('lm-collect');
