@@ -787,6 +787,25 @@ chrome.runtime.onMessageExternal.addListener((m, sender, sendResponse) => {
         if (running) { sendResponse({ ok: false, error: 'busy' }); return; }
         runSection(api, token, String(m.url));
         sendResponse({ ok: true });
+      } else if (m && m.cmd === 'sync-sitemap' && /^https?:\/\//i.test(String(m.url || ''))) {
+        // v1.20.0: скачать sitemap с IP пользователя и отправить XML на сервер (обход блокировок Railway)
+        const smUrl = String(m.url);
+        const resp = await fetch(smUrl, { credentials: 'omit' });
+        if (!resp.ok) { sendResponse({ ok: false, error: 'HTTP ' + resp.status }); return; }
+        let buf = await resp.arrayBuffer();
+        const u8 = new Uint8Array(buf);
+        if (/\.gz(?:$|[?#])/i.test(smUrl) || (u8.length > 2 && u8[0] === 0x1f && u8[1] === 0x8b)) {
+          const ds = new DecompressionStream('gzip');
+          buf = await new Response(new Blob([buf]).stream().pipeThrough(ds)).arrayBuffer();
+        }
+        const xml = new TextDecoder('utf-8').decode(buf);
+        const rr = await fetch(`${api}/api/parse/ext-sitemap?token=${encodeURIComponent(token)}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: smUrl, xml })
+        });
+        const jj = await rr.json().catch(() => ({}));
+        if (!rr.ok) sendResponse({ ok: false, error: jj.error || ('HTTP ' + rr.status) });
+        else sendResponse({ ok: true, result: jj });
       } else if (m && m.cmd === 'status') {
         if (isStuck()) { running = false; } // v1.16: самосброс
         sendResponse({ ok: true, running, last: lastProgress, stuckCleared: true });

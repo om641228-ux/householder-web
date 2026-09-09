@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v170-2026-09-09', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v171-2026-09-09', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4679,35 +4679,62 @@ app.post('/api/parse/catalog/sync', requireAuth, requireRole('admin', 'manager')
     if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'Нужен URL sitemap XML' });
     let site = new URL(url).hostname;
     await parseThrottle(url);
-    const r = await axios.get(url, { ...parseAxiosOpts(url), maxContentLength: 60 * 1024 * 1024, responseType: 'arraybuffer' });
+    let r = null, lastErr = null;
+    for (let att = 1; att <= 2 && !r; att++) { // v171: sitemap может тупить — один повтор с таймаутом 120 с
+      try { r = await axios.get(url, { ...parseAxiosOpts(url), timeout: 120000, maxContentLength: 60 * 1024 * 1024, responseType: 'arraybuffer' }); }
+      catch (e) { lastErr = e; }
+    }
+    if (!r) throw lastErr || new Error('Не удалось загрузить sitemap');
     if (r.status >= 400) throw new Error('HTTP ' + r.status + ' при загрузке sitemap');
     let sbuf = Buffer.from(r.data || Buffer.alloc(0));
     if (/\.gz(?:$|[?#])/i.test(url) || (sbuf.length > 2 && sbuf[0] === 0x1f && sbuf[1] === 0x8b)) {
       try { sbuf = require('zlib').gunzipSync(sbuf); } catch (e) { throw new Error('Не удалось распаковать gzip-sitemap: ' + e.message); } // v170: PrestaShop отдаёт sitemap в .xml.gz
     }
     const xml = sbuf.toString('utf8');
-    if (/<sitemapindex/i.test(xml)) {
-      const subs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/gi)].map(m => m[1].trim());
-      return res.json({ ok: true, isIndex: true, subs });
-    }
-    const items = parseSitemapXml(xml, '', 100000); // без фильтра — весь файл
-    // v166: site = hostname из URL ТОВАРОВ, а не из адреса sitemap (Worten: файлы на worten.pt, товары на canarias.worten.es)
-    try { if (items.length) site = new URL(items[0].url).hostname; } catch (e) {}
-    let upserted = 0, errs = 0;
-    for (let i = 0; i < items.length; i += 500) {
-      const rows = items.slice(i, i + 500).map(it => {
-        const am = it.url.match(/-(\d{5,})\.html?/i) || it.url.match(/\/(\d{5,})(?:\.html?)?(?:[?#].*)?$/i) || it.url.match(/-(\d{5,})(?:[?#].*)?$/i) || it.url.match(/\/(\d{1,7})-[a-z0-9][a-z0-9\-]*\.html?$/i); // v122: артикул = число перед .html; v161: конец URL; v165: Worten «…-7252144»; v170: PrestaShop «/269-slug.html»
-        if (!am) return null; // v167: без артикула — это SEO/бренд/инфо-страница, не товар
-        return { site, url: it.url, name: it.name.slice(0, 300), image: it.image, article: am[1] || am[2] || am[3] || am[4], last_seen: new Date().toISOString() };
-      }).filter(Boolean);
-      const { error } = await supabaseAdmin.from('parse_products').upsert(rows, { onConflict: 'site,url' });
-      if (error) {
-        if (/does not exist/i.test(error.message || '')) return res.status(500).json({ error: 'Нет таблицы parse_products — выполните v119-парсинг.sql повторно' });
-        errs++;
-      } else upserted += rows.length;
-    }
-    if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Синк каталога', `${site}: ${upserted} товаров`, req);
-    res.json({ ok: true, site, total: items.length, upserted, errs });
+    const out = await upsertSitemapXml(xml, url);
+    if (out.isIndex) return res.json(out);
+    if (out.missingTable) return res.status(500).json({ error: 'Нет таблицы parse_products — выполните v119-парсинг.sql повторно' });
+    if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Синк каталога', `${out.site}: ${out.upserted} товаров`, req);
+    res.json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// v171: общий разбор XML sitemap → parse_products (используется серверным синком и синком ЧЕРЕЗ БРАУЗЕР)
+async function upsertSitemapXml(xml, srcUrl) {
+  if (/<sitemapindex/i.test(xml)) {
+    const subs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/gi)].map(m => m[1].trim());
+    return { ok: true, isIndex: true, subs };
+  }
+  let site = new URL(srcUrl).hostname;
+  const items = parseSitemapXml(xml, '', 100000); // без фильтра — весь файл
+  // v166: site = hostname из URL ТОВАРОВ, а не из адреса sitemap (Worten: файлы на worten.pt, товары на canarias.worten.es)
+  try { if (items.length) site = new URL(items[0].url).hostname; } catch (e) {}
+  let upserted = 0, errs = 0;
+  for (let i = 0; i < items.length; i += 500) {
+    const rows = items.slice(i, i + 500).map(it => {
+      const am = it.url.match(/-(\d{5,})\.html?/i) || it.url.match(/\/(\d{5,})(?:\.html?)?(?:[?#].*)?$/i) || it.url.match(/-(\d{5,})(?:[?#].*)?$/i) || it.url.match(/\/(\d{1,7})-[a-z0-9][a-z0-9\-]*\.html?$/i); // v122: артикул = число перед .html; v161: конец URL; v165: Worten «…-7252144»; v170: PrestaShop «/269-slug.html»
+      if (!am) return null; // v167: без артикула — это SEO/бренд/инфо-страница, не товар
+      return { site, url: it.url, name: it.name.slice(0, 300), image: it.image, article: am[1] || am[2] || am[3] || am[4], last_seen: new Date().toISOString() };
+    }).filter(Boolean);
+    const { error } = await supabaseAdmin.from('parse_products').upsert(rows, { onConflict: 'site,url' });
+    if (error) {
+      if (/does not exist/i.test(error.message || '')) return { missingTable: true };
+      errs++;
+    } else upserted += rows.length;
+  }
+  return { ok: true, site, total: items.length, upserted, errs };
+}
+
+// v171: синк sitemap ЧЕРЕЗ БРАУЗЕР — расширение качает XML с IP пользователя (сайты, блокирующие Railway: tutrebol) и присылает текст
+app.post('/api/parse/ext-sitemap', requireAuth, async (req, res) => {
+  try {
+    const url = String((req.body && req.body.url) || '').trim();
+    const xml = String((req.body && req.body.xml) || '');
+    if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'Нужен URL sitemap' });
+    if (xml.length < 50 || xml.indexOf('<') < 0) return res.status(400).json({ error: 'Пустой XML' });
+    const out = await upsertSitemapXml(xml.slice(0, 30 * 1024 * 1024), url);
+    if (out.missingTable) return res.status(500).json({ error: 'Нет таблицы parse_products' });
+    res.json(out);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

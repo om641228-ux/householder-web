@@ -1,4 +1,4 @@
-// redeploy-trigger: 2026-09-09-v170-tutrebol
+// redeploy-trigger: 2026-09-09-v171-browser-sitemap
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import './App.css';
 import './apple-theme.css'; // Apple-стиль (apple.com): пилюльные кнопки, мягкие карточки, #0071e3 — v31
@@ -2248,7 +2248,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v170 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v171 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2872,7 +2872,23 @@ function ParseTab({ token, isMobileView, canRun }) {
       if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
       if (j.isIndex) setCatSync(prev => ({ ...prev, [smUrl]: { status: 'ok', msg: `это индекс: ${j.subs.length} файлов — синхронизируйте по одному (кнопки ниже)`, subs: j.subs } }));
       else setCatSync(prev => ({ ...prev, [smUrl]: { status: 'ok', msg: `✅ ${j.upserted} товаров в каталоге` } }));
-    } catch (e) { setCatSync(prev => ({ ...prev, [smUrl]: { status: 'err', msg: '❌ ' + e.message } })); }
+    } catch (e) {
+      // v171: сервер не достучался до сайта (блокировка IP Railway) — качаем sitemap ЧЕРЕЗ БРАУЗЕР расширением
+      try {
+        setCatSync(prev => ({ ...prev, [smUrl]: { status: 'run', msg: 'серверу отказали (' + e.message + ') — скачиваю через браузер…' } }));
+        const rr = await extSend({ cmd: 'sync-sitemap', url: smUrl });
+        if (rr && rr.ok && rr.result) {
+          const j = rr.result;
+          if (j.isIndex) setCatSync(prev => ({ ...prev, [smUrl]: { status: 'ok', msg: `это индекс: ${j.subs.length} файлов — синхронизируйте по одному (кнопки ниже)`, subs: j.subs } }));
+          else setCatSync(prev => ({ ...prev, [smUrl]: { status: 'ok', msg: `✅ ${j.upserted} товаров в каталоге (через браузер)` } }));
+          catSearch({ page: 0 }); loadCatStats();
+          return;
+        }
+        throw new Error((rr && rr.error) || 'расширение не ответило');
+      } catch (e2) {
+        setCatSync(prev => ({ ...prev, [smUrl]: { status: 'err', msg: '❌ ' + e.message + ' · через браузер: ' + (e2.message === 'no-ext' || e2.message === 'no-id' ? 'укажите ID расширения (⚙ рядом с журналом) и обновите его до v1.20+' : e2.message) } }));
+      }
+    }
   };
   const catSearch = async (over = {}) => {
     const q = over.q !== undefined ? over.q : catQ;
@@ -9556,7 +9572,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-09 · v170 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-09 · v171 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9569,7 +9585,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-09 · v170</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-09 · v171</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
