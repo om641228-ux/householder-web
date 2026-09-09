@@ -166,6 +166,39 @@ function extractOnPage() {
     const mp = document.querySelector('meta[property="product:price:amount"],meta[name="og:price:amount"]');
     if (mp) out.price = parseFloat(mp.content.replace(',', '.')) || null;
   }
+  // v1.20.1: PrestaShop (TuTrebol) — цена в спец-блоках, бренд в строке «Marca», внутренний код «cod.»
+  if (out.price == null) {
+    const pel = document.querySelector('[itemprop="price"][content], .current-price, #our_price_display, .product-price, [class*="product-price" i] [class*="price" i]');
+    if (pel) {
+      const raw = String(pel.getAttribute('content') || pel.textContent || '');
+      const pm = raw.replace(/\u00a0/g, ' ').match(/(\d+(?:[ .]\d{3})*(?:[,.]\d{1,2})?)\s*(?:€|EUR)?/);
+      if (pm) { const n = parseFloat(pm[1].replace(/\s/g, '').replace('.', '').replace(',', '.')) || parseFloat(pm[1].replace(',', '.')); if (isFinite(n) && n > 0 && n < 1000000) { out.price = n; out.currency = out.currency || 'EUR'; } }
+    }
+  }
+  if (!out.brand) {
+    const bm = document.querySelector('[itemprop="brand"] [itemprop="name"], [itemprop="brand"], meta[name="product:brand"]');
+    if (bm) out.brand = String(bm.getAttribute('content') || bm.textContent || '').trim();
+    if (!out.brand) {
+      for (const el of document.querySelectorAll('th,td,dt,span,li')) { // строка характеристик «Marca»
+        const t = String(el.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!/^Marca\b/i.test(t) || t.length > 25) continue;
+        let v = '';
+        const sib = el.nextElementSibling;
+        if (sib) v = String(sib.textContent || '').trim();
+        if (!v && el.parentElement) { const c = el.parentElement.querySelector('dd, td:last-child'); if (c && c !== el) v = String(c.textContent || '').trim(); }
+        v = v.replace(/\s+/g, ' ').trim();
+        if (v && v.length >= 2 && v.length <= 60 && !/^Marca$/i.test(v)) { out.brand = v; break; }
+      }
+    }
+  }
+  if (!out.mpn) {
+    const cm = String(document.body ? document.body.innerText.slice(0, 15000) : '').match(/\bcod\.?\s*([A-Z0-9][\w.\-]{3,20})/i); // «cod. 017487»
+    if (cm) out.mpn = cm[1];
+  }
+  if (!out.gtin) {
+    const em = String(document.body ? document.body.innerText.slice(0, 15000) : '').match(/\bEAN\b\s*[:.]?\s*(\d{8,14})/i);
+    if (em) out.gtin = em[1];
+  }
   // v1.12: визуальный блок цены — главный источник (JSON-LD бывает без скидки/устаревшим)
   try {
     const vp = __visualPrice(document.body || document.documentElement);
@@ -817,6 +850,9 @@ chrome.runtime.onMessageExternal.addListener((m, sender, sendResponse) => {
   return true; // ответ асинхронный
 });
 
+chrome.runtime.onMessage.addListener((m, sender, sendResponse) => { // v1.20.1: панель опрашивает статус каждые 2 с
+  if (m && m.type === 'status') { sendResponse({ ok: true, running, last: lastProgress, progressAt }); return; }
+});
 chrome.runtime.onMessage.addListener((m) => {
   if (isStuck()) { running = false; stopped = false; } // v1.16: зависший сбор не блокирует новые запуски
   if (m.type === 'section' && !running) runSection(m.api, m.token, m.url);
