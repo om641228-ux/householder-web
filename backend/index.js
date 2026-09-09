@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-// redeploy-trigger: 2026-09-09-v169-stats-endpoint
+// redeploy-trigger: 2026-09-09-v173-shopify-urls
 // v153: текущий базовый промпт распознавания (для просмотра в UI, read-only)
 app.get('/api/prompts/current', (req, res) => {
   const user = resolveToken(req.query.token);
@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v172-2026-09-09', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v173-2026-09-09', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4730,9 +4730,10 @@ async function upsertSitemapXml(xml, srcUrl) {
   for (let i = 0; i < items.length; i += 500) {
     const rows = items.slice(i, i + 500).map(it => {
       const am = it.url.match(/-(\d{5,})\.html?/i) || it.url.match(/\/(\d{5,})(?:\.html?)?(?:[?#].*)?$/i) || it.url.match(/-(\d{5,})(?:[?#].*)?$/i) || it.url.match(/\/(\d{1,7})-[a-z0-9][a-z0-9\-]*\.html?$/i); // v122: артикул = число перед .html; v161: конец URL; v165: Worten «…-7252144»; v170: PrestaShop «/269-slug.html»
-      if (!am) return null; // v167: без артикула — это SEO/бренд/инфо-страница, не товар
+      const shopify = /\/products\/[a-z0-9][a-z0-9\-]*(?:[?#].*)?$/i.test(it.url); // v173: Shopify (MediaMarkt) — товарные URL без числового артикула
+      if (!am && !shopify) return null; // v167: без артикула — это SEO/бренд/инфо-страница, не товар
       const d = deriveBrandMpn(it.name, site); // v172: бренд/№ из названия
-      return { site, url: it.url, name: it.name.slice(0, 300), image: it.image, article: am[1] || am[2] || am[3] || am[4], brand: d.brand, mpn: d.mpn, last_seen: new Date().toISOString() };
+      return { site, url: it.url, name: it.name.slice(0, 300), image: it.image, article: am ? (am[1] || am[2] || am[3] || am[4]) : null, brand: d.brand, mpn: d.mpn, last_seen: new Date().toISOString() };
     }).filter(Boolean);
     const { error } = await supabaseAdmin.from('parse_products').upsert(rows, { onConflict: 'site,url' });
     if (error) {

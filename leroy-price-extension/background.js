@@ -5,12 +5,15 @@ const stopReq = new Set();    // остановить конкретную оч�
 let stopAllQ = false;         // остановить все очереди
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let lastProgress = '', progressAt = 0; // v1.15/v1.16: последний прогресс + метка времени — для опроса из приложения и самосброса зависания
+const lastBySite = {}; // v1.22.0: последний прогресс по каждому магазину (TAG → {text, at}) — приложение показывает только свой магазин
 // v1.19.0: клик по иконке открывает БОКОВУЮ ПАНЕЛЬ (как у Data Scraper), а не всплывающий попап
 try { chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }); } catch (e) {}
 chrome.runtime.onInstalled.addListener(() => { try { chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }); } catch (e) {} });
 
 const progress = (text) => {
   lastProgress = text; progressAt = Date.now();
+  const __tm = /^\[([A-Za-zА-Яа-я0-9]+)\]/.exec(String(text)); // v1.22.0
+  if (__tm) lastBySite[__tm[1].toUpperCase()] = { text, at: progressAt };
   try { chrome.storage.local.set({ lastProgress, progressAt }); } catch (e) {}
   try { chrome.action.setBadgeText({ text: (running || activeRuns.size) ? '●' : '' }); chrome.action.setBadgeBackgroundColor({ color: '#0071e3' }); } catch (e) {} // v1.21.0: ● если идёт ХОТЯ БЫ один сбор
   chrome.runtime.sendMessage({ type: 'progress', text }).catch(() => {});
@@ -170,6 +173,21 @@ function extractOnPage() {
     const mp = document.querySelector('meta[property="product:price:amount"],meta[name="og:price:amount"]');
     if (mp) out.price = parseFloat(mp.content.replace(',', '.')) || null;
   }
+  // v1.22.0: MediaMarkt Canarias (Shopify) — цена ТОЛЬКО из главного блока div.price (у related-товаров .content_price — их игнорируем)
+  if (/mediamarkt\./i.test(location.hostname)) {
+    const rp = document.querySelector('div.price .regular-price');
+    if (rp) {
+      const pi = rp.querySelector('.price__integer'), pd = rp.querySelector('.price__decimal');
+      const raw = pi ? (String(pi.textContent || '') + (pd ? String(pd.textContent || '') : '')) : String(rp.textContent || '');
+      const pm = raw.replace(/\u00a0/g, ' ').match(/(\d[\d .]*(?:[,.]\d{1,2})?)/);
+      if (pm) { const n = __num(pm[1]); if (n != null) { out.price = n; out.currency = out.currency || 'EUR'; } }
+    }
+    const op = document.querySelector('div.price .compare-at-price');
+    if (op) {
+      const om = String(op.textContent || '').match(/(\d[\d .]*(?:[,.]\d{1,2})?)/);
+      if (om) { const n = __num(om[1]); if (n != null && n !== out.price) out.price_original = n; }
+    }
+  }
   // v1.20.1: PrestaShop (TuTrebol) — цена в спец-блоках, бренд в строке «Marca», внутренний код «cod.»
   if (out.price == null) {
     const pel = document.querySelector('[itemprop="price"][content], .current-price, #our_price_display, .product-price, [class*="product-price" i] [class*="price" i]');
@@ -220,7 +238,8 @@ function extractOnPage() {
     if (em) out.gtin = em[1];
   }
   // v1.12: визуальный блок цены — главный источник (JSON-LD бывает без скидки/устаревшим)
-  try {
+  // v1.22.0: на MediaMarkt НЕ переопределяем найденную цену — визуальный детектор цеплял related-товары
+  if (!(out.price != null && /mediamarkt\./i.test(location.hostname))) try {
     const vp = __visualPrice(document.body || document.documentElement);
     if (vp.price != null) { out.price = vp.price; out.currency = out.currency || 'EUR'; }
     if (vp.price_original != null) out.price_original = vp.price_original;
@@ -866,7 +885,7 @@ chrome.runtime.onMessageExternal.addListener((m, sender, sendResponse) => {
         else sendResponse({ ok: true, result: jj });
       } else if (m && m.cmd === 'status') {
         if (isStuck()) { running = false; } // v1.16: самосброс
-        sendResponse({ ok: true, running: running || activeRuns.size > 0, queues: activeRuns.size, last: lastProgress, stuckCleared: true });
+        sendResponse({ ok: true, running: running || activeRuns.size > 0, queues: activeRuns.size, active: [...activeRuns], last: lastProgress, lastBySite, stuckCleared: true });
       } else if (m && m.cmd === 'stop') {
         stopped = true; stopAllQ = true; sendResponse({ ok: true });
       } else sendResponse({ ok: false, error: 'unknown-cmd' });
@@ -876,7 +895,7 @@ chrome.runtime.onMessageExternal.addListener((m, sender, sendResponse) => {
 });
 
 chrome.runtime.onMessage.addListener((m, sender, sendResponse) => { // v1.20.1: панель опрашивает статус каждые 2 с
-  if (m && m.type === 'status') { sendResponse({ ok: true, running: running || activeRuns.size > 0, queues: activeRuns.size, last: lastProgress, progressAt }); return; }
+  if (m && m.type === 'status') { sendResponse({ ok: true, running: running || activeRuns.size > 0, queues: activeRuns.size, active: [...activeRuns], last: lastProgress, lastBySite, progressAt }); return; }
 });
 chrome.runtime.onMessage.addListener((m) => {
   if (isStuck()) { running = false; stopped = false; } // v1.16: зависший сбор не блокирует новые запуски

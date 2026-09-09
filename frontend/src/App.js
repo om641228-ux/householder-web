@@ -1,4 +1,4 @@
-// redeploy-trigger: 2026-09-09-v172-derive-brand-mpn
+// redeploy-trigger: 2026-09-09-v173-persite-progress
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import './App.css';
 import './apple-theme.css'; // Apple-стиль (apple.com): пилюльные кнопки, мягкие карточки, #0071e3 — v31
@@ -2248,7 +2248,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v172 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v173 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2890,6 +2890,18 @@ function ParseTab({ token, isMobileView, canRun }) {
       }
     }
   };
+  // v173: синхронизировать ВСЕ файлы индекса подряд (MediaMarkt — 30+ файлов по одному слишком долго кликать)
+  const syncAllSubs = async (subs) => {
+    if (!subs || !subs.length) return;
+    if (!confirm(`Синхронизировать ВСЕ ${subs.length} файлов индекса по очереди? Это займёт ~${Math.max(2, Math.round(subs.length * 1.5))} мин — окно не закрывайте.`)) return;
+    let okN = 0, errN = 0;
+    for (const su of subs) {
+      try { await syncSitemap(su); okN++; } catch (e) { errN++; }
+      await new Promise(r => setTimeout(r, 1500)); // вежливая пауза между файлами
+    }
+    alert(`✅ Готово: файлов ${okN}${errN ? `, ошибок ${errN}` : ''}.`);
+    catSearch({ page: 0 }); loadCatStats();
+  };
   const catSearch = async (over = {}) => {
     const q = over.q !== undefined ? over.q : catQ;
     const pr = over.priced !== undefined ? over.priced : catPriced;
@@ -2963,7 +2975,10 @@ function ParseTab({ token, isMobileView, canRun }) {
     try {
       const r = await extSend({ cmd: 'status' });
       if (r && r.ok) {
-        setExtStatus({ running: !!r.running, last: r.last || '' });
+        // v173: показываем прогресс ТОЛЬКО текущего магазина (очереди разных сайтов идут параллельно)
+        const stag = CAT_STORE.host.replace(/^(www\.|canarias\.|tienda\.)/, '').replace(/\..*$/, '').toUpperCase();
+        const mine = r.lastBySite && r.lastBySite[stag];
+        setExtStatus({ running: !!r.running, last: mine ? mine.text : '', other: (!mine && r.last) ? r.last : '', queues: r.queues || 0 });
         if (r.running) setTimeout(pollExtStatus, 4000);
         else setTimeout(loadCatLogs, 1500); // парсинг кончился — обновить журнал
       }
@@ -3200,9 +3215,11 @@ function ParseTab({ token, isMobileView, canRun }) {
               <span style={{ color: '#1e7e34' }}>💶 С ценой: <b>{catStats.withPrice}</b></span>
               <span style={{ color: catStats.remaining > 0 ? '#d70015' : '#1e7e34' }}>⏳ Осталось спарсить: <b>{catStats.remaining}</b></span>
               {catStats.lastPriceAt && <span style={{ color: '#8e8e93' }}>🕐 последняя цена: {new Date(catStats.lastPriceAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>}
-              {extStatus && extStatus.running
-                ? <span style={{ color: '#8a6d3b', background: '#fff8e6', borderRadius: 8, padding: '1px 8px', border: '1px solid #ffd699' }}>🧩 Расширение работает: {extStatus.last || 'сбор цен…'}</span>
-                : <span style={{ color: '#8e8e93' }}>🧩 расширение не активно{extStatus && extStatus.last ? ` · последнее: ${extStatus.last}` : ''}</span>}
+              {extStatus && extStatus.running && extStatus.last
+                ? <span style={{ color: '#8a6d3b', background: '#fff8e6', borderRadius: 8, padding: '1px 8px', border: '1px solid #ffd699' }}>🧩 Расширение работает: {extStatus.last}</span>
+                : extStatus && extStatus.running
+                  ? <span style={{ color: '#8e8e93' }}>🧩 расширение собирает другой магазин{extStatus.queues ? ` (активных очередей: ${extStatus.queues})` : ''} — по «{CAT_STORE.title}» сбор не идёт{extStatus.other ? ` · сейчас: ${extStatus.other}` : ''}</span>
+                  : <span style={{ color: '#8e8e93' }}>🧩 расширение не активно{extStatus && extStatus.last ? ` · последнее по этому магазину: ${extStatus.last}` : ''}</span>}
             </div>
             <div title={`Спарсено с ценой ${catStats.withPrice} из ${catStats.total} (${catStats.total ? Math.round(catStats.withPrice / catStats.total * 100) : 0}%)`} style={{ marginTop: 6, height: 8, borderRadius: 6, background: '#e5e5ea', overflow: 'hidden' }}>
               <div style={{ height: '100%', width: (catStats.total ? Math.min(100, Math.round(catStats.withPrice / catStats.total * 100)) : 0) + '%', background: 'linear-gradient(90deg,#34c759,#0071e3)', borderRadius: 6, transition: 'width .5s' }} />
@@ -3305,6 +3322,10 @@ function ParseTab({ token, isMobileView, canRun }) {
             <div style={{ fontSize: 12, marginTop: 4, color: st.status === 'err' ? '#e74c3c' : st.status === 'ok' ? '#1e7e34' : '#8e8e93' }}>{u.split('/').pop()}: {st.msg}</div>
             {st.subs && (
               <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
+                <button onClick={() => syncAllSubs(st.subs)}
+                  style={{ fontSize: 11, padding: '2px 10px', borderRadius: 999, border: '1px solid #7c3aed', background: '#f5f3ff', color: '#7c3aed', cursor: 'pointer', fontWeight: 700 }}>
+                  ⬇⬇ Синхронизировать ВСЕ ({st.subs.length})
+                </button>
                 {st.subs.map(su => (
                   <button key={su} onClick={() => syncSitemap(su)} disabled={catSync[su] && catSync[su].status === 'run'}
                     style={{ fontSize: 11, padding: '2px 9px', borderRadius: 999, border: '1px solid #d0d0d5', background: catSync[su] && catSync[su].status === 'ok' ? '#e8f8ef' : '#f5f5f7', cursor: 'pointer' }}>
@@ -9587,7 +9608,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-09 · v172 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-09 · v173 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9600,7 +9621,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-09 · v172</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-09 · v173</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
