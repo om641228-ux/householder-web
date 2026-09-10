@@ -315,7 +315,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
-// redeploy-trigger: 2026-09-09-v173-shopify-urls
+// redeploy-trigger: 2026-09-10-v174-chafiras
 // v153: текущий базовый промпт распознавания (для просмотра в UI, read-only)
 app.get('/api/prompts/current', (req, res) => {
   const user = resolveToken(req.query.token);
@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v173-2026-09-09', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v174-2026-09-10', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -4639,14 +4639,14 @@ function parseSitemapXml(xml, filter, limit) {
   let m;
   while ((m = re.exec(xml)) !== null && items.length < limit) {
     const block = m[1];
-    const lm = block.match(/<loc>([^<]+)<\/loc>/i);
+    const lm = block.match(/<loc>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/loc>/i); // v174: CDATA (chafiras)
     if (!lm) continue;
     const loc = lm[1].trim();
     const slug = decodeURIComponent(loc.split('/').filter(Boolean).pop() || '').replace(/\.html?$/i, '').replace(/-/g, ' ');
     const hay = (loc + ' ' + slug).toLowerCase();
     if (words.length && !words.every(w => hay.includes(w))) continue;
-    const im = block.match(/<image:loc>([^<]*)<\/image:loc>/i);
-    const nameM = block.match(/<image:title>([^<]*)<\/image:title>/i);
+    const im = block.match(/<image:loc>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/image:loc>/i);
+    const nameM = block.match(/<image:title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/image:title>/i);
     items.push({ url: loc, name: (nameM ? nameM[1].trim() : slug) || loc, image: im ? im[1].trim() : '' });
   }
   return items;
@@ -4719,7 +4719,7 @@ function deriveBrandMpn(name, site) {
 // v171: общий разбор XML sitemap → parse_products (используется серверным синком и синком ЧЕРЕЗ БРАУЗЕР)
 async function upsertSitemapXml(xml, srcUrl) {
   if (/<sitemapindex/i.test(xml)) {
-    const subs = [...xml.matchAll(/<loc>([^<]+)<\/loc>/gi)].map(m => m[1].trim());
+    const subs = [...xml.matchAll(/<loc>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/loc>/gi)].map(m => m[1].trim()); // v174: CDATA
     return { ok: true, isIndex: true, subs };
   }
   let site = new URL(srcUrl).hostname;

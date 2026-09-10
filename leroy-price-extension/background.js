@@ -213,6 +213,10 @@ function extractOnPage() {
       }
     }
   }
+  if (!out.brand) { // v1.22.1: Chafiras — бренд в тексте описания «Marca: Brinox.»
+    const mb = String(document.body ? document.body.innerText.slice(0, 30000) : '').match(/\bMarca:\s*([A-ZÁÉÍÓÚÑ][\w&.\- ]{1,38}?)\s*[.,]/);
+    if (mb && !/no\s*brand/i.test(mb[1])) out.brand = mb[1].trim();
+  }
   if (!out.mpn) {
     const cm = String(document.body ? document.body.innerText.slice(0, 15000) : '').match(/\bcod\.?\s*([A-Z0-9][\w.\-]{3,20})/i); // «cod. 017487»
     if (cm) out.mpn = cm[1];

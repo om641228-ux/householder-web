@@ -1,4 +1,4 @@
-// redeploy-trigger: 2026-09-09-v173-persite-progress
+// redeploy-trigger: 2026-09-10-v174-chafiras
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import './App.css';
 import './apple-theme.css'; // Apple-стиль (apple.com): пилюльные кнопки, мягкие карточки, #0071e3 — v31
@@ -2248,7 +2248,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v173 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v174 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2719,6 +2719,7 @@ function ParseTab({ token, isMobileView, canRun }) {
   const CAT_STORES = {
     lm:         { title: 'Leroy Merlin',        emoji: '🗂', host: 'www.leroymerlin.es',    sitemaps: [1, 2, 3, 4].map(n => `https://www.leroymerlin.es/sitemap-productos${n}.xml`) },
     mediamarkt: { title: 'MediaMarkt Canarias', emoji: '🛒', host: 'canarias.mediamarkt.es', sitemaps: ['https://canarias.mediamarkt.es/sitemap.xml'] },
+    chafiras: { title: 'Chafiras', emoji: '🔩', host: 'chafiras.com', sitemaps: ['https://chafiras.com/1_es_0_sitemap.xml'] },
     worten:     { title: 'Worten Canarias',     emoji: '🛒', host: 'canarias.worten.es',     sitemaps: ['https://www.worten.pt/_/sitemap/sitemap_index_wortenic.xml'] }, // v165: /sitemap.xml отдаёт 403; рабочий индекс из robots.txt
     mercadona:  { title: 'Mercadona',           emoji: '🛒', host: 'tienda.mercadona.es',    sitemaps: [] }, // у Mercadona нет sitemap — каталог через их API
     tutrebol:   { title: 'TuTrebol',            emoji: '🍀', host: 'www.tutrebol.es',        sitemaps: ['https://www.tutrebol.es/sitemap_index_shop_1.xml'] }, // v170: PrestaShop, sitemap в .xml.gz — backend распакует
@@ -9608,7 +9609,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-09 · v173 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-10 · v174 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9621,7 +9622,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-09 · v173</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-10 · v174</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
