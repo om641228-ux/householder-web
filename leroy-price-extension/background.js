@@ -46,34 +46,67 @@ function extractOnPage() {
     return false;
   };
   const __visualPrice = (root) => {
+    // v1.24.1: ДВА ПРОХОДА — 1) ищем главную цену по всей странице (крупнейший шрифт, без запретных зон),
+    // 2) старую цену и % скидки ищем ТОЛЬКО в ценовом блоке вокруг неё (предки до 6 уровней, пока не найдём контейнер с € + %).
+    // Раньше бейдж и зачёркнутая цена брались со ВСЕЙ страницы → % от чужого баннера перезаписывал настоящий «−39 %».
     const res = { price: null, price_original: null, discount_pct: null, discount_abs: null };
     if (!root || !root.querySelectorAll) return res;
-    let bestFs = -1;
-    for (const el of root.querySelectorAll('span,div,p,strong,b,em,s,del,strike,sup,h2,h3,h4')) {
-      if (el.childElementCount > 2) continue;
+    const BAD_ZONE = '[class*="carousel" i], [class*="slick" i], [class*="slider" i], [class*="recommend" i], [class*="related" i], [class*="cross" i], [class*="upsell" i], [class*="option" i], [class*="variant" i], [class*="plazo" i], [class*="financ" i], [id*="carousel" i], [id*="recommend" i]';
+    const SKIP_T = /(\bmes(es)?\b|\bplazo|\bcuota|\bsem(ana)?\b|a plazos)/i;
+    const readPrice = (el) => { // → число или null
       let t = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
-      if (!t || t.length > 40) continue;
-      if (t.indexOf('\u20ac') < 0) { // цена разбита: «2.999» + <sup>€</sup>
-        const nx = el.nextElementSibling, pv = el.previousElementSibling;
+      if (!t || t.length > 40) return null;
+      if (t.indexOf('\u20ac') < 0) {
+        const nx = el.nextElementSibling;
         if (/^\d{1,3}([ .]\d{3})*(,\d{1,2})?$/.test(t) && nx && /^\s*\u20ac\s*$/.test(String(nx.textContent || ''))) t = t + ' \u20ac';
       }
-      let m = t.match(/^[\-\u2212\u2013]\s*(\d+(?:[.,]\d+)?)\s*%/); // бейдж «-59 %»
-      if (m) { const v = parseFloat(m[1].replace(',', '.')); if (v > 0 && v < 100) res.discount_pct = v; continue; }
-      m = t.match(/^[\-\u2212\u2013]\s*([\d.,\s\u00a0]+?)\s*\u20ac/); // бейдж «-1.991 €»
-      if (m) { const v = __num(m[1]); if (v != null) res.discount_abs = v; continue; }
-      if (t.indexOf('\u20ac') < 0) continue;
-      if (/\u20ac\s*\/|\/(kg|m\u00b2|m2|l|ud|unidad)s?\b/i.test(t)) continue; // цена за единицу
+      if (t.indexOf('\u20ac') < 0) return null;
+      if (/\u20ac\s*\/|\/(kg|m\u00b2|m2|l|ud|unidad)s?\b/i.test(t)) return null; // цена за единицу
       const pm = t.match(/(\d{1,3}(?:[ .\u00a0]\d{3})+(?:,\d{1,2})?|\d{1,6}[.,]\d{2}|\d{1,6})(?=\s*\u20ac)/);
-      if (!pm) continue;
-      const n = __num(pm[1]);
+      return pm ? __num(pm[1]) : null;
+    };
+    // проход 1: главная цена
+    let bestFs = -1, bestEl = null;
+    for (const el of root.querySelectorAll('span,div,p,strong,b,em,s,del,strike,sup,h2,h3,h4')) {
+      if (el.childElementCount > 2) continue;
+      try { if (el.closest(BAD_ZONE)) continue; } catch (e) {}
+      let t = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (SKIP_T.test(t)) continue;
+      if (__struck(el)) continue;
+      const n = readPrice(el);
+      if (n == null) continue;
+      let fs = 10;
+      try { fs = parseFloat(getComputedStyle(el).fontSize) || 10; } catch (err) {}
+      if (fs > bestFs || (fs === bestFs && res.price == null)) { bestFs = fs; res.price = n; bestEl = el; }
+    }
+    if (!bestEl) return res;
+    // ценовой блок: поднимаемся от главной цены, пока контейнер не содержит ещё и %/€ (старая цена или бейдж)
+    let box = bestEl.parentElement || bestEl;
+    for (let i = 0; i < 6 && box && box.parentElement; i++) {
+      const t = String(box.innerText || '');
+      const marks = (t.match(/\u20ac/g) || []).length + (t.match(/%/g) || []).length;
+      if (marks >= 2 && t.length < 400) break;
+      box = box.parentElement;
+    }
+    if (!box || !box.querySelectorAll) box = bestEl.parentElement || bestEl;
+    // проход 2: ВНУТРИ ценового блока — бейдж −N %, бейдж −N €, зачёркнутая цена
+    for (const el of box.querySelectorAll('span,div,p,strong,b,em,s,del,strike,sup')) {
+      if (el.childElementCount > 2) continue;
+      try { if (el.closest(BAD_ZONE)) continue; } catch (e) {}
+      const t = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!t || t.length > 40 || SKIP_T.test(t)) continue;
+      let m = t.match(/^[\-\u2212\u2013]\s*(\d+(?:[.,]\d+)?)\s*%/); // бейдж «-39 %»
+      if (m) { const v = parseFloat(m[1].replace(',', '.')); if (v > 0 && v < 100 && res.discount_pct == null) res.discount_pct = v; continue; }
+      m = t.match(/^[\-\u2212\u2013]\s*([\d.,\s\u00a0]+?)\s*\u20ac/); // бейдж «-1.991 €»
+      if (m) { const v = __num(m[1]); if (v != null && res.discount_abs == null) res.discount_abs = v; continue; }
+      const n = readPrice(el);
       if (n == null) continue;
       if (__struck(el)) { if (res.price_original == null || n > res.price_original) res.price_original = n; }
-      else {
-        let fs = 10;
-        try { fs = parseFloat(getComputedStyle(el).fontSize) || 10; } catch (err) {}
-        if (fs > bestFs || (fs === bestFs && res.price == null)) { bestFs = fs; res.price = n; }
+      else if (res.price != null && n > res.price * 1.02) { // v1.25.0: незачёркнутая, но БОЛЬШАЯ цена в ценовом блоке = старая (LM бьёт цену классом без line-through)
+        if (res.price_original == null || n < res.price_original) res.price_original = n;
       }
     }
+    // нормализация тройки
     if (res.price != null && res.price_original != null && res.price_original > res.price) {
       if (res.discount_abs == null) res.discount_abs = Math.round((res.price_original - res.price) * 100) / 100;
       if (res.discount_pct == null) res.discount_pct = Math.round((res.price_original - res.price) / res.price_original * 1000) / 10;
@@ -249,13 +282,58 @@ function extractOnPage() {
   }
   // v1.12: визуальный блок цены — главный источник (JSON-LD бывает без скидки/устаревшим)
   // v1.22.0: на MediaMarkt НЕ переопределяем найденную цену — визуальный детектор цеплял related-товары
-  if (!(out.price != null && /mediamarkt\./i.test(location.hostname))) try {
-    const vp = __visualPrice(document.body || document.documentElement);
-    if (vp.price != null) { out.price = vp.price; out.currency = out.currency || 'EUR'; }
-    if (vp.price_original != null) out.price_original = vp.price_original;
-    if (vp.discount_pct != null) out.discount_pct = vp.discount_pct;
-    if (vp.discount_abs != null) out.discount_abs = vp.discount_abs;
+  const __prePrice = out.price; // v1.24.0: структурированная цена (JSON-LD/спец-блоки) — эталон для проверки визуальной
+  // v1.25.0: СТРУКТУРИРОВАННЫЙ СТЕЙТ страницы (Next/Apollo/микрофронтенды): точная тройка цена/старая/% — приоритетнее визуала
+  const __stCands = []; // все валидные тройки из стейт-JSON — выбор ПОСЛЕ визуала, по совпадению цены
+  try {
+    const PAT1 = /"price"\s*:\s*([\d.]+)[\s\S]{0,400}?"(?:previousPrice|originalPrice|regularPrice|listPrice|wasPrice|crossedPrice|pvp|oldPrice)"\s*:\s*([\d.]+)/gi;
+    const PAT2 = /"(?:previousPrice|originalPrice|regularPrice|listPrice|wasPrice|crossedPrice|pvp|oldPrice)"\s*:\s*([\d.]+)[\s\S]{0,400}?"price"\s*:\s*([\d.]+)/gi;
+    for (const sc of document.querySelectorAll('script:not([src])')) {
+      const t = sc.textContent || '';
+      if (t.length < 50 || t.length > 3000000 || !/price/i.test(t)) continue;
+      for (const mm of t.matchAll(PAT1)) __stCands.push({ price: parseFloat(mm[1]), old: parseFloat(mm[2]), near: t.slice(Math.max(0, mm.index - 100), mm.index + 700) });
+      for (const mm of t.matchAll(PAT2)) __stCands.push({ price: parseFloat(mm[2]), old: parseFloat(mm[1]), near: t.slice(Math.max(0, mm.index - 100), mm.index + 700) });
+    }
   } catch (e) {}
+  // v1.26.0: ПРИОРИТЕТЫ — 1) ВИДИМАЯ главная цена (крупная, из ценового блока) = истина для «Цена»;
+  // 2) старая цена/% — из того же блока; 3) если в блоке нет — из стейт-JSON, чья цена СОВПАДАЕТ с видимой ±2%
+  // (иначе это другой вариант/рекомендация — отбрасываем); 4) JSON-LD — только как старая цена или цена при пустом визуале.
+  let __vp = null;
+  if (!/mediamarkt\./i.test(location.hostname)) { try { __vp = __visualPrice(document.body || document.documentElement); } catch (e) {} }
+  let fp = null, fo = out.price_original != null ? out.price_original : null, fpct = out.discount_pct != null ? out.discount_pct : null;
+  if (__vp && __vp.price != null) { fp = __vp.price; fo = __vp.price_original != null ? __vp.price_original : fo; fpct = __vp.discount_pct != null ? __vp.discount_pct : fpct; }
+  const ref = fp != null ? fp : __prePrice;
+  let stc = null;
+  for (const c of __stCands) {
+    if (!(c.price > 0 && c.old > c.price)) continue;
+    if (ref != null && Math.abs(c.price - ref) > Math.max(0.05, ref * 0.02)) continue; // чужой вариант/рекомендация
+    if (!stc || (ref != null && Math.abs(c.price - ref) < Math.abs(stc.price - ref))) stc = c;
+  }
+  if (fp == null && stc) fp = stc.price;
+  if (fp == null && __prePrice != null) fp = __prePrice;
+  if (stc && fp != null && Math.abs(stc.price - fp) <= Math.max(0.05, fp * 0.02)) {
+    if (fo == null) fo = stc.old;
+    if (fpct == null) {
+      const pm = String(stc.near || '').match(/"(?:discountPercentage|discountPercent|discountRate|savingPercentage|promotionPercentage)"\s*:\s*"?([\d.]+)/i);
+      if (pm) fpct = parseFloat(pm[1]);
+    }
+  }
+  // JSON-LD/спец-блок цена ВЫШЕ найденной — это регулярная цена «без скидки»
+  if (fo == null && __prePrice != null && fp != null && __prePrice > fp * 1.02) fo = __prePrice;
+  if (fp != null) { out.price = fp; out.currency = out.currency || 'EUR'; }
+  out.price_original = fo; out.discount_pct = fpct; out.discount_abs = null;
+  // v1.24.0: ФИНАЛЬНАЯ НОРМАЛИЗАЦИЯ тройки цена/старая/скидка — всегда пересчитываем % и € из пары цен
+  if (out.price != null && out.price_original != null) {
+    if (!(out.price_original > out.price)) { out.price_original = null; }
+  }
+  if (out.price != null && out.price_original == null && out.discount_pct != null && out.discount_pct > 0 && out.discount_pct < 90) {
+    out.price_original = Math.round(out.price / (1 - out.discount_pct / 100) * 100) / 100; // «бери цену и % — вычисляй»
+  }
+  if (out.price != null && out.price_original != null) {
+    out.discount_pct = Math.round((1 - out.price / out.price_original) * 1000) / 10;
+    out.discount_abs = Math.round((out.price_original - out.price) * 100) / 100;
+    if (out.discount_pct < 1) { out.price_original = null; out.discount_pct = null; out.discount_abs = null; }
+  } else { out.discount_pct = null; out.discount_abs = null; }
   // v1.2: распознаём антибот-страницу DataDome, чтобы не считать её «нет цены»
   out.captcha = !!document.querySelector('iframe[src*="captcha"], #captcha-delivery, .captcha-delivery')
     || /captcha|are you a robot|vérif/i.test(String(document.title || ''));
@@ -302,7 +380,11 @@ async function collectOne(api, token, p) {
       try {
         const [inj] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: extractOnPage });
         const nd = (inj && inj.result) || {};
-        d = { ...d, ...Object.fromEntries(Object.entries(nd).filter(([, v]) => v != null && v !== '')) };
+        // v1.26.0: тройка цена/старая/% АТОМАРНА — только из одной попытки (иначе каша между попытками)
+        const TRIPLE = ['price', 'price_original', 'discount_pct', 'discount_abs'];
+        if (nd.price != null) for (const k of TRIPLE) { d[k] = nd[k] != null ? nd[k] : undefined; }
+        const rest = { ...nd }; for (const k of TRIPLE) delete rest[k];
+        d = { ...d, ...Object.fromEntries(Object.entries(rest).filter(([, v]) => v != null && v !== '')) };
       } catch (e) {}
       if (d.price != null && d.image && (d.mpn || att >= 2)) break; // v1.18.4: ждём ещё и MPN (Worten рендерит характеристики позже)
       if (d.captcha) break;                  // капчу ретраить бессмысленно
@@ -424,8 +506,11 @@ function extractLinksOnPage() {
     let bestFs = -1;
     for (const el of root.querySelectorAll('span,div,p,strong,b,em,s,del,strike,sup,h2,h3,h4')) {
       if (el.childElementCount > 2) continue;
+      // v1.24.0: НЕ брать цифры из каруселей/рекомендаций/вариантов/рассрочки — они давали чужие цены («каша» между товарами)
+      try { if (el.closest('[class*="carousel" i], [class*="slick" i], [class*="slider" i], [class*="recommend" i], [class*="related" i], [class*="cross" i], [class*="upsell" i], [class*="option" i], [class*="variant" i], [class*="plazo" i], [class*="financ" i], [id*="carousel" i], [id*="recommend" i]')) continue; } catch (e) {}
       let t = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
       if (!t || t.length > 40) continue;
+      if (/(\bmes(es)?\b|\bplazo|\bcuota|\bsem(ana)?\b|a plazos)/i.test(t)) continue; // рассрочка «20 €/mes» — не цена товара
       if (t.indexOf('\u20ac') < 0) { // цена разбита: «2.999» + <sup>€</sup>
         const nx = el.nextElementSibling, pv = el.previousElementSibling;
         if (/^\d{1,3}([ .]\d{3})*(,\d{1,2})?$/.test(t) && nx && /^\s*\u20ac\s*$/.test(String(nx.textContent || ''))) t = t + ' \u20ac';
