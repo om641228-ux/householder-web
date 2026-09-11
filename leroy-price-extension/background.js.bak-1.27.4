@@ -82,8 +82,6 @@ function extractOnPage() {
       if (t.indexOf('\u20ac') < 0) return null;
       if (/\u20ac\s*\/|\/(kg|m\u00b2|m2|l|ud|unidad)s?\b/i.test(t)) return null; // цена за единицу
       if (/\bdesde\b|\bfrom\b/i.test(t)) return null; // v1.27.1: «desde 85 €» = цена конфигуратора «от», не цена товара
-      if (/env[ií]o|gratis|pedidos?|entrega|recog(ida|er)|entregar/i.test(t)) return null; // v1.27.5: «Envío gratis en pedidos +29€» — доставка, НЕ цена
-      if (/\+\s*\d/.test(t)) return null; // v1.27.5: «+29€» — порог бесплатной доставки, НЕ цена
       const pm = t.match(/(\d{1,3}(?:[ .\u00a0]\d{3})+(?:,\d{1,2})?|\d{1,6}[.,]\d{2}|\d{1,6})(?=\s*\u20ac)/);
       return pm ? __num(pm[1]) : null;
     };
@@ -649,8 +647,6 @@ function extractLinksOnPage() {
       let t = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
       if (!t || t.length > 40) continue;
       if (/(\bmes(es)?\b|\bplazo|\bcuota|\bsem(ana)?\b|a plazos)/i.test(t)) continue; // рассрочка «20 €/mes» — не цена товара
-      if (/env[ií]o|gratis|pedidos?|entrega|recog(ida|er)|entregar/i.test(t)) continue; // v1.27.5: «Envío gratis en pedidos +29€» — доставка, НЕ цена
-      if (/\+\s*\d/.test(t)) continue; // v1.27.5: «+29€» — порог бесплатной доставки, НЕ цена
       if (t.indexOf('\u20ac') < 0) { // цена разбита: «2.999» + <sup>€</sup>
         const nx = el.nextElementSibling, pv = el.previousElementSibling;
         if (/^\d{1,3}([ .]\d{3})*(,\d{1,2})?$/.test(t) && nx && /^\s*\u20ac\s*$/.test(String(nx.textContent || ''))) t = t + ' \u20ac';
