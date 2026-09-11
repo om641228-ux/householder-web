@@ -47,17 +47,19 @@ function extractOnPage() {
   };
   const __visualPrice = (root, anchorEl) => {
     // v1.27.0: при anchorEl область поиска = контейнер вокруг якоря (LM: элемент «Ref. 86176487» — точно блок ЭТОГО товара)
+    // v1.27.4: res.anchored = удалось ли сузить область до компактного блока якоря
     // v1.24.1: ДВА ПРОХОДА — 1) ищем главную цену по всей странице (крупнейший шрифт, без запретных зон),
     // 2) старую цену и % скидки ищем ТОЛЬКО в ценовом блоке вокруг неё (предки до 6 уровней, пока не найдём контейнер с € + %).
     // Раньше бейдж и зачёркнутая цена брались со ВСЕЙ страницы → % от чужого баннера перезаписывал настоящий «−39 %».
     const res = { price: null, price_original: null, discount_pct: null, discount_abs: null };
     if (!root || !root.querySelectorAll) return res;
+    res.anchored = false;
     if (anchorEl) { // поднимаемся от якоря до контейнера, где есть € (блок товара)
       let ab = anchorEl;
       for (let i = 0; i < 8 && ab && ab.parentElement; i++) {
         ab = ab.parentElement;
         const t = String(ab.innerText || '');
-        if (t.indexOf('\u20ac') >= 0 && t.length < 2500) break;
+        if (t.indexOf('\u20ac') >= 0 && t.length < 2500) { res.anchored = true; break; }
       }
       if (ab && ab.querySelectorAll && String(ab.innerText || '').indexOf('\u20ac') >= 0) root = ab;
     }
@@ -207,6 +209,8 @@ function extractOnPage() {
     return res;
   };
   const out = { title: '', price: null, currency: '', image: '' };
+  const __refUrl = (location.href.match(/-(\d{5,})\.html?(?:[?#]|$)/i) || [])[1] || ''; // v1.27.4: ref товара из URL
+  let __ldMatched = false; // true, если цена уже взята из Product, подтверждённого ref — дальше НЕ перезаписывать
   for (const sc of document.querySelectorAll('script[type="application/ld+json"]')) {
     try {
       const j = JSON.parse(sc.textContent);
@@ -215,6 +219,10 @@ function extractOnPage() {
         const arr = [it, ...((it && it['@graph']) || [])];
         for (const x of arr) {
           if (x && /Product/i.test(String(x['@type'] || ''))) {
+            const ids = [x.sku, x.productID, x.mpn].map(v => String(v || '')).join('|');
+            const isOurs = !!__refUrl && ids.includes(__refUrl);
+            if (__ldMatched && !isOurs) continue; // v1.27.4: чужой Product (рекомендации/сопутка) — не трогаем цену
+            if (!__ldMatched && !isOurs && (out.price != null)) { /* уже есть неподтверждённая — можно обновить только совпадением */ if (!isOurs) continue; }
             out.title = String(x.name || '');
             out.article = String(x.sku || x.mpn || '').trim(); // v1.3: каталожный номер из JSON-LD
             out.mpn = String(x.mpn || '').trim(); // v1.6: оригинальный номер производителя
@@ -226,6 +234,7 @@ function extractOnPage() {
             }
             out.image = Array.isArray(x.image) ? x.image[0] : String(x.image || '');
             if (!out.mpn && x.gtin13) out.gtin = String(x.gtin13); // v1.18: штрихкод как запасной вариант
+            if (isOurs) __ldMatched = true;
           }
         }
       }
@@ -394,6 +403,11 @@ function extractOnPage() {
   }
   let __vp = null;
   if (!/mediamarkt\./i.test(location.hostname)) { try { __vp = __visualPrice(document.body || document.documentElement, __anchor); } catch (e) {} }
+  // v1.27.4: визуал со ВСЕЙ страницы (якорь не сузил блок) и расходится с JSON-LD >2% — это баннер/промо, верим JSON-LD
+  if (__vp && __vp.price != null && __vp.anchored === false && __prePrice != null
+      && Math.abs(__vp.price - __prePrice) > Math.max(0.05, __prePrice * 0.02)) {
+    __vp = { price: __prePrice, price_original: null, discount_pct: null, discount_abs: null, anchored: true };
+  }
   let fp = null, fo = out.price_original != null ? out.price_original : null, fpct = out.discount_pct != null ? out.discount_pct : null;
   if (__vp && __vp.price != null) { fp = __vp.price; fo = __vp.price_original != null ? __vp.price_original : fo; fpct = __vp.discount_pct != null ? __vp.discount_pct : fpct; }
   const ref = fp != null ? fp : __prePrice;
@@ -614,12 +628,20 @@ function extractLinksOnPage() {
     }
     return false;
   };
-  const __visualPrice = (root) => {
+  const __visualPrice = (root, anchorEl) => {
     const res = { price: null, price_original: null, discount_pct: null, discount_abs: null };
     if (!root || !root.querySelectorAll) return res;
     let bestFs = -1;
     for (const el of root.querySelectorAll('span,div,p,strong,b,em,s,del,strike,sup,h2,h3,h4')) {
       if (el.childElementCount > 2) continue;
+      // v1.27.3: цена обязана принадлежать ЭТОЙ карточке — если элемент внутри ссылки на ДРУГОЙ товар, пропускаем
+      // (чинит «везде одинаковая цена»: предок-подъём хватал промо-блок/соседний товар)
+      if (anchorEl) {
+        try {
+          const own = el.closest('a[href*=".html"]');
+          if (own && own !== anchorEl) continue;
+        } catch (e) {}
+      }
       // v1.24.0: НЕ брать цифры из каруселей/рекомендаций/вариантов/рассрочки — они давали чужие цены («каша» между товарами)
       try { if (el.closest('[class*="carousel" i], [class*="slick" i], [class*="slider" i], [class*="recommend" i], [class*="related" i], [class*="cross" i], [class*="upsell" i], [class*="option" i], [class*="variant" i], [class*="plazo" i], [class*="financ" i], [id*="carousel" i], [id*="recommend" i]')) continue; } catch (e) {}
       let t = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
@@ -711,12 +733,13 @@ function extractLinksOnPage() {
     if (/^leroy\s*merlin$/i.test(name)) name = '';
     if (name.length > 300) name = name.slice(0, 300);
     // v1.12: визуальный разбор цены карточки — текущая/зачёркнутая/скидка; без цен за единицу
-    let pv = __visualPrice(card);
+    let pv = __visualPrice(card, a); // v1.27.3
     if (pv.price == null) { // карточка схлопнулась до ссылки — ищем у компактных предков
       let el = card;
       for (let up = 0; up < 3 && el && pv.price == null; up++) {
         el = el.parentElement;
-        if (el && String(el.innerText || '').length < 1200 && (el.querySelectorAll('a[href*=".html"]').length <= 4)) pv = __visualPrice(el);
+        // v1.27.3: строже — контейнер максимум с 2 товарными ссылками, и цены только нашей карточки
+        if (el && String(el.innerText || '').length < 600 && (el.querySelectorAll('a[href*=".html"]').length <= 2)) pv = __visualPrice(el, a);
       }
     }
     const price = pv.price, currency = price != null ? 'EUR' : '';
@@ -726,6 +749,24 @@ function extractLinksOnPage() {
     }
     out.push({ url: href, name, image: imgSrc, category, price, currency, price_original: pv.price_original, discount_pct: pv.discount_pct, discount_abs: pv.discount_abs });
   }
+  // v1.27.3: страничная страховка — одинаковая пара (цена, цена без скидки) у большинства карточек = протёкший промо-блок, а не реальные цены
+  try {
+    const freq = new Map();
+    for (const it of out) {
+      if (it.price == null) continue;
+      const k = it.price + '|' + (it.price_original || '');
+      freq.set(k, (freq.get(k) || 0) + 1);
+    }
+    for (const [k, cnt] of freq) {
+      if (cnt >= 5 && cnt >= out.length * 0.4) {
+        for (const it of out) {
+          if (it.price != null && (it.price + '|' + (it.price_original || '')) === k) {
+            it.price = null; it.currency = ''; it.price_original = null; it.discount_pct = null; it.discount_abs = null; it._price_dropped = true;
+          }
+        }
+      }
+    }
+  } catch (e) {}
   return out;
 }
 

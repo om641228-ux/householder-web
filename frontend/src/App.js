@@ -2245,7 +2245,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v184 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v185 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -3489,11 +3489,11 @@ function ParseTab({ token, isMobileView, canRun }) {
                     {catTh('brand', 'Производитель', { whiteSpace: 'nowrap' })}
                     {catTh('mpn', '№ производителя', { whiteSpace: 'nowrap' })}
                     {catTh('category', 'Раздел')}
+                    {catTh('date', 'Дата загрузки', { whiteSpace: 'nowrap' })}
                     {catTh('price', 'Цена', { whiteSpace: 'nowrap' })}
                     {catTh('price_original', 'Без скидки', { whiteSpace: 'nowrap' })}
                     {catTh('discount_pct', '−%', { whiteSpace: 'nowrap' })}
                     {catTh('discount_abs', '−€', { whiteSpace: 'nowrap' })}
-                    {catTh('date', 'Дата', { whiteSpace: 'nowrap' })}
                     {canRun && <th style={{ padding: '6px 8px', position: 'sticky', right: 0, background: '#fff', boxShadow: '-4px 0 6px rgba(0,0,0,.05)' }}></th>}
                   </tr>
                 </thead>
@@ -3523,6 +3523,10 @@ function ParseTab({ token, isMobileView, canRun }) {
                           ? <span onClick={() => pickCat(p.category)} style={{ cursor: 'pointer' }}>{p.category.split(' > ').slice(-2).join(' › ')}</span>
                           : '—'}
                       </td>
+                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontSize: 11, color: '#8e8e93' }}
+                        title={p.last_seen ? ('Дата парсинга: ' + new Date(p.last_seen).toLocaleString('ru-RU') + (p.first_seen ? ' · впервые: ' + new Date(p.first_seen).toLocaleString('ru-RU') : '') + (p.price_at ? ' · цена: ' + new Date(p.price_at).toLocaleString('ru-RU') : '')) : ''}>
+                        {p.last_seen ? new Date(p.last_seen).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }) + ' ' + new Date(p.last_seen).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                      </td>
                       <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
                         {p.price != null ? <b>{p.price} {p.currency || '€'}</b> : (p.price_estimate != null ? <span style={{ color: '#e67e22' }}>≈ {p.price_estimate} {p.currency || '€'} <span style={{ fontSize: 10 }}>(оценка)</span></span> : <span style={{ color: '#c7c7cc' }}>—</span>)}
                         {p.price_source === 'ai-search' && <span title="Цена найдена AI через веб-поиск (подтверждена по артикулу)" style={{ fontSize: 10, color: '#7c3aed', marginLeft: 4 }}>🤖</span>}
@@ -3538,10 +3542,6 @@ function ParseTab({ token, isMobileView, canRun }) {
                       </td>
                       <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontSize: 11 }} title="Скидка в евро (например, при покупке онлайн)">
                         {p.discount_abs != null ? <b style={{ color: '#d70015' }}>−{p.discount_abs} {p.currency || '€'}</b> : <span style={{ color: '#e5e5ea' }}>—</span>}
-                      </td>
-                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontSize: 11, color: '#8e8e93' }}
-                        title={p.last_seen ? ('Дата парсинга: ' + new Date(p.last_seen).toLocaleString('ru-RU') + (p.first_seen ? ' · впервые: ' + new Date(p.first_seen).toLocaleString('ru-RU') : '') + (p.price_at ? ' · цена: ' + new Date(p.price_at).toLocaleString('ru-RU') : '')) : ''}>
-                        {p.last_seen ? new Date(p.last_seen).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }) + ' ' + new Date(p.last_seen).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '—'}
                       </td>
                       {canRun && (
                         <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', position: 'sticky', right: 0, background: '#fff', boxShadow: '-4px 0 6px rgba(0,0,0,.05)' }}>
@@ -9753,7 +9753,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-11 · v184 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-11 · v185 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9766,7 +9766,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-11 · v184</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-11 · v185</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
