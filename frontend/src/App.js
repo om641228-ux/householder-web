@@ -935,7 +935,7 @@ const fmtDocDate = (iso) => iso ? iso.split('-').reverse().join('.') : '';
 // v74: вкладка «👥 Пользователи» (только admin) — управление доступом: роли, разделы документов, объекты
 function UsersTab({ token, objectsList }) {
   const SEC_LABELS = { home: '🏠 Дома', auto: '🚗 Авто', personal: '👤 Личное' };
-  const TAB_LABELS = { upload: '📤 Загрузка', list: '🧾 Чеки/документы', items: '📦 Предметы', links: '🔗 Связи', parse: '🌐 Парсинг', analysis: '📊 Анализ', taxes: '🧾 Налоги', cash: '💵 Cash', crm: '🤝 CRM', docs: '📁 Документы', compare: '⚖️ Цены', chat: '💬 Чат', log: '📋 Журнал' };
+  const TAB_LABELS = { upload: '📤 Загрузка', list: '🧾 Чеки/документы', tools: '🔧 Tools', links: '🔗 Связи', parse: '🌐 Парсинг', analysis: '📊 Анализ', taxes: '🧾 Налоги', cash: '💵 Cash', crm: '🤝 CRM', docs: '📁 Документы', compare: '⚖️ Цены', chat: '💬 Чат', log: '📋 Журнал' };
   const [list, setList] = useState([]);
   const [err, setErr] = useState('');
   const [edit, setEdit] = useState(null); // {id,name,password,role,sections[],objects[],disabled,isNew}
@@ -2248,7 +2248,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v178 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v179 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -6223,7 +6223,7 @@ function App() {
   const gotoTab = (t) => {
     setActiveTab(t);
     if (t === 'list') loadReceipts();
-    if (t === 'items') loadItems(); // v178
+    if (t === 'tools') loadItems(); // v179
     if (t === 'analysis') { loadReceipts(); loadBankMovements(); loadPlannedPayments(); }
     if (t === 'taxes') { loadReceipts(); loadBankMovements(); }
     if (t === 'cash') { loadReceipts(); loadCashMovements(); }
@@ -6231,7 +6231,7 @@ function App() {
   const mobileTabsOrder = [
     user?.role !== 'viewer' && tabAllowed('upload') && 'upload',
     tabAllowed('list') && 'list',
-    tabAllowed('list') && 'items',
+    appMode === 'items' && tabAllowed('list') && 'tools',
     tabAllowed('parse') && 'parse',
     tabAllowed('cash') && 'cash',
     (user?.role === 'admin' || user?.role === 'manager' || user?.role === 'user') && tabAllowed('crm') && 'crm',
@@ -6241,7 +6241,7 @@ function App() {
     tabAllowed('chat') && 'chat',
     user?.role === 'admin' && 'users',
     user?.role === 'admin' && 'log'
-  ].filter(Boolean);
+  ].filter(Boolean).filter(t => appMode === 'items' ? ['upload', 'tools'].includes(t) : t !== 'tools'); // v179: в режиме «Предметы» только Загрузка + Tools
   const swipeRef = useRef(null);
   const onAppTouchStart = (e) => {
     if (!isMobileView) return;
@@ -6982,7 +6982,7 @@ ${receiptData.failover.from} — недоступна
   // Боковая навигация «год/месяц» (v39): подсветка группы, видимой при прокрутке списка чеков
   const [activeRailGk, setActiveRailGk] = useState(null);
   useEffect(() => {
-    if (activeTab !== 'list' && activeTab !== 'items') return undefined; // v176: автоперевод работает и во вкладке «Предметы»
+    if (activeTab !== 'list') return undefined; // v179: автоперевод только во вкладке «Чеки»
     const onScroll = () => {
       const headers = document.querySelectorAll('[id^="rg-"]');
       let cur = null;
@@ -9685,14 +9685,14 @@ ${bodyHtml}
               <div style={{ display: 'flex', border: '1px solid #d0d0d5', borderRadius: 9, overflow: 'hidden', background: '#fff', marginLeft: 10 }}>
                 {[['checks', '🧾 Чеки'], ['items', '📦 Предметы']].map(([mode, label]) => (
                   <button key={mode}
-                    onClick={() => { setAppMode(mode); if (mode === 'items') { setActiveTab('items'); loadItems(); } else { setActiveTab('list'); loadReceipts(); } }}
+                    onClick={() => { setAppMode(mode); if (mode === 'items') { setActiveTab('tools'); loadItems(); } else { setActiveTab('list'); loadReceipts(); } }}
                     style={{ border: 'none', background: appMode === mode ? '#0071e3' : 'transparent', color: appMode === mode ? '#fff' : '#333', borderRadius: 0, padding: '6px 14px', fontSize: 13, fontWeight: appMode === mode ? 700 : 400, cursor: 'pointer', minHeight: 0, whiteSpace: 'nowrap' }}
                   >{label}</button>
                 ))}
               </div>
             </div>
             {/* v106.2: на мобильном кнопки распознавания — в шапке, между «Выбор модели» и «Выйти» */}
-            {isMobileView && activeTab === 'upload' && (
+            {isMobileView && appMode === 'checks' && activeTab === 'upload' && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <button
                   onClick={() => recognizeAndSave()}
@@ -9705,7 +9705,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-11 · v178 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-11 · v179 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9718,16 +9718,17 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-11 · v178</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-11 · v179</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
-            {appMode === 'items' && (
-              <span style={{ display: 'inline-flex', alignItems: 'center', fontSize: 12, fontWeight: 700, color: '#b26a00', background: '#fff4e0', border: '1px solid #ffd699', borderRadius: 8, padding: '3px 10px', marginRight: 4 }}>📦 Проект «Предметы» — клон; меню ниже принадлежит предметам</span>
-            )}
             {user?.role !== 'viewer' && tabAllowed('upload') && (
               <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>Загрузка</button>
             )}
+            {appMode === 'items' && tabAllowed('list') && (
+              <button className={activeTab === 'tools' ? 'active' : ''} onClick={() => { setActiveTab('tools'); loadItems(); }}>🔧 Tools</button>
+            )}
+            {appMode !== 'items' && (<>
             {tabAllowed('list') && (
             <button className={activeTab === 'list' ? 'active' : ''} onClick={() => {setActiveTab('list'); loadReceipts();}}>
               🧾 Фактуры ({receiptCount}) · 📄 Доки ({invoiceCount})
@@ -9800,6 +9801,7 @@ ${bodyHtml}
                 📋 Журнал
               </button>
             )}
+            </>)}
           </nav>
         </div>
       </header>
@@ -9812,6 +9814,12 @@ ${bodyHtml}
               <span className="mbn-ico">📤</span>Загрузка
             </button>
           )}
+          {appMode === 'items' && tabAllowed('list') && (
+            <button className={activeTab === 'tools' ? 'active' : ''} onClick={() => gotoTab('tools')}>
+              <span className="mbn-ico">🔧</span>Tools
+            </button>
+          )}
+          {appMode !== 'items' && (<>
           {tabAllowed('list') && (
             <button className={activeTab === 'list' ? 'active' : ''} onClick={() => { setActiveTab('list'); loadReceipts(); }}>
               <span className="mbn-ico">🧾</span>Фактуры
@@ -9860,6 +9868,7 @@ ${bodyHtml}
           <button onClick={() => setMoreNavOpen(true)}>
             <span className="mbn-ico">⋯</span>Ещё
           </button>
+          </>)}
         </nav>
       )}
       {isMobileView && moreNavOpen && (
@@ -9867,6 +9876,7 @@ ${bodyHtml}
           <div onClick={() => setMoreNavOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 1150 }} />
           <div className="mobile-more-sheet">
             <div style={{ textAlign: 'center', color: '#8e8e93', fontSize: 12, marginBottom: 6 }}>— Ещё —</div>
+            {appMode !== 'items' && (<>
             {tabAllowed('analysis') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('analysis'); loadReceipts(); loadBankMovements(); loadPlannedPayments(); }}>📊 Анализ</button>}
             {tabAllowed('taxes') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('taxes'); loadReceipts(); loadBankMovements(); }}>🧾 Налоги</button>}
             {tabAllowed('docs') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('docs'); }}>📁 Документы</button>}
@@ -9875,6 +9885,7 @@ ${bodyHtml}
             {tabAllowed('chat') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('chat'); }}>💬 Чат{chatUnreadTotal > 0 ? ` (${chatUnreadTotal})` : ''}</button>}
             {user?.role === 'admin' && <button onClick={() => { setMoreNavOpen(false); setActiveTab('users'); }}>👥 Доступ</button>}
             {user?.role === 'admin' && <button onClick={() => { setMoreNavOpen(false); setActiveTab('log'); }}>📋 Журнал</button>}
+            </>)}
             <button onClick={() => { setMoreNavOpen(false); setModelModalOpen(true); loadModels(); }}>🤖 Выбор модели AI</button>
             <button onClick={() => { setMoreNavOpen(false); cycleUiMode(); }}>{uiMode === 'mobile' ? '🖥 Переключить на полную версию' : '📱/🖥 Режим интерфейса (сейчас: авто)'}</button>
             <button onClick={() => setMoreNavOpen(false)} style={{ textAlign: 'center', color: '#8e8e93', borderBottom: 'none' }}>Закрыть</button>
@@ -10603,7 +10614,25 @@ ${bodyHtml}
         </div>
       )}
 
-      {activeTab === 'upload' && (
+      {/* v179: режим «Предметы» — окно загрузки фото предмета (как у чеков: фото → AI → запись в базу) */}
+      {appMode === 'items' && activeTab === 'upload' && (
+        <div className="upload-section">
+          <div style={{ background: '#fff', border: '1px solid #e0e0e5', borderRadius: 12, padding: 24, textAlign: 'center' }}>
+            <div style={{ fontSize: 40, marginBottom: 8 }}>🔧</div>
+            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Распознавание предмета</div>
+            <div style={{ fontSize: 13, color: '#6e6e73', marginBottom: 16, maxWidth: 460, margin: '0 auto 16px' }}>Сфотографируйте предмет — AI определит название (с % схожести), производителя и номер производителя, и сохранит карточку в Tools.</div>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: itemBusy ? '#b9c8bd' : '#0071e3', color: '#fff', borderRadius: 9, padding: '12px 22px', fontSize: 15, fontWeight: 700, cursor: itemBusy ? 'default' : 'pointer' }}>
+              {itemBusy ? '⏳ Распознаю…' : '📷 Сфотографировать / выбрать фото'}
+              <input type="file" accept="image/*" capture="environment" disabled={itemBusy} style={{ display: 'none' }}
+                onChange={e => { const f = e.target.files && e.target.files[0]; if (f) recognizeItemPhoto(f); e.target.value = ''; }} />
+            </label>
+            {itemError && <div style={{ marginTop: 12, background: '#fdecea', border: '1px solid #e74c3c', borderRadius: 10, padding: '8px 14px', fontSize: 13, color: '#c0392b' }}>Ошибка: {itemError}</div>}
+            <div style={{ marginTop: 14, fontSize: 12, color: '#95a5a6' }}>Карточки сохраняются во вкладке 🔧 Tools.</div>
+          </div>
+        </div>
+      )}
+
+      {appMode === 'checks' && activeTab === 'upload' && (
         <div className="upload-section">
           <div className="upload-toolbar">
             <button className="btn-camera" onClick={handleCameraClick}>
@@ -11059,7 +11088,7 @@ ${bodyHtml}
       )}
 
       {/* v178: модуль «Предметы» — загрузка фото → AI-распознавание → база дома → поиск по магазинам */}
-      {activeTab === 'items' && (
+      {activeTab === 'tools' && (
         <div className="list-section">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12, background: '#fff', border: '1px solid #e0e0e5', borderRadius: 10, padding: '10px 14px' }}>
             <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: itemBusy ? '#b9c8bd' : '#0071e3', color: '#fff', borderRadius: 9, padding: '8px 16px', fontSize: 14, fontWeight: 700, cursor: itemBusy ? 'default' : 'pointer' }}>
@@ -11134,7 +11163,7 @@ ${bodyHtml}
                   </div>
                 ) : (
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    <button onClick={() => { setItemEditId(it.id); setItemEditForm({}); }}
+                    <button onClick={() => { setItemEditId(it.id); setItemEditForm({ name_ru: it.name_ru || '', name_original: it.name_original || '', brand: it.brand || '', mpn: it.mpn || '', category: it.category || '', notes: it.notes || '' }); }}
                       style={{ border: '1px solid #ccc', background: '#fff', borderRadius: 6, padding: '5px 10px', fontSize: 12, cursor: 'pointer' }}>✏️ Правка</button>
                     <button onClick={() => loadItemSimilar(it.id)} disabled={itemSimilar[it.id]?.loading}
                       style={{ border: 'none', background: '#8e44ad', color: '#fff', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
