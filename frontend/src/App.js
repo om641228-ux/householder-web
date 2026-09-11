@@ -2248,7 +2248,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v179 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v180 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -5820,6 +5820,8 @@ function App() {
   const [itemEditId, setItemEditId] = useState(null);
   const [itemEditForm, setItemEditForm] = useState({});
   const [itemSimilar, setItemSimilar] = useState({});      // id → {loading, results, error}
+  const [itemFiles, setItemFiles] = useState([]);          // v180: выбранные фото во вкладке «Загрузка» предметов
+  const [itemFilesIdx, setItemFilesIdx] = useState(0);
   const [chatUnread, setChatUnread] = useState({}); // v83: непрочитанные по каналам
   const [cashQ, setCashQ] = useState('');           // v85: поиск по движениям (Cash)
   const [cashVals, setCashVals] = useState({});     // v85: редактируемые значения строк {id: {counterparty, operation_date, amount}}
@@ -6173,6 +6175,33 @@ function App() {
       }
       setItemsList(prev => [d.item, ...prev]);
     } catch (e) { setItemError(e.message); }
+    setItemBusy(false);
+  };
+
+  // v180: вкладка «Загрузка» предметов — выбор/дроп фото + пакетное распознавание (как у чеков)
+  const addItemFiles = (files) => {
+    const imgs = Array.from(files || []).filter(f => /^image\//.test(f.type));
+    if (!imgs.length) return;
+    setItemFiles(prev => [...prev, ...imgs]);
+    setItemError('');
+  };
+  const itemDrop = (e) => { e.preventDefault(); addItemFiles(e.dataTransfer.files); };
+  const recognizeItemFiles = async () => {
+    if (!itemFiles.length || itemBusy) return;
+    setItemBusy(true); setItemError('');
+    const errs = [];
+    for (const f of itemFiles) {
+      try {
+        const fd = new FormData();
+        fd.append('image', f);
+        const r = await fetch(`${API_URL}/api/items/recognize?token=${token}`, { method: 'POST', body: fd });
+        const d = await r.json();
+        if (!r.ok) { if (d.missing) setItemsMissing(true); throw new Error(d.error || `Ошибка ${r.status}`); }
+        setItemsList(prev => [d.item, ...prev]);
+      } catch (e) { errs.push(`${f.name}: ${e.message}`); }
+    }
+    if (errs.length) setItemError(errs.join(' · '));
+    setItemFiles([]); setItemFilesIdx(0);
     setItemBusy(false);
   };
 
@@ -9682,11 +9711,11 @@ ${bodyHtml}
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#95a5a6', fontWeight: 400 }}>{activeModelDisplay.displayName}</span>
               </button>
               {/* v177: ВЕРХНИЙ переключатель проекта — Чеки (основной проект, по умолчанию) / Предметы (клон проекта под базу предметов) */}
-              <div style={{ display: 'flex', border: '1px solid #d0d0d5', borderRadius: 9, overflow: 'hidden', background: '#fff', marginLeft: 10 }}>
+              <div style={{ display: 'flex', gap: 8, marginLeft: 10 }}>
                 {[['checks', '🧾 Чеки'], ['items', '📦 Предметы']].map(([mode, label]) => (
                   <button key={mode}
                     onClick={() => { setAppMode(mode); if (mode === 'items') { setActiveTab('tools'); loadItems(); } else { setActiveTab('list'); loadReceipts(); } }}
-                    style={{ border: 'none', background: appMode === mode ? '#0071e3' : 'transparent', color: appMode === mode ? '#fff' : '#333', borderRadius: 0, padding: '6px 14px', fontSize: 13, fontWeight: appMode === mode ? 700 : 400, cursor: 'pointer', minHeight: 0, whiteSpace: 'nowrap' }}
+                    style={{ border: appMode === mode ? 'none' : '1px solid #d0d0d5', background: appMode === mode ? '#0071e3' : '#f2f2f5', color: appMode === mode ? '#fff' : '#333', borderRadius: 9, padding: '7px 16px', fontSize: 13, fontWeight: appMode === mode ? 700 : 400, cursor: 'pointer', minHeight: 0, whiteSpace: 'nowrap', boxShadow: appMode === mode ? '0 1px 4px rgba(0,113,227,0.35)' : 'none' }}
                   >{label}</button>
                 ))}
               </div>
@@ -9705,7 +9734,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-11 · v179 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-11 · v180 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9718,7 +9747,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-11 · v179</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-11 · v180</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
@@ -10614,21 +10643,61 @@ ${bodyHtml}
         </div>
       )}
 
-      {/* v179: режим «Предметы» — окно загрузки фото предмета (как у чеков: фото → AI → запись в базу) */}
+      {/* v180: режим «Предметы» — вкладка «Загрузка» как у чеков: тулбар + drop-зона + «Распознать и сохранить» */}
       {appMode === 'items' && activeTab === 'upload' && (
         <div className="upload-section">
-          <div style={{ background: '#fff', border: '1px solid #e0e0e5', borderRadius: 12, padding: 24, textAlign: 'center' }}>
-            <div style={{ fontSize: 40, marginBottom: 8 }}>🔧</div>
-            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Распознавание предмета</div>
-            <div style={{ fontSize: 13, color: '#6e6e73', marginBottom: 16, maxWidth: 460, margin: '0 auto 16px' }}>Сфотографируйте предмет — AI определит название (с % схожести), производителя и номер производителя, и сохранит карточку в Tools.</div>
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: itemBusy ? '#b9c8bd' : '#0071e3', color: '#fff', borderRadius: 9, padding: '12px 22px', fontSize: 15, fontWeight: 700, cursor: itemBusy ? 'default' : 'pointer' }}>
-              {itemBusy ? '⏳ Распознаю…' : '📷 Сфотографировать / выбрать фото'}
-              <input type="file" accept="image/*" capture="environment" disabled={itemBusy} style={{ display: 'none' }}
-                onChange={e => { const f = e.target.files && e.target.files[0]; if (f) recognizeItemPhoto(f); e.target.value = ''; }} />
+          <div className="upload-toolbar">
+            <label className="btn-camera" style={{ cursor: 'pointer' }}>
+              📷 {Capacitor.getPlatform() === 'ios' ? 'Камера' : 'Фото'}
+              <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
+                onChange={e => { addItemFiles(e.target.files); e.target.value = ''; }} />
             </label>
-            {itemError && <div style={{ marginTop: 12, background: '#fdecea', border: '1px solid #e74c3c', borderRadius: 10, padding: '8px 14px', fontSize: 13, color: '#c0392b' }}>Ошибка: {itemError}</div>}
-            <div style={{ marginTop: 14, fontSize: 12, color: '#95a5a6' }}>Карточки сохраняются во вкладке 🔧 Tools.</div>
+            <label className="btn-file" style={{ cursor: 'pointer' }}>
+              📁 Выбрать файл
+              <input type="file" accept="image/*" multiple style={{ display: 'none' }}
+                onChange={e => { addItemFiles(e.target.files); e.target.value = ''; }} />
+            </label>
+            <button className="btn-file" onClick={recognizeItemFiles} disabled={!itemFiles.length || itemBusy}
+              style={{ background: (!itemFiles.length || itemBusy) ? '#c7d7ea' : '#0071e3', color: '#fff', border: 'none', cursor: (!itemFiles.length || itemBusy) ? 'not-allowed' : 'pointer' }}>
+              {itemBusy ? '⏳ Распознаю…' : `⚡ Распознать и сохранить${itemFiles.length > 1 ? ` (${itemFiles.length})` : ''}`}
+            </button>
           </div>
+
+          <div className="drop-zone" onDrop={itemDrop} onDragOver={e => e.preventDefault()}>
+            {itemFiles.length ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: 10 }}>
+                <img src={URL.createObjectURL(itemFiles[Math.min(itemFilesIdx, itemFiles.length - 1)])} alt="preview" className="preview" />
+                {itemFiles.length > 1 && (
+                  <div className="file-nav">
+                    <button onClick={() => setItemFilesIdx(i => Math.max(0, i - 1))} disabled={itemFilesIdx === 0}>◀</button>
+                    <span>{itemFilesIdx + 1} / {itemFiles.length}</span>
+                    <button onClick={() => setItemFilesIdx(i => Math.min(itemFiles.length - 1, i + 1))} disabled={itemFilesIdx >= itemFiles.length - 1}>▶</button>
+                  </div>
+                )}
+                <p style={{ fontSize: 12, color: '#7f8c8d', margin: 0 }}>
+                  {itemFiles[Math.min(itemFilesIdx, itemFiles.length - 1)].name} · {(itemFiles[Math.min(itemFilesIdx, itemFiles.length - 1)].size / 1024 / 1024).toFixed(2)} MB
+                </p>
+                {itemFiles.length > 1 && <p style={{ fontSize: 12, color: '#2980b9', margin: 0, fontWeight: 600 }}>{itemFiles.length} фото → каждое в свою карточку Tools</p>}
+                <button onClick={() => { setItemFiles([]); setItemFilesIdx(0); }} style={{ fontSize: 12, border: '1px solid #ccc', background: '#fff', borderRadius: 6, padding: '4px 12px', cursor: 'pointer' }}>✕ Очистить</button>
+              </div>
+            ) : (
+              <div className="drop-text" onClick={() => { const el = document.getElementById('item-file-input'); if (el) el.click(); }} style={{ cursor: 'pointer' }}>
+                <p>Перетащите фото предмета сюда</p>
+                <p>или нажмите для выбора файлов</p>
+                <p className="hint">Можно выбрать несколько файлов — AI определит название (с % схожести), производителя и номер производителя</p>
+              </div>
+            )}
+            <input id="item-file-input" type="file" accept="image/*" multiple style={{ display: 'none' }}
+              onChange={e => { addItemFiles(e.target.files); e.target.value = ''; }} />
+          </div>
+
+          {itemError && <div style={{ marginTop: 10, background: '#fdecea', border: '1px solid #e74c3c', borderRadius: 10, padding: '8px 14px', fontSize: 13, color: '#c0392b' }}>Ошибка: {itemError}</div>}
+          {itemsMissing && (
+            <div style={{ marginTop: 10, background: '#fdecea', border: '1px solid #e74c3c', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#c0392b' }}>
+              ⚠️ Таблица <b>home_items</b> ещё не создана. Выполните один раз в Supabase → SQL Editor файл <b>supabase-migration-v178-home-items.sql</b>.
+            </div>
+          )}
+          <div style={{ fontSize: 12, color: '#95a5a6', marginTop: 8 }}>Карточки сохраняются во вкладке 🔧 Tools.</div>
         </div>
       )}
 
@@ -11134,6 +11203,7 @@ ${bodyHtml}
                       {it.edited && <span title="Исправлено вручную" style={{ fontSize: 11, color: '#8e44ad' }}>✏️</span>}
                     </div>
                     {it.name_original && <div style={{ fontSize: 12, color: '#6e6e73' }}>{it.name_original}</div>}
+                    {it.name_es && <div style={{ fontSize: 12, color: '#6e6e73' }}>🇪🇸 {it.name_es}</div>}
                     {it.category && <div style={{ fontSize: 11, color: '#95a5a6' }}>🏷 {it.category}</div>}
                   </div>
                 </div>
@@ -11151,7 +11221,7 @@ ${bodyHtml}
 
                 {itemEditId === it.id ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6, background: '#f8f8fb', borderRadius: 8, padding: 8 }}>
-                    {[['name_ru', 'Название (рус)'], ['name_original', 'Название (ориг.)'], ['brand', 'Производитель'], ['mpn', 'Номер производителя'], ['category', 'Категория'], ['notes', 'Заметки']].map(([k, lbl]) => (
+                    {[['name_ru', 'Название (рус)'], ['name_original', 'Название (ориг.)'], ['name_es', 'Название (исп.)'], ['brand', 'Производитель'], ['mpn', 'Номер производителя'], ['category', 'Категория'], ['notes', 'Заметки']].map(([k, lbl]) => (
                       <input key={k} type="text" placeholder={lbl} value={itemEditForm[k] ?? (it[k] || '')}
                         onChange={e => setItemEditForm(prev => ({ ...prev, [k]: e.target.value }))}
                         style={{ padding: '5px 8px', fontSize: 12, borderRadius: 5, border: '1px solid #ccc' }} />
@@ -11163,7 +11233,7 @@ ${bodyHtml}
                   </div>
                 ) : (
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    <button onClick={() => { setItemEditId(it.id); setItemEditForm({ name_ru: it.name_ru || '', name_original: it.name_original || '', brand: it.brand || '', mpn: it.mpn || '', category: it.category || '', notes: it.notes || '' }); }}
+                    <button onClick={() => { setItemEditId(it.id); setItemEditForm({ name_ru: it.name_ru || '', name_original: it.name_original || '', name_es: it.name_es || '', brand: it.brand || '', mpn: it.mpn || '', category: it.category || '', notes: it.notes || '' }); }}
                       style={{ border: '1px solid #ccc', background: '#fff', borderRadius: 6, padding: '5px 10px', fontSize: 12, cursor: 'pointer' }}>✏️ Правка</button>
                     <button onClick={() => loadItemSimilar(it.id)} disabled={itemSimilar[it.id]?.loading}
                       style={{ border: 'none', background: '#8e44ad', color: '#fff', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
@@ -11182,7 +11252,7 @@ ${bodyHtml}
                       <a key={i} href={r.url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none', color: 'inherit', background: '#f8f8fb', borderRadius: 8, padding: '5px 8px', fontSize: 12 }}>
                         {r.image && <img src={r.image} alt="" style={{ width: 34, height: 34, objectFit: 'contain', borderRadius: 5, background: '#fff', flexShrink: 0 }} />}
                         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.name}>{r.name}</span>
-                        <span style={{ fontSize: 10, color: '#95a5a6', flexShrink: 0 }}>{({ mpn: '🔢MPN', 'brand+name': '🏭+назв.', name: 'назв.', name_ru: 'назв.RU' })[r.match_by] || r.match_by} · {String(r.site || '').replace('www.', '')}</span>
+                        <span style={{ fontSize: 10, color: '#95a5a6', flexShrink: 0 }}>{({ mpn: '🔢MPN', name_es: '🇪🇸назв.', 'brand+name': '🏭+назв.', name: 'назв.', name_ru: 'назв.RU' })[r.match_by] || r.match_by} · {String(r.site || '').replace('www.', '')}</span>
                         <span style={{ fontWeight: 700, color: '#c0392b', flexShrink: 0 }}>{r.price != null ? `${r.price} €` : '—'}</span>
                         {r.price_original != null && r.price_original > (r.price || 0) && <span style={{ textDecoration: 'line-through', color: '#95a5a6', flexShrink: 0 }}>{r.price_original} €</span>}
                         {r.discount_pct != null && <span style={{ fontSize: 10, fontWeight: 700, color: '#1e8449', flexShrink: 0 }}>−{Math.round(r.discount_pct)}%</span>}

@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v178-2026-09-11', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v180-2026-09-11', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -883,6 +883,7 @@ function buildItemPrompt() {
 {
   "name_ru": "название предмета по-русски (кратко: «Тестер розеток», «Кусачки диагональные»)",
   "name_original": "название/модель как на корпусе или по-английски (null если не видно)",
+  "name_es": "название предмета на испанском — как его ищут в магазинах Испании (например «alicates de corte diagonal», «probador de enchufes», «llave hexagonal»)",
   "category": "одна категория: инструмент | электроинструмент | электрика | крепёж | сантехника | расходники | бытовая техника | другое",
   "confidence": 0.0,
   "brand": "производитель с корпуса/логотипа (null если не читается — НЕ выдумывай)",
@@ -917,6 +918,7 @@ function parseItemJson(text) {
   return {
     name_ru: clean(d.name_ru || d.name),
     name_original: clean(d.name_original),
+    name_es: clean(d.name_es),
     category: clean(d.category),
     confidence: conf(d.confidence),
     brand: clean(d.brand || d.manufacturer),
@@ -6852,6 +6854,7 @@ app.post('/api/items/recognize', requireAuth, upload.single('image'), async (req
       user_id: req.user.id ? String(req.user.id) : null,
       name_ru: rec.data.name_ru,
       name_original: rec.data.name_original,
+      name_es: rec.data.name_es,
       category: rec.data.category,
       confidence: rec.data.confidence,
       brand: rec.data.brand,
@@ -6862,7 +6865,12 @@ app.post('/api/items/recognize', requireAuth, upload.single('image'), async (req
       ai_raw: rec.data,
       photo_url: photoUrl
     };
-    const { data, error } = await supabaseAdmin.from('home_items').insert(row).select('*').single();
+    let { data, error } = await supabaseAdmin.from('home_items').insert(row).select('*').single();
+    if (error && /name_es/i.test(error.message || '')) {
+      // колонка name_es ещё не добавлена (миграция v180 не выполнена) — сохраняем без неё
+      delete row.name_es;
+      ({ data, error } = await supabaseAdmin.from('home_items').insert(row).select('*').single());
+    }
     if (error) {
       if (/does not exist|relation|schema cache/i.test(error.message || '')) {
         return res.status(500).json({ error: 'Таблица home_items не создана — выполните supabase-migration-v178-home-items.sql в SQL Editor', missing: true });
@@ -6886,7 +6894,7 @@ app.get('/api/items', requireAuth, async (req, res) => {
       const words = q.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 4);
       for (const w of words) {
         const safe = w.replace(/[%_]/g, ' ');
-        query = query.or(`name_ru.ilike.%${safe}%,name_original.ilike.%${safe}%,brand.ilike.%${safe}%,mpn.ilike.%${safe}%`);
+        query = query.or(`name_ru.ilike.%${safe}%,name_original.ilike.%${safe}%,name_es.ilike.%${safe}%,brand.ilike.%${safe}%,mpn.ilike.%${safe}%`);
       }
     }
     const { data, error } = await query;
@@ -6905,7 +6913,7 @@ app.put('/api/items/:id', requireAuth, async (req, res) => {
   try {
     const b = req.body || {};
     const patch = {};
-    for (const k of ['name_ru', 'name_original', 'category', 'brand', 'mpn', 'notes', 'receipt_id']) {
+    for (const k of ['name_ru', 'name_original', 'name_es', 'category', 'brand', 'mpn', 'notes', 'receipt_id']) {
       if (k in b) patch[k] = b[k] === '' ? null : b[k];
     }
     for (const k of ['confidence', 'brand_confidence', 'mpn_confidence']) {
@@ -6936,7 +6944,7 @@ app.delete('/api/items/:id', requireAuth, requireRole('admin', 'manager'), async
 });
 
 // GET /api/items/:id/similar — похожие товары в базах магазинов (parse_products):
-// 1) точное совпадение MPN; 2) бренд + слова названия; 3) просто слова названия
+// 1) точное совпадение MPN; 2) v180: слова ИСПАНСКОГО названия name_es (+бренд, скоринг); 3) слова русского названия
 app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
   try {
     const { data: item, error: e1 } = await supabaseAdmin.from('home_items').select('*').eq('id', req.params.id).maybeSingle();
@@ -6959,18 +6967,34 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
         .ilike('mpn', item.mpn.replace(/[%_]/g, ' ')).order('price', { ascending: true, nullsFirst: false }).limit(30);
       push(data, 'mpn');
     }
-    // 2) бренд + ключевые слова названия
-    const nameWords = String(item.name_original || item.name_ru || '')
-      .toLowerCase().replace(/[^a-zа-я0-9\s-]/gi, ' ').split(/\s+/)
-      .filter(w => w.length >= 3).slice(0, 3);
-    if (out.length < 20 && nameWords.length) {
-      let q = supabaseAdmin.from('parse_products').select(COLS);
-      if (item.brand) q = q.ilike('brand', item.brand.replace(/[%_]/g, ' '));
-      for (const w of nameWords) q = q.ilike('name', '%' + w.replace(/[%_]/g, ' ') + '%');
-      const { data } = await q.order('price', { ascending: true, nullsFirst: false }).limit(30);
-      push(data, item.brand ? 'brand+name' : 'name');
+    // 2) v180: ГЛАВНЫЙ поиск — слова ИСПАНСКОГО названия (каталоги магазинов на испанском).
+    // Кандидаты через OR по словам, затем скоринг в JS: +1 за каждое слово в названии, +3 за бренд, +5 за MPN.
+    const STOP = new Set(['de', 'del', 'la', 'el', 'los', 'las', 'con', 'para', 'por', 'una', 'uno', 'y', 'en', 'al', 'un']);
+    const wordsOf = (txt, minLen, maxN) => String(txt || '')
+      .toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/)
+      .filter(w => w.length >= minLen && !STOP.has(w)).slice(0, maxN);
+    const esWords = wordsOf(item.name_es, 3, 4);
+    const latWords = wordsOf(item.name_original, 3, 3).filter(w => !item.brand || !String(item.brand).toLowerCase().includes(w));
+    const searchWords = [...new Set([...esWords, ...latWords])];
+    if (searchWords.length) {
+      const orExpr = searchWords.map(w => `name.ilike.%${w.replace(/[%_]/g, ' ')}%`).join(',');
+      const { data: cand } = await supabaseAdmin.from('parse_products').select(COLS)
+        .or(orExpr).limit(120);
+      const brandLc = String(item.brand || '').toLowerCase();
+      const scored = (cand || []).map(r => {
+        const nm = String(r.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        let score = 0;
+        for (const w of esWords) if (nm.includes(w)) score += 2; // испанские слова весят больше
+        for (const w of latWords) if (nm.includes(w)) score += 1;
+        if (brandLc && String(r.brand || '').toLowerCase().includes(brandLc)) score += 3;
+        if (item.mpn && r.mpn && String(r.mpn).toLowerCase() === String(item.mpn).toLowerCase()) score += 5;
+        return { r, score };
+      }).filter(x => x.score >= 2); // минимум одно испанское слово или бренд+слово
+      scored.sort((a, b) => b.score - a.score || (a.r.price ?? 1e9) - (b.r.price ?? 1e9));
+      push(scored.slice(0, 30).map(x => x.r), 'name_es');
     }
-    // 3) слова русского названия (широкий поиск)
+    // 3) слова русского названия (широкий поиск, вдруг каталог на русском)
     if (out.length < 10 && item.name_ru) {
       const ruWords = item.name_ru.toLowerCase().split(/\s+/).filter(w => w.length >= 4).slice(0, 2);
       if (ruWords.length) {
@@ -6980,7 +7004,7 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
         push(data, 'name_ru');
       }
     }
-    res.json({ item: { id: item.id, name_ru: item.name_ru, brand: item.brand, mpn: item.mpn }, results: out.slice(0, 30) });
+    res.json({ item: { id: item.id, name_ru: item.name_ru, name_es: item.name_es, brand: item.brand, mpn: item.mpn }, results: out.slice(0, 30) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
