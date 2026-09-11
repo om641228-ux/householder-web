@@ -935,7 +935,7 @@ const fmtDocDate = (iso) => iso ? iso.split('-').reverse().join('.') : '';
 // v74: вкладка «👥 Пользователи» (только admin) — управление доступом: роли, разделы документов, объекты
 function UsersTab({ token, objectsList }) {
   const SEC_LABELS = { home: '🏠 Дома', auto: '🚗 Авто', personal: '👤 Личное' };
-  const TAB_LABELS = { upload: '📤 Загрузка', list: '🧾 Чеки/документы', links: '🔗 Связи', parse: '🌐 Парсинг', analysis: '📊 Анализ', taxes: '🧾 Налоги', cash: '💵 Cash', crm: '🤝 CRM', docs: '📁 Документы', compare: '⚖️ Цены', chat: '💬 Чат', log: '📋 Журнал' };
+  const TAB_LABELS = { upload: '📤 Загрузка', list: '🧾 Чеки/документы', items: '📦 Предметы', links: '🔗 Связи', parse: '🌐 Парсинг', analysis: '📊 Анализ', taxes: '🧾 Налоги', cash: '💵 Cash', crm: '🤝 CRM', docs: '📁 Документы', compare: '⚖️ Цены', chat: '💬 Чат', log: '📋 Журнал' };
   const [list, setList] = useState([]);
   const [err, setErr] = useState('');
   const [edit, setEdit] = useState(null); // {id,name,password,role,sections[],objects[],disabled,isNew}
@@ -2248,7 +2248,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v175 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v176 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -6137,7 +6137,7 @@ function App() {
   // v106.2: свайп влево/вправо по экрану — переход между разделами (порядок нижней навигации + «Ещё»)
   const gotoTab = (t) => {
     setActiveTab(t);
-    if (t === 'list') loadReceipts();
+    if (t === 'list' || t === 'items') loadReceipts();
     if (t === 'analysis') { loadReceipts(); loadBankMovements(); loadPlannedPayments(); }
     if (t === 'taxes') { loadReceipts(); loadBankMovements(); }
     if (t === 'cash') { loadReceipts(); loadCashMovements(); }
@@ -6145,6 +6145,7 @@ function App() {
   const mobileTabsOrder = [
     user?.role !== 'viewer' && tabAllowed('upload') && 'upload',
     tabAllowed('list') && 'list',
+    tabAllowed('list') && 'items',
     tabAllowed('parse') && 'parse',
     tabAllowed('cash') && 'cash',
     (user?.role === 'admin' || user?.role === 'manager' || user?.role === 'user') && tabAllowed('crm') && 'crm',
@@ -6895,7 +6896,7 @@ ${receiptData.failover.from} — недоступна
   // Боковая навигация «год/месяц» (v39): подсветка группы, видимой при прокрутке списка чеков
   const [activeRailGk, setActiveRailGk] = useState(null);
   useEffect(() => {
-    if (activeTab !== 'list') return undefined;
+    if (activeTab !== 'list' && activeTab !== 'items') return undefined; // v176: автоперевод работает и во вкладке «Предметы»
     const onScroll = () => {
       const headers = document.querySelectorAll('[id^="rg-"]');
       let cur = null;
@@ -9609,7 +9610,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-10 · v175 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-11 · v176 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9622,7 +9623,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-10 · v175</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-11 · v176</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
@@ -9632,6 +9633,17 @@ ${bodyHtml}
             {tabAllowed('list') && (
             <button className={activeTab === 'list' ? 'active' : ''} onClick={() => {setActiveTab('list'); loadReceipts();}}>
               🧾 Фактуры ({receiptCount}) · 📄 Доки ({invoiceCount})
+            </button>
+            )}
+            {/* v176: пара вкладок «Чеки/Предметы» — база домашних предметов; Чеки открываются по умолчанию */}
+            {tabAllowed('list') && (
+            <button className={activeTab === 'list' ? 'active' : ''} onClick={() => {setActiveTab('list'); loadReceipts();}}>
+              🧾 Чеки
+            </button>
+            )}
+            {tabAllowed('list') && (
+            <button className={activeTab === 'items' ? 'active' : ''} onClick={() => {setActiveTab('items'); loadReceipts();}}>
+              📦 Предметы
             </button>
             )}
             {/* Вкладка «Анализ»: банковские выписки и автопривязка платежей к фактурам */}
@@ -9716,6 +9728,11 @@ ${bodyHtml}
           {tabAllowed('list') && (
             <button className={activeTab === 'list' ? 'active' : ''} onClick={() => { setActiveTab('list'); loadReceipts(); }}>
               <span className="mbn-ico">🧾</span>Фактуры
+            </button>
+          )}
+          {tabAllowed('list') && (
+            <button className={activeTab === 'items' ? 'active' : ''} onClick={() => { setActiveTab('items'); loadReceipts(); }}>
+              <span className="mbn-ico">📦</span>Предметы
             </button>
           )}
           {tabAllowed('cash') && (
@@ -10959,7 +10976,7 @@ ${bodyHtml}
         </div>
       )}
 
-      {activeTab === 'list' && (
+      {(activeTab === 'list' || activeTab === 'items') && (
         <div className="list-section">
           {cashLinkMode && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#eef7ee', border: '1px solid #1e8449', borderRadius: 10, padding: '8px 12px', marginBottom: 10, fontSize: 14, flexWrap: 'wrap' }}>

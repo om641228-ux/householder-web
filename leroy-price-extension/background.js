@@ -45,12 +45,29 @@ function extractOnPage() {
     }
     return false;
   };
-  const __visualPrice = (root) => {
+  const __visualPrice = (root, anchorEl) => {
+    // v1.27.0: при anchorEl область поиска = контейнер вокруг якоря (LM: элемент «Ref. 86176487» — точно блок ЭТОГО товара)
     // v1.24.1: ДВА ПРОХОДА — 1) ищем главную цену по всей странице (крупнейший шрифт, без запретных зон),
     // 2) старую цену и % скидки ищем ТОЛЬКО в ценовом блоке вокруг неё (предки до 6 уровней, пока не найдём контейнер с € + %).
     // Раньше бейдж и зачёркнутая цена брались со ВСЕЙ страницы → % от чужого баннера перезаписывал настоящий «−39 %».
     const res = { price: null, price_original: null, discount_pct: null, discount_abs: null };
     if (!root || !root.querySelectorAll) return res;
+    if (anchorEl) { // поднимаемся от якоря до контейнера, где есть € (блок товара)
+      let ab = anchorEl;
+      for (let i = 0; i < 8 && ab && ab.parentElement; i++) {
+        ab = ab.parentElement;
+        const t = String(ab.innerText || '');
+        if (t.indexOf('\u20ac') >= 0 && t.length < 2500) break;
+      }
+      if (ab && ab.querySelectorAll && String(ab.innerText || '').indexOf('\u20ac') >= 0) root = ab;
+    }
+    const SKIP_CTX = (el) => { // v1.27.0: предок (до 3 ур.) с текстом рассрочки/оплаты → не цена товара
+      for (let e = el, i = 0; e && e.nodeType === 1 && i < 3; e = e.parentElement, i++) {
+        const t = String(e.textContent || '');
+        if (t.length <= 250 && /paga a plazos|\bcuotas?\b|financia|paypal|\bplazos?\b|\d+\s*€\s*\/?\s*mes/i.test(t) && !(/%/.test(t) || (t.match(/€/g) || []).length >= 2)) return true;  // v1.27.0: контейнер с %/несколькими € = ценовой блок, не финансы
+      }
+      return false;
+    };
     const BAD_ZONE = '[class*="carousel" i], [class*="slick" i], [class*="slider" i], [class*="recommend" i], [class*="related" i], [class*="cross" i], [class*="upsell" i], [class*="option" i], [class*="variant" i], [class*="plazo" i], [class*="financ" i], [id*="carousel" i], [id*="recommend" i]';
     const SKIP_T = /(\bmes(es)?\b|\bplazo|\bcuota|\bsem(ana)?\b|a plazos)/i;
     const readPrice = (el) => { // → число или null
@@ -62,14 +79,56 @@ function extractOnPage() {
       }
       if (t.indexOf('\u20ac') < 0) return null;
       if (/\u20ac\s*\/|\/(kg|m\u00b2|m2|l|ud|unidad)s?\b/i.test(t)) return null; // цена за единицу
+      if (/\bdesde\b|\bfrom\b/i.test(t)) return null; // v1.27.1: «desde 85 €» = цена конфигуратора «от», не цена товара
       const pm = t.match(/(\d{1,3}(?:[ .\u00a0]\d{3})+(?:,\d{1,2})?|\d{1,6}[.,]\d{2}|\d{1,6})(?=\s*\u20ac)/);
       return pm ? __num(pm[1]) : null;
     };
+    // v1.27.2: ПРИОРИТЕТ БЕЙДЖА — «−N %» всегда в настоящем ценовом блоке.
+    // От бейджа поднимаемся до контейнера с зачёркнутой ценой и ещё одной ценой,
+    // принимаем ТОЛЬКО пару (цена, старая), сходящуюся с бейджом (±4 п.п.).
+    let done = false;
+    for (const bel of root.querySelectorAll('span,div,p,strong,b,em')) {
+      if (done) break;
+      const bt = String(bel.innerText || bel.textContent || '').replace(/\s+/g, ' ').trim();
+      const bm = bt.match(/^[\-\u2212\u2013]\s*(\d+(?:[.,]\d+)?)\s*%$/);
+      if (!bm || bt.length > 12) continue;
+      try { if (bel.closest(BAD_ZONE)) continue; } catch (e) {}
+      if (SKIP_CTX(bel)) continue;
+      const bv = parseFloat(bm[1].replace(',', '.'));
+      if (!(bv > 0 && bv < 100)) continue;
+      let bb = bel.parentElement;
+      for (let i = 0; i < 6 && bb && bb.parentElement; i++) {
+        const tt = String(bb.innerText || '');
+        let hasStruck = false;
+        try { for (const se2 of bb.querySelectorAll('span,div,p,s,del,strike,strong')) { if (__struck(se2) && readPrice(se2) != null) { hasStruck = true; break; } } } catch (e) {}
+        if (hasStruck && (tt.match(/\u20ac/g) || []).length >= 2 && tt.length < 400) break;
+        bb = bb.parentElement;
+      }
+      if (!bb || !bb.querySelectorAll) continue;
+      const olds2 = [], cands2 = [];
+      for (const el2 of bb.querySelectorAll('span,div,p,strong,b,em,s,del,strike,sup')) {
+        if (el2.childElementCount > 2) continue;
+        if (SKIP_CTX(el2)) continue;
+        const n2 = readPrice(el2);
+        if (n2 == null) continue;
+        if (__struck(el2)) olds2.push(n2); else cands2.push(n2);
+      }
+      let pair = null;
+      for (const o of olds2) for (const cn of cands2) {
+        if (!(cn > 0 && o > cn)) continue;
+        const d = Math.abs((1 - cn / o) * 100 - bv);
+        if (d <= 4 && (!pair || d < pair.d)) pair = { p: cn, o, d };
+      }
+      if (pair) { res.price = pair.p; res.price_original = pair.o; res.discount_pct = bv; done = true; }
+    }
     // проход 1: главная цена
     let bestFs = -1, bestEl = null;
-    for (const el of root.querySelectorAll('span,div,p,strong,b,em,s,del,strike,sup,h2,h3,h4')) {
+    const olds = []; // v1.27.1: все зачёркнутые цены блока
+    const cands = []; // v1.27.1: ВСЕ кандидаты — для сверки с бейджем/старой ценой
+    if (!done) for (const el of root.querySelectorAll('span,div,p,strong,b,em,s,del,strike,sup,h2,h3,h4')) {
       if (el.childElementCount > 2) continue;
       try { if (el.closest(BAD_ZONE)) continue; } catch (e) {}
+      if (SKIP_CTX(el)) continue;
       let t = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
       if (SKIP_T.test(t)) continue;
       if (__struck(el)) continue;
@@ -78,8 +137,10 @@ function extractOnPage() {
       let fs = 10;
       try { fs = parseFloat(getComputedStyle(el).fontSize) || 10; } catch (err) {}
       if (fs > bestFs || (fs === bestFs && res.price == null)) { bestFs = fs; res.price = n; bestEl = el; }
+      cands.push({ n, fs, el });
     }
-    if (!bestEl) return res;
+    if (!bestEl && !done) return res;
+    if (!done) {
     // ценовой блок: поднимаемся от главной цены, пока контейнер не содержит ещё и %/€ (старая цена или бейдж)
     let box = bestEl.parentElement || bestEl;
     for (let i = 0; i < 6 && box && box.parentElement; i++) {
@@ -93,6 +154,7 @@ function extractOnPage() {
     for (const el of box.querySelectorAll('span,div,p,strong,b,em,s,del,strike,sup')) {
       if (el.childElementCount > 2) continue;
       try { if (el.closest(BAD_ZONE)) continue; } catch (e) {}
+      if (SKIP_CTX(el)) continue;
       const t = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
       if (!t || t.length > 40 || SKIP_T.test(t)) continue;
       let m = t.match(/^[\-\u2212\u2013]\s*(\d+(?:[.,]\d+)?)\s*%/); // бейдж «-39 %»
@@ -101,9 +163,33 @@ function extractOnPage() {
       if (m) { const v = __num(m[1]); if (v != null && res.discount_abs == null) res.discount_abs = v; continue; }
       const n = readPrice(el);
       if (n == null) continue;
-      if (__struck(el)) { if (res.price_original == null || n > res.price_original) res.price_original = n; }
+      if (__struck(el)) { olds.push(n); if (res.price_original == null || n > res.price_original) res.price_original = n; }
       else if (res.price != null && n > res.price * 1.02) { // v1.25.0: незачёркнутая, но БОЛЬШАЯ цена в ценовом блоке = старая (LM бьёт цену классом без line-through)
         if (res.price_original == null || n < res.price_original) res.price_original = n;
+      }
+    }
+    }
+    // v1.27.1: ЖЁСТКАЯ СВЕРКА — если есть бейдж −N % и старая цена, главная цена ОБЯЗАНА соответствовать
+    // (1 − price/old ≈ N/100, допуск 4 п.п.). Иначе price взят не оттуда (конфигуратор/рассрочка/вариант) —
+    // ищем среди всех кандидатов тот, что сходится с бейджем и старой ценой.
+    if (res.discount_pct != null && olds.length && cands.length) { // ПАРНАЯ сверка: ищем пару (цена, старая), сходящуюся с бейджом
+      let best = null;
+      for (const o of olds) for (const c of cands) {
+        if (!(c.n > 0 && o > c.n)) continue;
+        const d = Math.abs((1 - c.n / o) * 100 - res.discount_pct);
+        if (d <= 4 && (!best || d < best.d || (d === best.d && c.fs > best.fs))) best = { p: c.n, o, d, fs: c.fs };
+      }
+      if (best && (best.p !== res.price || best.o !== res.price_original)) { res.price = best.p; res.price_original = best.o; res.discount_abs = null; }
+    } else if (res.price != null && res.price_original != null && res.discount_pct != null && res.price_original > 0) {
+      const dev = (p) => Math.abs((1 - p / res.price_original) * 100 - res.discount_pct);
+      if (dev(res.price) > 4) {
+        let fix = null;
+        for (const c of cands) {
+          if (!(c.n > 0 && c.n < res.price_original)) continue;
+          const d = dev(c.n);
+          if (d <= 4 && (!fix || d < fix.d || (d === fix.d && c.fs > fix.fs))) fix = { n: c.n, d, fs: c.fs };
+        }
+        if (fix) { res.price = fix.n; res.discount_abs = null; }
       }
     }
     // нормализация тройки
@@ -298,8 +384,16 @@ function extractOnPage() {
   // v1.26.0: ПРИОРИТЕТЫ — 1) ВИДИМАЯ главная цена (крупная, из ценового блока) = истина для «Цена»;
   // 2) старая цена/% — из того же блока; 3) если в блоке нет — из стейт-JSON, чья цена СОВПАДАЕТ с видимой ±2%
   // (иначе это другой вариант/рекомендация — отбрасываем); 4) JSON-LD — только как старая цена или цена при пустом визуале.
+  // v1.27.0: LM — якорь «Ref. NNNNN» (артикул рендерится мгновенно и статично) → ценовой блок ЭТОГО товара
+  let __anchor = null;
+  if (/leroymerlin\./i.test(location.hostname)) {
+    for (const el of document.querySelectorAll('span,div,p,small')) {
+      const t = String(el.textContent || '').trim();
+      if (/^Ref\.?\s*\d{5,}/i.test(t) && t.length < 25) { __anchor = el; break; }
+    }
+  }
   let __vp = null;
-  if (!/mediamarkt\./i.test(location.hostname)) { try { __vp = __visualPrice(document.body || document.documentElement); } catch (e) {} }
+  if (!/mediamarkt\./i.test(location.hostname)) { try { __vp = __visualPrice(document.body || document.documentElement, __anchor); } catch (e) {} }
   let fp = null, fo = out.price_original != null ? out.price_original : null, fpct = out.discount_pct != null ? out.discount_pct : null;
   if (__vp && __vp.price != null) { fp = __vp.price; fo = __vp.price_original != null ? __vp.price_original : fo; fpct = __vp.discount_pct != null ? __vp.discount_pct : fpct; }
   const ref = fp != null ? fp : __prePrice;
@@ -369,6 +463,26 @@ async function collectOne(api, token, p) {
         if (id === tab.id && ch.status === 'complete') { clearTimeout(to); chrome.tabs.onUpdated.removeListener(f); res(); }
       });
     });
+    // v1.27.0: LM — SPA дорендеривает цену последней; ждём, пока в контейнере «Ref.» появится € (до 8 с)
+    if (/leroymerlin\./i.test(p.url)) {
+      for (let w = 0; w < 8; w++) {
+        try {
+          const [rr] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => {
+            let ref = null;
+            for (const el of document.querySelectorAll('span,div,p,small')) {
+              const t = (el.textContent || '').trim();
+              if (/^Ref\.?\s*\d{5,}/i.test(t) && t.length < 25) { ref = el; break; }
+            }
+            if (!ref) return false;
+            let box = ref;
+            for (let i = 0; i < 8 && box.parentElement; i++) { box = box.parentElement; if ((box.innerText || '').indexOf('\u20ac') >= 0) break; }
+            return (box.innerText || '').indexOf('\u20ac') >= 0;
+          } });
+          if (rr && rr.result) break;
+        } catch (e) {}
+        await sleep(1000);
+      }
+    }
     // v1.11: «пока нет цены и фото — не идём дальше»: до 3 попыток с ожиданием и прокруткой
     let d = {};
     for (let att = 1; att <= 3; att++) {
