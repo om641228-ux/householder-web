@@ -2248,7 +2248,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v181 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v182 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -5823,6 +5823,7 @@ function App() {
   const [itemFiles, setItemFiles] = useState([]);          // v180: выбранные фото во вкладке «Загрузка» предметов
   const [itemFilesIdx, setItemFilesIdx] = useState(0);
   const [itemVisual, setItemVisual] = useState({});      // v181: id → {loading, results, error, model, candidates} — поиск «картинка по картинке»
+  const [itemProgress, setItemProgress] = useState({ done: 0, total: 0, name: '' }); // v182: прогресс пакетного распознавания
   const [chatUnread, setChatUnread] = useState({}); // v83: непрочитанные по каналам
   const [cashQ, setCashQ] = useState('');           // v85: поиск по движениям (Cash)
   const [cashVals, setCashVals] = useState({});     // v85: редактируемые значения строк {id: {counterparty, operation_date, amount}}
@@ -6168,6 +6169,7 @@ function App() {
     try {
       const fd = new FormData();
       fd.append('image', file);
+      fd.append('model', selectedModel); // v182: распознавать ВЫБРАННОЙ моделью
       const r = await fetch(`${API_URL}/api/items/recognize?token=${token}`, { method: 'POST', body: fd });
       const d = await r.json();
       if (!r.ok) {
@@ -6190,11 +6192,16 @@ function App() {
   const recognizeItemFiles = async () => {
     if (!itemFiles.length || itemBusy) return;
     setItemBusy(true); setItemError('');
+    const files = itemFiles.slice();
+    setItemProgress({ done: 0, total: files.length, name: '' });
     const errs = [];
-    for (const f of itemFiles) {
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      setItemProgress({ done: i, total: files.length, name: f.name });
       try {
         const fd = new FormData();
         fd.append('image', f);
+        fd.append('model', selectedModel); // v182: распознавать ВЫБРАННОЙ моделью
         const r = await fetch(`${API_URL}/api/items/recognize?token=${token}`, { method: 'POST', body: fd });
         const d = await r.json();
         if (!r.ok) { if (d.missing) setItemsMissing(true); throw new Error(d.error || `Ошибка ${r.status}`); }
@@ -6202,6 +6209,7 @@ function App() {
       } catch (e) { errs.push(`${f.name}: ${e.message}`); }
     }
     if (errs.length) setItemError(errs.join(' · '));
+    setItemProgress({ done: 0, total: 0, name: '' });
     setItemFiles([]); setItemFilesIdx(0);
     setItemBusy(false);
   };
@@ -9748,7 +9756,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-11 · v181 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-11 · v182 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9761,7 +9769,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-11 · v181</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-11 · v182</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
@@ -9769,7 +9777,7 @@ ${bodyHtml}
               <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>Загрузка</button>
             )}
             {appMode === 'items' && tabAllowed('list') && (
-              <button className={activeTab === 'tools' ? 'active' : ''} onClick={() => { setActiveTab('tools'); loadItems(); }}>🔧 Tools</button>
+              <button className={activeTab === 'tools' ? 'active' : ''} onClick={() => { setActiveTab('tools'); loadItems(); }}>🔧 Tools{itemsList.length ? ` (${itemsList.length})` : ''}</button>
             )}
             {appMode !== 'items' && (<>
             {tabAllowed('list') && (
@@ -9859,7 +9867,7 @@ ${bodyHtml}
           )}
           {appMode === 'items' && tabAllowed('list') && (
             <button className={activeTab === 'tools' ? 'active' : ''} onClick={() => gotoTab('tools')}>
-              <span className="mbn-ico">🔧</span>Tools
+              <span className="mbn-ico">🔧</span>Tools{itemsList.length ? ` (${itemsList.length})` : ''}
             </button>
           )}
           {appMode !== 'items' && (<>
@@ -10671,11 +10679,26 @@ ${bodyHtml}
               <input type="file" accept="image/*" multiple style={{ display: 'none' }}
                 onChange={e => { addItemFiles(e.target.files); e.target.value = ''; }} />
             </label>
+            <label className="btn-folder" style={{ cursor: 'pointer' }} title="Выбрать папку — распознаются все изображения внутри">
+              📁 Распознать папку
+              <input type="file" accept="image/*" multiple webkitdirectory="" style={{ display: 'none' }}
+                onChange={e => { addItemFiles(e.target.files); e.target.value = ''; }} />
+            </label>
             <button className="btn-file" onClick={recognizeItemFiles} disabled={!itemFiles.length || itemBusy}
               style={{ background: (!itemFiles.length || itemBusy) ? '#c7d7ea' : '#0071e3', color: '#fff', border: 'none', cursor: (!itemFiles.length || itemBusy) ? 'not-allowed' : 'pointer' }}>
               {itemBusy ? '⏳ Распознаю…' : `⚡ Распознать и сохранить${itemFiles.length > 1 ? ` (${itemFiles.length})` : ''}`}
             </button>
+            <span style={{ fontSize: 12, color: '#6e6e73' }}>Модель: <b>{activeModelDisplay.displayName}</b> (смена — в шапке)</span>
           </div>
+
+          {itemBusy && itemProgress.total > 0 && (
+            <div style={{ margin: '10px 0', background: '#fff', border: '1px solid #e0e0e5', borderRadius: 10, padding: '10px 14px' }}>
+              <div style={{ fontSize: 13, marginBottom: 6, color: '#1d1d1f' }}>⚡ Распознаю {itemProgress.done} / {itemProgress.total}{itemProgress.name ? ` — ${itemProgress.name}` : ''}</div>
+              <div style={{ height: 8, background: '#f0f0f3', borderRadius: 4, overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${Math.round(itemProgress.done / itemProgress.total * 100)}%`, background: '#0071e3', transition: 'width .3s' }} />
+              </div>
+            </div>
+          )}
 
           <div className="drop-zone" onDrop={itemDrop} onDragOver={e => e.preventDefault()}>
             {itemFiles.length ? (
@@ -11215,6 +11238,7 @@ ${bodyHtml}
                       <span style={{ fontWeight: 700, fontSize: 14 }}>{it.name_ru || '—'}</span>
                       {itemConfBadge(it.confidence)}
                       {it.edited && <span title="Исправлено вручную" style={{ fontSize: 11, color: '#8e44ad' }}>✏️</span>}
+                      {it.dup && <span title="Дубликат: есть ещё карточка с таким же MPN или парой «бренд + название»" style={{ fontSize: 11, fontWeight: 700, color: '#c0392b', background: '#fdecea', borderRadius: 6, padding: '1px 7px', whiteSpace: 'nowrap' }}>🔁 Дубликат</span>}
                     </div>
                     {it.name_original && <div style={{ fontSize: 12, color: '#6e6e73' }}>{it.name_original}</div>}
                     {it.name_es && <div style={{ fontSize: 12, color: '#6e6e73' }}>🇪🇸 {it.name_es}</div>}
@@ -11263,6 +11287,25 @@ ${bodyHtml}
                   </div>
                 )}
 
+                {itemVisual[it.id]?.error && <div style={{ fontSize: 12, color: '#c0392b' }}>Ошибка визуального поиска: {itemVisual[it.id].error}</div>}
+                {itemVisual[it.id]?.results && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <div style={{ fontSize: 11, color: '#0a84ff', fontWeight: 700 }}>
+                      🖼 Визуальный поиск: сравнено фото — {itemVisual[it.id].candidates ?? '?'} кандидатов{itemVisual[it.id].model ? ` · ${itemVisual[it.id].model}` : ''}
+                    </div>
+                    {!itemVisual[it.id].results.length && <div style={{ fontSize: 12, color: '#6e6e73' }}>{itemVisual[it.id].message || 'Визуально похожих товаров не найдено.'}</div>}
+                    {itemVisual[it.id].results.map((r, i) => (
+                      <a key={i} href={r.url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none', color: 'inherit', background: '#f0f7ff', borderRadius: 8, padding: '5px 8px', fontSize: 12 }}>
+                        {r.image && <img src={r.image} alt="" style={{ width: 34, height: 34, objectFit: 'contain', borderRadius: 5, background: '#fff', flexShrink: 0 }} />}
+                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.name}>{r.name}</span>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: r.visual_score >= 0.85 ? '#1e8449' : (r.visual_score >= 0.65 ? '#b26a00' : '#6e6e73'), background: '#fff', borderRadius: 6, padding: '1px 6px', flexShrink: 0 }}>🖼 {Math.round(r.visual_score * 100)}%{r.visual_verified !== false ? ' ✓×2' : ''}</span>
+                        <span style={{ fontSize: 10, color: '#95a5a6', flexShrink: 0 }}>{String(r.site || '').replace('www.', '')}</span>
+                        <span style={{ fontWeight: 700, color: '#c0392b', flexShrink: 0 }}>{r.price != null ? `${r.price} €` : '—'}</span>
+                      </a>
+                    ))}
+                  </div>
+                )}
+
                 {itemSimilar[it.id]?.error && <div style={{ fontSize: 12, color: '#c0392b' }}>Ошибка поиска: {itemSimilar[it.id].error}</div>}
                 {itemSimilar[it.id]?.results && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -11280,24 +11323,6 @@ ${bodyHtml}
                   </div>
                 )}
 
-                {itemVisual[it.id]?.error && <div style={{ fontSize: 12, color: '#c0392b' }}>Ошибка визуального поиска: {itemVisual[it.id].error}</div>}
-                {itemVisual[it.id]?.results && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    <div style={{ fontSize: 11, color: '#0a84ff', fontWeight: 700 }}>
-                      🖼 Визуальный поиск: сравнено фото — {itemVisual[it.id].candidates ?? '?'} кандидатов{itemVisual[it.id].model ? ` · ${itemVisual[it.id].model}` : ''}
-                    </div>
-                    {!itemVisual[it.id].results.length && <div style={{ fontSize: 12, color: '#6e6e73' }}>{itemVisual[it.id].message || 'Визуально похожих товаров не найдено.'}</div>}
-                    {itemVisual[it.id].results.map((r, i) => (
-                      <a key={i} href={r.url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none', color: 'inherit', background: '#f0f7ff', borderRadius: 8, padding: '5px 8px', fontSize: 12 }}>
-                        {r.image && <img src={r.image} alt="" style={{ width: 34, height: 34, objectFit: 'contain', borderRadius: 5, background: '#fff', flexShrink: 0 }} />}
-                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.name}>{r.name}</span>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: r.visual_score >= 0.85 ? '#1e8449' : (r.visual_score >= 0.65 ? '#b26a00' : '#6e6e73'), background: '#fff', borderRadius: 6, padding: '1px 6px', flexShrink: 0 }}>🖼 {Math.round(r.visual_score * 100)}%</span>
-                        <span style={{ fontSize: 10, color: '#95a5a6', flexShrink: 0 }}>{String(r.site || '').replace('www.', '')}</span>
-                        <span style={{ fontWeight: 700, color: '#c0392b', flexShrink: 0 }}>{r.price != null ? `${r.price} €` : '—'}</span>
-                      </a>
-                    ))}
-                  </div>
-                )}
               </div>
             ))}
           </div>

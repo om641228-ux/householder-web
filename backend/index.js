@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v181-2026-09-11', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v182-2026-09-11', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -874,6 +874,15 @@ async function recognizeWithFallback(imageBuffer, currency, docType, mimeType = 
   throw new Error(errors.join(' | ') || 'Нет доступных провайдеров распознавания');
 }
 
+// v182: предметы — распознавание ВЫБРАННОЙ пользователем моделью (формат строки как у чеков: 'gemini-…', 'kimi-kimi-k3', …)
+async function recognizeItemPreferred(imageBuffer, mimeType, model) {
+  if (model.startsWith('gemini')) return { data: await recognizeItemGemini(imageBuffer, model, mimeType), model: `gemini:${model}` };
+  for (const key of ['openrouter', 'github', 'mistral', 'kimi']) {
+    if (model.startsWith(key + '-')) return { data: await recognizeItemOpenAICompat(imageBuffer, key, model.slice(key.length + 1)), model };
+  }
+  throw new Error(`Неизвестная модель: ${model}`);
+}
+
 // ========== v178: РАСПОЗНАВАНИЕ ПРЕДМЕТОВ (модуль «📦 Предметы») ==========
 // Фото предмета → JSON: наименование (+ % схожести), производитель, номер производителя.
 // Отдельный промпт и отдельный парсер — чековая схема parseAIResponse сюда не подходит.
@@ -941,11 +950,11 @@ async function recognizeItemGemini(imageBuffer, modelName, mimeType) {
   return parseItemJson(result.response.text());
 }
 
-async function recognizeItemOpenAICompat(imageBuffer, providerKey) {
+async function recognizeItemOpenAICompat(imageBuffer, providerKey, modelOverride) {
   const cfg = OPENAI_COMPAT_PROVIDERS[providerKey];
   if (!cfg) throw new Error(`Unknown provider: ${providerKey}`);
   if (!cfg.apiKey) throw new Error(`${cfg.displayName} API key not configured`);
-  const model = cfg.defaultModel;
+  const model = modelOverride || cfg.defaultModel;
   const body = {
     model,
     messages: [{ role: 'user', content: [
@@ -6845,7 +6854,14 @@ app.post('/api/items/recognize', requireAuth, upload.single('image'), async (req
   try {
     if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'Нет файла (поле image)' });
     const mime = req.file.mimetype || 'image/jpeg';
-    const rec = await recognizeItemWithFallback(req.file.buffer, mime);
+    const wantModel = String(req.body.model || 'auto'); // v182: модель из селектора фронта
+    let rec;
+    if (wantModel && wantModel !== 'auto' && wantModel !== 'local-mac-ocr') {
+      try { rec = await recognizeItemPreferred(req.file.buffer, mime, wantModel); }
+      catch (e) { console.warn(`items: выбранная модель ${wantModel} failed: ${e.message} — fallback`); rec = await recognizeItemWithFallback(req.file.buffer, mime); }
+    } else {
+      rec = await recognizeItemWithFallback(req.file.buffer, mime);
+    }
     let photoUrl = null;
     try {
       photoUrl = await uploadToStorage(req.file.buffer, 'item_' + Date.now() + '.jpg', 'items/' + (req.user.id || 'anon'), mime);
@@ -6901,6 +6917,19 @@ app.get('/api/items', requireAuth, async (req, res) => {
     if (error) {
       if (/does not exist|relation|schema cache/i.test(error.message || '')) return res.json({ items: [], missing: true });
       throw error;
+    }
+    // v182: метки дубликатов — совпадает MPN или пара «бренд + название» (исп/ориг/рус)
+    const seen = new Map();
+    for (const it of (data || [])) {
+      it.dup = false;
+      const keys = [];
+      if (it.mpn) keys.push('mpn:' + String(it.mpn).toLowerCase().replace(/[\s-]+/g, ''));
+      const nm = String(it.name_es || it.name_original || it.name_ru || '').toLowerCase().trim();
+      if (nm) keys.push('name:' + (it.brand ? String(it.brand).toLowerCase() + '|' : '') + nm);
+      for (const k of keys) {
+        if (seen.has(k)) { it.dup = true; const first = seen.get(k); if (first) first.dup = true; }
+        else seen.set(k, it);
+      }
     }
     res.json({ items: data || [] });
   } catch (e) {
@@ -6969,7 +6998,7 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
     }
     // 2) v180: ГЛАВНЫЙ поиск — слова ИСПАНСКОГО названия (каталоги магазинов на испанском).
     // Кандидаты через OR по словам, затем скоринг в JS: +1 за каждое слово в названии, +3 за бренд, +5 за MPN.
-    const STOP = new Set(['de', 'del', 'la', 'el', 'los', 'las', 'con', 'para', 'por', 'una', 'uno', 'y', 'en', 'al', 'un']);
+    const STOP = new Set(['de', 'del', 'la', 'el', 'los', 'las', 'con', 'para', 'por', 'una', 'uno', 'y', 'en', 'al', 'un', 'juego', 'set', 'pack', 'kit', 'profesional', 'universal', 'piezas', 'unidades']);
     const wordsOf = (txt, minLen, maxN) => String(txt || '')
       .toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/)
@@ -6984,13 +7013,17 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
       const brandLc = String(item.brand || '').toLowerCase();
       const scored = (cand || []).map(r => {
         const nm = String(r.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-        let score = 0;
-        for (const w of esWords) if (nm.includes(w)) score += 2; // испанские слова весят больше
-        for (const w of latWords) if (nm.includes(w)) score += 1;
-        if (brandLc && String(r.brand || '').toLowerCase().includes(brandLc)) score += 3;
-        if (item.mpn && r.mpn && String(r.mpn).toLowerCase() === String(item.mpn).toLowerCase()) score += 5;
-        return { r, score };
-      }).filter(x => x.score >= 2); // минимум одно испанское слово или бренд+слово
+        let score = 0, esHits = 0, latHits = 0;
+        for (const w of esWords) if (nm.includes(w)) { score += 2; esHits++; } // испанские слова весят больше
+        for (const w of latWords) if (nm.includes(w)) { score += 1; latHits++; }
+        const brandHit = brandLc && String(r.brand || '').toLowerCase().includes(brandLc);
+        if (brandHit) score += 3;
+        const mpnHit = item.mpn && r.mpn && String(r.mpn).toLowerCase() === String(item.mpn).toLowerCase();
+        if (mpnHit) score += 5;
+        // v182: отсев мусора — нужно ≥2 испанских слова, ИЛИ бренд+слово, ИЛИ точный MPN (одно общее слово недостаточно)
+        const ok = esHits >= 2 || (brandHit && (esHits + latHits) >= 1) || mpnHit || (esWords.length === 1 && esHits === 1);
+        return { r, score, ok };
+      }).filter(x => x.ok);
       scored.sort((a, b) => b.score - a.score || (a.r.price ?? 1e9) - (b.r.price ?? 1e9));
       push(scored.slice(0, 30).map(x => x.r), 'name_es');
     }
@@ -7017,6 +7050,12 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
 function buildVisualRankPrompt(count) {
   return `Ты — эксперт по визуальному сравнению товаров. Первое изображение (№0) — фото предмета пользователя. Далее изображения №1..№${count} — товары из каталогов магазинов.
 Определи, какие товары каталога показывают ТОТ ЖЕ ТИП предмета, что на фото №0 (например: кусачки = кусачки, даже если другой бренд/цвет/ракурс).
+КРИТИЧЕСКИ ВАЖНО — проверяй каждое изображение по шагам:
+1) Определи ТОЧНЫЙ тип предмета на фото №0 (например «тонкогубцы», а не просто «пассатижи»).
+2) Похожие, но ДРУГИЕ типы — НЕ включай: тонкогубцы ≠ плоскогубцы ≠ кусачки ≠ клещи; одиночный инструмент ≠ набор инструментов; ручной инструмент ≠ электроинструмент.
+3) Сравнивай форму рабочей части (губки/жала), шарнир, рукоятки, пропорции — а не только цвет.
+4) Совпадение читаемого бренда/модели на корпусе — сильный плюс (+0.2 к score).
+5) Сомневаешься — НЕ включай: лучше пропустить, чем вернуть нерелевантный товар.
 Верни СТРОГО JSON-массив без пояснений и markdown: [{"n": 1, "score": 0.95}, ...]
 - n — номер изображения каталога (от 1 до ${count});
 - score — визуальная схожесть от 0 до 1 (тип и форма предмета, конструкция; совпадение бренда/маркировки повышает score; другой тип предмета — НЕ включай);
@@ -7137,7 +7176,7 @@ app.get('/api/items/:id/similar-visual', requireAuth, async (req, res) => {
         .ilike('mpn', item.mpn.replace(/[%_]/g, ' ')).not('image', 'is', null).limit(10);
       addCands(data, 100);
     }
-    const STOP = new Set(['de', 'del', 'la', 'el', 'los', 'las', 'con', 'para', 'por', 'una', 'uno', 'y', 'en', 'al', 'un']);
+    const STOP = new Set(['de', 'del', 'la', 'el', 'los', 'las', 'con', 'para', 'por', 'una', 'uno', 'y', 'en', 'al', 'un', 'juego', 'set', 'pack', 'kit', 'profesional', 'universal', 'piezas', 'unidades']);
     const wordsOf = (txt, minLen, maxN) => String(txt || '')
       .toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/)
@@ -7174,9 +7213,26 @@ app.get('/api/items/:id/similar-visual', requireAuth, async (req, res) => {
     dl.forEach((d, i) => { if (d.status === 'fulfilled') { okImgs.push(d.value); okCands.push(cands[i]); } });
     if (!okImgs.length) return res.json({ results: [], candidates: cands.length, message: 'Не удалось скачать фото кандидатов' });
 
-    // Стадия 2: vision-ранжирование
-    const { ranks, model } = await rankImagesWithFallback(queryImg, okImgs);
-    const results = ranks.map(x => ({ ...okCands[x.n - 1], visual_score: x.score, match_by: 'visual' }));
+    // Стадия 2: vision-ранжирование — ДВА независимых прохода, консенсус (v182)
+    const pass1 = await rankImagesWithFallback(queryImg, okImgs);
+    let ranks = pass1.ranks, model = pass1.model;
+    try {
+      const pass2 = await rankImagesWithFallback(queryImg, okImgs);
+      const m2 = new Map(pass2.ranks.map(x => [x.n, x.score]));
+      const merged = new Map();
+      for (const x of pass1.ranks) {
+        if (m2.has(x.n)) merged.set(x.n, { score: (x.score + m2.get(x.n)) / 2, verified: true }); // найден обоими проходами
+        else merged.set(x.n, { score: x.score * 0.8, verified: false });
+      }
+      for (const x of pass2.ranks) {
+        if (!merged.has(x.n)) merged.set(x.n, { score: x.score * 0.8, verified: false });
+      }
+      ranks = [...merged.entries()].map(([nn, v]) => ({ n: nn, score: v.score, verified: v.verified }))
+        .filter(x => x.score >= 0.4)
+        .sort((a, b) => b.score - a.score).slice(0, 10);
+      model += ' ×2-прохода';
+    } catch (e) { console.warn('visual rank pass-2 failed (используем первый проход):', e.message); }
+    const results = ranks.map(x => ({ ...okCands[x.n - 1], visual_score: x.score, visual_verified: x.verified !== false, match_by: 'visual' }));
     logActivity(req.user, 'Предметы', 'визуальный поиск', `${item.name_ru || req.params.id}: кандидатов ${okCands.length}, совпадений ${results.length} (${model})`, req);
     res.json({ results, candidates: okCands.length, model });
   } catch (e) {
