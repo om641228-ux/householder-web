@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v174-2026-09-10', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v178-2026-09-11', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -868,6 +868,128 @@ async function recognizeWithFallback(imageBuffer, currency, docType, mimeType = 
       return { data, model: `${key}-${cfg.defaultModel}` };
     } catch (e) {
       console.warn(`Fallback ${key} failed: ${e.message}`);
+      errors.push(`${key}: ${e.message}`);
+    }
+  }
+  throw new Error(errors.join(' | ') || 'Нет доступных провайдеров распознавания');
+}
+
+// ========== v178: РАСПОЗНАВАНИЕ ПРЕДМЕТОВ (модуль «📦 Предметы») ==========
+// Фото предмета → JSON: наименование (+ % схожести), производитель, номер производителя.
+// Отдельный промпт и отдельный парсер — чековая схема parseAIResponse сюда не подходит.
+function buildItemPrompt() {
+  return `Ты — эксперт по идентификации инструментов и домашних предметов по фото.
+Проанализируй изображение и верни СТРОГО JSON (без пояснений, без markdown):
+{
+  "name_ru": "название предмета по-русски (кратко: «Тестер розеток», «Кусачки диагональные»)",
+  "name_original": "название/модель как на корпусе или по-английски (null если не видно)",
+  "category": "одна категория: инструмент | электроинструмент | электрика | крепёж | сантехника | расходники | бытовая техника | другое",
+  "confidence": 0.0,
+  "brand": "производитель с корпуса/логотипа (null если не читается — НЕ выдумывай)",
+  "brand_confidence": 0.0,
+  "mpn": "номер производителя / парт-номер / модель — выбитый или напечатанный код на корпусе (например «T 003», «SPN-120»; null если не читается — НЕ выдумывай; обычный размер типа «2 мм» или «T15» — НЕ mpn)",
+  "mpn_confidence": 0.0
+}
+ПРАВИЛА:
+- confidence, brand_confidence, mpn_confidence — твоя уверенность от 0 до 1 (1 = текст читается чётко).
+- Маркировку ищи на корпусе: мелкий текст, гравировка на металле, наклейки, логотипы.
+- Если марка/номер не читаются — null, лучше null, чем ошибка.
+- Если на фото несколько предметов — опиши ГЛАВНЫЙ (центральный) предмет.`;
+}
+
+function parseItemJson(text) {
+  let jsonStr = String(text || '');
+  const cb = jsonStr.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (cb) jsonStr = cb[1];
+  const jm = jsonStr.match(/\{[\s\S]*\}/);
+  if (jm) jsonStr = jm[0];
+  const d = JSON.parse(jsonStr);
+  const conf = (v) => {
+    let n = Number(v);
+    if (!isFinite(n) || n < 0) return null;
+    if (n > 1) n = n / 100; // модель может вернуть проценты 0..100
+    return Math.min(1, Math.round(n * 1000) / 1000);
+  };
+  const clean = (v) => {
+    const t = String(v == null ? '' : v).trim();
+    return t && !/^(null|none|unknown|n\/a|-|—)$/i.test(t) ? t.slice(0, 200) : null;
+  };
+  return {
+    name_ru: clean(d.name_ru || d.name),
+    name_original: clean(d.name_original),
+    category: clean(d.category),
+    confidence: conf(d.confidence),
+    brand: clean(d.brand || d.manufacturer),
+    brand_confidence: conf(d.brand_confidence),
+    mpn: clean(d.mpn || d.part_number || d.model_number),
+    mpn_confidence: conf(d.mpn_confidence)
+  };
+}
+
+async function recognizeItemGemini(imageBuffer, modelName, mimeType) {
+  if (!genAI) throw new Error('Gemini API key not configured');
+  const model = genAI.getGenerativeModel({
+    model: modelName || DEFAULT_GEMINI_MODEL,
+    generationConfig: { maxOutputTokens: 2048, temperature: 0.1 }
+  });
+  const result = await model.generateContent([
+    { inlineData: { data: imageBuffer.toString('base64'), mimeType } },
+    buildItemPrompt()
+  ]);
+  return parseItemJson(result.response.text());
+}
+
+async function recognizeItemOpenAICompat(imageBuffer, providerKey) {
+  const cfg = OPENAI_COMPAT_PROVIDERS[providerKey];
+  if (!cfg) throw new Error(`Unknown provider: ${providerKey}`);
+  if (!cfg.apiKey) throw new Error(`${cfg.displayName} API key not configured`);
+  const model = cfg.defaultModel;
+  const body = {
+    model,
+    messages: [{ role: 'user', content: [
+      { type: 'text', text: buildItemPrompt() },
+      { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageBuffer.toString('base64')}` } }
+    ] }],
+    max_tokens: 2048,
+    temperature: 0.1
+  };
+  if (providerKey === 'kimi') {
+    delete body.temperature;
+    if (/kimi-k3/i.test(model)) {
+      delete body.max_tokens;
+      body.max_completion_tokens = 2048;
+      body.reasoning_effort = 'low';
+    }
+  }
+  const res = await axios.post(`${cfg.baseURL}/chat/completions`, body, {
+    headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', ...cfg.extraHeaders },
+    timeout: 120000
+  });
+  const content = res.data?.choices?.[0]?.message?.content;
+  if (!content) throw new Error(`${cfg.displayName} вернул пустой ответ`);
+  return parseItemJson(content);
+}
+
+// Цепочка как у чеков: Gemini → OpenRouter → GitHub → Mistral → Kimi
+async function recognizeItemWithFallback(imageBuffer, mimeType = 'image/jpeg') {
+  const errors = [];
+  for (const candidate of GEMINI_FALLBACK_CANDIDATES) {
+    try {
+      const data = await recognizeItemGemini(imageBuffer, candidate, mimeType);
+      return { data, model: candidate };
+    } catch (e) {
+      console.warn(`items gemini ${candidate}: ${e.message}`);
+      errors.push(`gemini-${candidate}: ${e.message}`);
+    }
+  }
+  for (const key of ['openrouter', 'github', 'mistral', 'kimi']) {
+    const cfg = OPENAI_COMPAT_PROVIDERS[key];
+    if (!cfg.apiKey) { errors.push(`${key}: нет API ключа`); continue; }
+    try {
+      const data = await recognizeItemOpenAICompat(imageBuffer, key);
+      return { data, model: `${key}-${cfg.defaultModel}` };
+    } catch (e) {
+      console.warn(`items fallback ${key}: ${e.message}`);
       errors.push(`${key}: ${e.message}`);
     }
   }
@@ -6710,6 +6832,155 @@ app.delete('/api/receipts/:id', requireAuth, requireRole('admin', 'manager'), wr
     if (error) throw error;
     logActivity(req.user, 'Чеки', 'удаление чека', rc ? `${rc.store_name || 'без названия'}, ${rc.total_amount ?? '?'} ${rc.currency || ''} от ${rc.receipt_date || '?'}` : `id: ${req.params.id}`, req);
     res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ========== v178: ПРЕДМЕТЫ (home_items) — фото → AI → база дома ==========
+// POST /api/items/recognize — фото предмета → AI (название + % схожести, производитель, MPN) → запись в home_items
+app.post('/api/items/recognize', requireAuth, upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'Нет файла (поле image)' });
+    const mime = req.file.mimetype || 'image/jpeg';
+    const rec = await recognizeItemWithFallback(req.file.buffer, mime);
+    let photoUrl = null;
+    try {
+      photoUrl = await uploadToStorage(req.file.buffer, 'item_' + Date.now() + '.jpg', 'items/' + (req.user.id || 'anon'), mime);
+    } catch (e) { console.warn('items photo upload (не критично):', e.message); }
+    const row = {
+      user_id: req.user.id ? String(req.user.id) : null,
+      name_ru: rec.data.name_ru,
+      name_original: rec.data.name_original,
+      category: rec.data.category,
+      confidence: rec.data.confidence,
+      brand: rec.data.brand,
+      brand_confidence: rec.data.brand_confidence,
+      mpn: rec.data.mpn,
+      mpn_confidence: rec.data.mpn_confidence,
+      ai_model: rec.model,
+      ai_raw: rec.data,
+      photo_url: photoUrl
+    };
+    const { data, error } = await supabaseAdmin.from('home_items').insert(row).select('*').single();
+    if (error) {
+      if (/does not exist|relation|schema cache/i.test(error.message || '')) {
+        return res.status(500).json({ error: 'Таблица home_items не создана — выполните supabase-migration-v178-home-items.sql в SQL Editor', missing: true });
+      }
+      throw error;
+    }
+    logActivity(req.user, 'Предметы', 'распознан предмет', `${data.name_ru || '?'}${data.brand ? ' · ' + data.brand : ''}${data.mpn ? ' · ' + data.mpn : ''}`, req);
+    res.json({ item: data });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/items — список предметов (q = поиск по названию/бренду/mpn)
+app.get('/api/items', requireAuth, async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const lim = Math.min(200, Math.max(10, parseInt(req.query.limit || '100', 10) || 100));
+    let query = supabaseAdmin.from('home_items').select('*').order('created_at', { ascending: false }).limit(lim);
+    if (q) {
+      const words = q.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 4);
+      for (const w of words) {
+        const safe = w.replace(/[%_]/g, ' ');
+        query = query.or(`name_ru.ilike.%${safe}%,name_original.ilike.%${safe}%,brand.ilike.%${safe}%,mpn.ilike.%${safe}%`);
+      }
+    }
+    const { data, error } = await query;
+    if (error) {
+      if (/does not exist|relation|schema cache/i.test(error.message || '')) return res.json({ items: [], missing: true });
+      throw error;
+    }
+    res.json({ items: data || [] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PUT /api/items/:id — ручная правка полей (отмечает edited=true)
+app.put('/api/items/:id', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const patch = {};
+    for (const k of ['name_ru', 'name_original', 'category', 'brand', 'mpn', 'notes', 'receipt_id']) {
+      if (k in b) patch[k] = b[k] === '' ? null : b[k];
+    }
+    for (const k of ['confidence', 'brand_confidence', 'mpn_confidence']) {
+      if (k in b) { const n = Number(b[k]); patch[k] = isFinite(n) ? Math.min(1, Math.max(0, n)) : null; }
+    }
+    if (!Object.keys(patch).length) return res.status(400).json({ error: 'Нет полей для обновления' });
+    patch.edited = true;
+    const { data, error } = await supabaseAdmin.from('home_items').update(patch).eq('id', req.params.id).select('*').single();
+    if (error) throw error;
+    logActivity(req.user, 'Предметы', 'правка предмета', `${data.name_ru || req.params.id}`, req);
+    res.json({ item: data });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/items/:id
+app.delete('/api/items/:id', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const { data: it } = await supabaseAdmin.from('home_items').select('name_ru').eq('id', req.params.id).maybeSingle();
+    const { error } = await supabaseAdmin.from('home_items').delete().eq('id', req.params.id);
+    if (error) throw error;
+    logActivity(req.user, 'Предметы', 'удаление предмета', (it && it.name_ru) || req.params.id, req);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/items/:id/similar — похожие товары в базах магазинов (parse_products):
+// 1) точное совпадение MPN; 2) бренд + слова названия; 3) просто слова названия
+app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
+  try {
+    const { data: item, error: e1 } = await supabaseAdmin.from('home_items').select('*').eq('id', req.params.id).maybeSingle();
+    if (e1) throw e1;
+    if (!item) return res.status(404).json({ error: 'Предмет не найден' });
+    const COLS = 'site,url,name,image,article,brand,mpn,price,price_original,discount_pct,last_seen';
+    const seen = new Set();
+    const out = [];
+    const push = (rows, matchBy) => {
+      for (const r of rows || []) {
+        const key = r.site + '|' + r.url;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ ...r, match_by: matchBy });
+      }
+    };
+    // 1) MPN — самый точный матч
+    if (item.mpn) {
+      const { data } = await supabaseAdmin.from('parse_products').select(COLS)
+        .ilike('mpn', item.mpn.replace(/[%_]/g, ' ')).order('price', { ascending: true, nullsFirst: false }).limit(30);
+      push(data, 'mpn');
+    }
+    // 2) бренд + ключевые слова названия
+    const nameWords = String(item.name_original || item.name_ru || '')
+      .toLowerCase().replace(/[^a-zа-я0-9\s-]/gi, ' ').split(/\s+/)
+      .filter(w => w.length >= 3).slice(0, 3);
+    if (out.length < 20 && nameWords.length) {
+      let q = supabaseAdmin.from('parse_products').select(COLS);
+      if (item.brand) q = q.ilike('brand', item.brand.replace(/[%_]/g, ' '));
+      for (const w of nameWords) q = q.ilike('name', '%' + w.replace(/[%_]/g, ' ') + '%');
+      const { data } = await q.order('price', { ascending: true, nullsFirst: false }).limit(30);
+      push(data, item.brand ? 'brand+name' : 'name');
+    }
+    // 3) слова русского названия (широкий поиск)
+    if (out.length < 10 && item.name_ru) {
+      const ruWords = item.name_ru.toLowerCase().split(/\s+/).filter(w => w.length >= 4).slice(0, 2);
+      if (ruWords.length) {
+        let q = supabaseAdmin.from('parse_products').select(COLS);
+        for (const w of ruWords) q = q.ilike('name', '%' + w.replace(/[%_]/g, ' ') + '%');
+        const { data } = await q.order('price', { ascending: true, nullsFirst: false }).limit(20);
+        push(data, 'name_ru');
+      }
+    }
+    res.json({ item: { id: item.id, name_ru: item.name_ru, brand: item.brand, mpn: item.mpn }, results: out.slice(0, 30) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

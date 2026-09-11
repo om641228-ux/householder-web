@@ -2248,7 +2248,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v177 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v178 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -5810,6 +5810,16 @@ function App() {
   const [authChecking, setAuthChecking] = useState(true);
   const [activeTab, setActiveTab] = useState('upload');
   const [appMode, setAppMode] = useState('checks'); // v177: верхний переключатель проекта — '🧾 Чеки' (весь текущий проект) | '📦 Предметы' (клон проекта под предметы)
+  // v178: модуль «Предметы» — фото → AI (название + % схожести, бренд, MPN) → home_items → поиск по магазинам
+  const [itemsList, setItemsList] = useState([]);
+  const [itemsLoading, setItemsLoading] = useState(false);
+  const [itemsMissing, setItemsMissing] = useState(false); // таблица home_items ещё не создана
+  const [itemBusy, setItemBusy] = useState(false);         // идёт распознавание фото
+  const [itemError, setItemError] = useState('');
+  const [itemsQuery, setItemsQuery] = useState('');
+  const [itemEditId, setItemEditId] = useState(null);
+  const [itemEditForm, setItemEditForm] = useState({});
+  const [itemSimilar, setItemSimilar] = useState({});      // id → {loading, results, error}
   const [chatUnread, setChatUnread] = useState({}); // v83: непрочитанные по каналам
   const [cashQ, setCashQ] = useState('');           // v85: поиск по движениям (Cash)
   const [cashVals, setCashVals] = useState({});     // v85: редактируемые значения строк {id: {counterparty, operation_date, amount}}
@@ -6136,9 +6146,84 @@ function App() {
   }, [isMobileView]);
 
   // v106.2: свайп влево/вправо по экрану — переход между разделами (порядок нижней навигации + «Ещё»)
+  // v178: загрузка списка предметов
+  const loadItems = async (q) => {
+    setItemsLoading(true); setItemError('');
+    try {
+      const r = await fetch(`${API_URL}/api/items?token=${token}${q ? '&q=' + encodeURIComponent(q) : ''}`);
+      const d = await r.json();
+      if (d.missing) setItemsMissing(true);
+      setItemsList(d.items || []);
+    } catch (e) { setItemError(e.message); }
+    setItemsLoading(false);
+  };
+
+  // v178: фото предмета → распознавание + запись в home_items
+  const recognizeItemPhoto = async (file) => {
+    if (!file) return;
+    setItemBusy(true); setItemError('');
+    try {
+      const fd = new FormData();
+      fd.append('image', file);
+      const r = await fetch(`${API_URL}/api/items/recognize?token=${token}`, { method: 'POST', body: fd });
+      const d = await r.json();
+      if (!r.ok) {
+        if (d.missing) setItemsMissing(true);
+        throw new Error(d.error || `Ошибка ${r.status}`);
+      }
+      setItemsList(prev => [d.item, ...prev]);
+    } catch (e) { setItemError(e.message); }
+    setItemBusy(false);
+  };
+
+  // v178: ручная правка предмета
+  const saveItemEdit = async (id) => {
+    try {
+      const r = await fetch(`${API_URL}/api/items/${id}?token=${token}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(itemEditForm)
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
+      setItemsList(prev => prev.map(it => it.id === id ? d.item : it));
+      setItemEditId(null);
+    } catch (e) { setItemError(e.message); }
+  };
+
+  const deleteItem = async (id) => {
+    if (!window.confirm('Удалить предмет из базы?')) return;
+    try {
+      const r = await fetch(`${API_URL}/api/items/${id}?token=${token}`, { method: 'DELETE' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
+      setItemsList(prev => prev.filter(it => it.id !== id));
+    } catch (e) { setItemError(e.message); }
+  };
+
+  // v178: похожие товары в базах магазинов
+  const loadItemSimilar = async (id) => {
+    setItemSimilar(prev => ({ ...prev, [id]: { loading: true } }));
+    try {
+      const r = await fetch(`${API_URL}/api/items/${id}/similar?token=${token}`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
+      setItemSimilar(prev => ({ ...prev, [id]: { loading: false, results: d.results || [] } }));
+    } catch (e) {
+      setItemSimilar(prev => ({ ...prev, [id]: { loading: false, error: e.message } }));
+    }
+  };
+
+  const itemConfBadge = (c) => {
+    if (c == null) return null;
+    const pct = Math.round(Number(c) * 100);
+    const color = pct >= 90 ? '#1e8449' : (pct >= 70 ? '#b26a00' : '#c0392b');
+    const bg = pct >= 90 ? '#e8f8ee' : (pct >= 70 ? '#fff4e0' : '#fdecea');
+    return <span style={{ fontSize: 11, fontWeight: 700, color, background: bg, borderRadius: 6, padding: '1px 7px', whiteSpace: 'nowrap' }}>{pct}%</span>;
+  };
+
   const gotoTab = (t) => {
     setActiveTab(t);
-    if (t === 'list' || t === 'items') loadReceipts();
+    if (t === 'list') loadReceipts();
+    if (t === 'items') loadItems(); // v178
     if (t === 'analysis') { loadReceipts(); loadBankMovements(); loadPlannedPayments(); }
     if (t === 'taxes') { loadReceipts(); loadBankMovements(); }
     if (t === 'cash') { loadReceipts(); loadCashMovements(); }
@@ -9600,7 +9685,7 @@ ${bodyHtml}
               <div style={{ display: 'flex', border: '1px solid #d0d0d5', borderRadius: 9, overflow: 'hidden', background: '#fff', marginLeft: 10 }}>
                 {[['checks', '🧾 Чеки'], ['items', '📦 Предметы']].map(([mode, label]) => (
                   <button key={mode}
-                    onClick={() => { setAppMode(mode); if (mode === 'items') { setActiveTab('items'); loadReceipts(); } else { setActiveTab('list'); loadReceipts(); } }}
+                    onClick={() => { setAppMode(mode); if (mode === 'items') { setActiveTab('items'); loadItems(); } else { setActiveTab('list'); loadReceipts(); } }}
                     style={{ border: 'none', background: appMode === mode ? '#0071e3' : 'transparent', color: appMode === mode ? '#fff' : '#333', borderRadius: 0, padding: '6px 14px', fontSize: 13, fontWeight: appMode === mode ? 700 : 400, cursor: 'pointer', minHeight: 0, whiteSpace: 'nowrap' }}
                   >{label}</button>
                 ))}
@@ -9620,7 +9705,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-11 · v177 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-11 · v178 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9633,7 +9718,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-11 · v177</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-11 · v178</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
@@ -10973,7 +11058,116 @@ ${bodyHtml}
         </div>
       )}
 
-      {(activeTab === 'list' || activeTab === 'items') && (
+      {/* v178: модуль «Предметы» — загрузка фото → AI-распознавание → база дома → поиск по магазинам */}
+      {activeTab === 'items' && (
+        <div className="list-section">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12, background: '#fff', border: '1px solid #e0e0e5', borderRadius: 10, padding: '10px 14px' }}>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: itemBusy ? '#b9c8bd' : '#0071e3', color: '#fff', borderRadius: 9, padding: '8px 16px', fontSize: 14, fontWeight: 700, cursor: itemBusy ? 'default' : 'pointer' }}>
+              {itemBusy ? '⏳ Распознаю…' : '📷 Загрузить фото предмета'}
+              <input type="file" accept="image/*" capture="environment" disabled={itemBusy} style={{ display: 'none' }}
+                onChange={e => { const f = e.target.files && e.target.files[0]; if (f) recognizeItemPhoto(f); e.target.value = ''; }} />
+            </label>
+            <input type="text" placeholder="🔍 Поиск по предметам: название, бренд, номер…" value={itemsQuery}
+              onChange={e => setItemsQuery(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') loadItems(itemsQuery); }}
+              style={{ flex: '1 1 220px', minWidth: 0, maxWidth: 380, padding: '7px 10px', fontSize: 13, borderRadius: 6, border: '1px solid #ccc' }} />
+            <button onClick={() => loadItems(itemsQuery)} style={{ padding: '7px 12px', fontSize: 13 }}>Найти</button>
+            <button onClick={() => { setItemsQuery(''); loadItems(''); }} style={{ padding: '7px 12px', fontSize: 13 }}>🔄</button>
+            <span style={{ fontSize: 12, color: '#6e6e73' }}>Всего: {itemsList.length}</span>
+          </div>
+
+          {itemsMissing && (
+            <div style={{ background: '#fdecea', border: '1px solid #e74c3c', borderRadius: 10, padding: '10px 14px', marginBottom: 12, fontSize: 13, color: '#c0392b' }}>
+              ⚠️ Таблица <b>home_items</b> ещё не создана. Выполните один раз в Supabase → SQL Editor файл <b>supabase-migration-v178-home-items.sql</b>.
+            </div>
+          )}
+          {itemError && (
+            <div style={{ background: '#fdecea', border: '1px solid #e74c3c', borderRadius: 10, padding: '8px 14px', marginBottom: 12, fontSize: 13, color: '#c0392b' }}>Ошибка: {itemError}</div>
+          )}
+          {itemsLoading && <div style={{ fontSize: 13, color: '#6e6e73', padding: 8 }}>Загрузка…</div>}
+          {!itemsLoading && !itemsList.length && !itemsMissing && (
+            <div style={{ fontSize: 14, color: '#6e6e73', padding: 24, textAlign: 'center' }}>
+              📦 База предметов пуста. Сфотографируйте предмет — AI определит название (с % схожести), производителя и номер производителя.
+            </div>
+          )}
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
+            {itemsList.map(it => (
+              <div key={it.id} style={{ background: '#fff', border: '1px solid #e0e0e5', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  {it.photo_url
+                    ? <img src={it.photo_url} alt="" style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 8, border: '1px solid #eee', flexShrink: 0, cursor: 'pointer' }} onClick={() => window.open(it.photo_url, '_blank')} />
+                    : <div style={{ width: 72, height: 72, borderRadius: 8, background: '#f2f2f5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, flexShrink: 0 }}>📦</div>}
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 700, fontSize: 14 }}>{it.name_ru || '—'}</span>
+                      {itemConfBadge(it.confidence)}
+                      {it.edited && <span title="Исправлено вручную" style={{ fontSize: 11, color: '#8e44ad' }}>✏️</span>}
+                    </div>
+                    {it.name_original && <div style={{ fontSize: 12, color: '#6e6e73' }}>{it.name_original}</div>}
+                    {it.category && <div style={{ fontSize: 11, color: '#95a5a6' }}>🏷 {it.category}</div>}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', fontSize: 12 }}>
+                  <span style={{ background: '#f2f2f5', borderRadius: 6, padding: '2px 8px' }}>
+                    🏭 {it.brand ? <b>{it.brand}</b> : '—'} {it.brand && itemConfBadge(it.brand_confidence)}
+                  </span>
+                  <span style={{ background: '#f2f2f5', borderRadius: 6, padding: '2px 8px' }}>
+                    🔢 {it.mpn ? <b>{it.mpn}</b> : '—'} {it.mpn && itemConfBadge(it.mpn_confidence)}
+                  </span>
+                </div>
+                <div style={{ fontSize: 11, color: '#b0b0b5' }}>
+                  {new Date(it.created_at).toLocaleString('ru-RU')}{it.ai_model ? ` · ${it.ai_model}` : ''}
+                </div>
+
+                {itemEditId === it.id ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, background: '#f8f8fb', borderRadius: 8, padding: 8 }}>
+                    {[['name_ru', 'Название (рус)'], ['name_original', 'Название (ориг.)'], ['brand', 'Производитель'], ['mpn', 'Номер производителя'], ['category', 'Категория'], ['notes', 'Заметки']].map(([k, lbl]) => (
+                      <input key={k} type="text" placeholder={lbl} value={itemEditForm[k] ?? (it[k] || '')}
+                        onChange={e => setItemEditForm(prev => ({ ...prev, [k]: e.target.value }))}
+                        style={{ padding: '5px 8px', fontSize: 12, borderRadius: 5, border: '1px solid #ccc' }} />
+                    ))}
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button onClick={() => saveItemEdit(it.id)} style={{ flex: 1, background: '#1e8449', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>💾 Сохранить</button>
+                      <button onClick={() => setItemEditId(null)} style={{ flex: 1, background: '#fff', border: '1px solid #ccc', borderRadius: 6, padding: '6px 0', fontSize: 12, cursor: 'pointer' }}>Отмена</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    <button onClick={() => { setItemEditId(it.id); setItemEditForm({}); }}
+                      style={{ border: '1px solid #ccc', background: '#fff', borderRadius: 6, padding: '5px 10px', fontSize: 12, cursor: 'pointer' }}>✏️ Правка</button>
+                    <button onClick={() => loadItemSimilar(it.id)} disabled={itemSimilar[it.id]?.loading}
+                      style={{ border: 'none', background: '#8e44ad', color: '#fff', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                      {itemSimilar[it.id]?.loading ? '⏳ Ищу…' : '🛒 Найти в магазинах'}
+                    </button>
+                    <button onClick={() => deleteItem(it.id)}
+                      style={{ marginLeft: 'auto', border: '1px solid #e74c3c', background: '#fff', color: '#c0392b', borderRadius: 6, padding: '5px 10px', fontSize: 12, cursor: 'pointer' }}>🗑</button>
+                  </div>
+                )}
+
+                {itemSimilar[it.id]?.error && <div style={{ fontSize: 12, color: '#c0392b' }}>Ошибка поиска: {itemSimilar[it.id].error}</div>}
+                {itemSimilar[it.id]?.results && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {!itemSimilar[it.id].results.length && <div style={{ fontSize: 12, color: '#6e6e73' }}>Похожих товаров в базах магазинов не найдено.</div>}
+                    {itemSimilar[it.id].results.map((r, i) => (
+                      <a key={i} href={r.url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none', color: 'inherit', background: '#f8f8fb', borderRadius: 8, padding: '5px 8px', fontSize: 12 }}>
+                        {r.image && <img src={r.image} alt="" style={{ width: 34, height: 34, objectFit: 'contain', borderRadius: 5, background: '#fff', flexShrink: 0 }} />}
+                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.name}>{r.name}</span>
+                        <span style={{ fontSize: 10, color: '#95a5a6', flexShrink: 0 }}>{({ mpn: '🔢MPN', 'brand+name': '🏭+назв.', name: 'назв.', name_ru: 'назв.RU' })[r.match_by] || r.match_by} · {String(r.site || '').replace('www.', '')}</span>
+                        <span style={{ fontWeight: 700, color: '#c0392b', flexShrink: 0 }}>{r.price != null ? `${r.price} €` : '—'}</span>
+                        {r.price_original != null && r.price_original > (r.price || 0) && <span style={{ textDecoration: 'line-through', color: '#95a5a6', flexShrink: 0 }}>{r.price_original} €</span>}
+                        {r.discount_pct != null && <span style={{ fontSize: 10, fontWeight: 700, color: '#1e8449', flexShrink: 0 }}>−{Math.round(r.discount_pct)}%</span>}
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'list' && (
         <div className="list-section">
           {cashLinkMode && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#eef7ee', border: '1px solid #1e8449', borderRadius: 10, padding: '8px 12px', marginBottom: 10, fontSize: 14, flexWrap: 'wrap' }}>
