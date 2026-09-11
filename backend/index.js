@@ -54,8 +54,8 @@ const OPENAI_COMPAT_PROVIDERS = {
     displayName: 'OpenRouter',
     baseURL: 'https://openrouter.ai/api/v1',
     apiKey: process.env.OPENROUTER_API_KEY || null,
-    defaultModel: 'google/gemma-4-26b-a4b-it:free',
-    fallbackIds: ['google/gemma-4-26b-a4b-it:free', 'qwen/qwen2.5-vl-32b-instruct:free', 'qwen/qwen2.5-vl-72b-instruct:free', 'google/gemma-4-31b-it:free', 'nvidia/nemotron-nano-12b-v2-vl:free'],
+    defaultModel: 'google/gemma-4-31b-it:free',
+    fallbackIds: ['google/gemma-4-31b-it:free', 'google/gemma-4-26b-a4b-it:free', 'nvidia/nemotron-nano-12b-v2-vl:free', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', 'openrouter/free'], // v184: qwen2.5-vl :free делистнуты
     extraHeaders: { 'HTTP-Referer': 'https://receipt-manager', 'X-Title': 'Receipt Manager' }
   },
   github: {
@@ -71,7 +71,7 @@ const OPENAI_COMPAT_PROVIDERS = {
     baseURL: 'https://api.mistral.ai/v1',
     apiKey: process.env.MISTRAL_API_KEY || null,
     defaultModel: 'mistral-small-latest',
-    fallbackIds: ['mistral-small-latest', 'pixtral-12b-2409'],
+    fallbackIds: ['mistral-small-latest', 'pixtral-large-latest'], // v184: pixtral-12b-2409 deprecated
     extraHeaders: {}
   },
   kimi: {
@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v183-2026-09-11', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v184-2026-09-11', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -756,7 +756,7 @@ function detectObjectByAddress(...texts) {
   }
   return null;
 }
-const GEMINI_FALLBACK_CANDIDATES = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'];
+const GEMINI_FALLBACK_CANDIDATES = ['gemini-3.5-flash', 'gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-flash', 'gemini-2.5-pro']; // v184: актуальные 3.x впереди; 1.5/2.0 сняты с production
 
 async function recognizeWithGemini(imageBuffer, modelName, currency, docType, mimeType = 'image/jpeg', customPrompt = null) {
   if (!genAI) throw new Error('Gemini API key not configured');
@@ -997,7 +997,7 @@ async function recognizeItemWithFallback(imageBuffer, mimeType = 'image/jpeg') {
       errors.push(`gemini-${candidate}: ${e.message}`);
     }
   }
-  for (const key of ['openrouter', 'github', 'mistral', 'kimi']) {
+  for (const key of ['openrouter', 'mistral', 'kimi']) { // v184: github убран — GitHub Models закрыт 30.07.2026
     const cfg = OPENAI_COMPAT_PROVIDERS[key];
     if (!cfg.apiKey) { errors.push(`${key}: нет API ключа`); continue; }
     try {
@@ -7019,6 +7019,8 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
       const scored = (cand || []).map(r => {
         const nm = String(r.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
         let score = 0, esHits = 0, latHits = 0;
+        const esPhrase = String(item.name_es || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s-]/g, ' ').replace(/\s+/g, ' ').trim();
+        if (esPhrase.length >= 8 && nm.includes(esPhrase)) score += 10; // v184: полная фраза name_es целиком — сильный сигнал
         for (const w of esWords) if (nm.includes(w)) { score += 2; esHits++; } // испанские слова весят больше
         for (const w of latWords) if (nm.includes(w)) { score += 1; latHits++; }
         const brandHit = brandLc && String(r.brand || '').toLowerCase().includes(brandLc);
@@ -7159,7 +7161,7 @@ async function rankImagesWithFallback(queryImg, candImgs) {
       catch (e) { console.warn(`visual-rank gemini-${candidate} failed: ${e.message}`); errors.push(`gemini-${candidate}: ${e.message}`); }
     }
   }
-  for (const key of ['openrouter', 'github', 'mistral', 'kimi']) {
+  for (const key of ['openrouter', 'mistral', 'kimi']) { // v184: github убран — GitHub Models закрыт 30.07.2026
     try { return { ranks: await rankImagesOpenAICompat(queryImg, candImgs, key), model: `${key}:${OPENAI_COMPAT_PROVIDERS[key].defaultModel}` }; }
     catch (e) { console.warn(`visual-rank ${key} failed: ${e.message}`); errors.push(`${key}: ${e.message}`); }
   }
