@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v182-2026-09-11', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v183-2026-09-11', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -900,11 +900,15 @@ function buildItemPrompt() {
   "mpn": "номер производителя / парт-номер / модель — выбитый или напечатанный код на корпусе (например «T 003», «SPN-120»; null если не читается — НЕ выдумывай; обычный размер типа «2 мм» или «T15» — НЕ mpn)",
   "mpn_confidence": 0.0
 }
-ПРАВИЛА:
-- confidence, brand_confidence, mpn_confidence — твоя уверенность от 0 до 1 (1 = текст читается чётко).
-- Маркировку ищи на корпусе: мелкий текст, гравировка на металле, наклейки, логотипы.
-- Если марка/номер не читаются — null, лучше null, чем ошибка.
-- Если на фото несколько предметов — опиши ГЛАВНЫЙ (центральный) предмет.`;
+ПРАВИЛА (выполняй по шагам):
+1. Осмотри ВЕСЬ предмет: рабочая часть (жало/губки/лезвие), шарнир, рукоятка, торец, наклейки, гравировка на металле — маркировка может быть на любой стороне.
+2. Сначала определи ТОЧНЫЙ тип предмета (не «отвёртка», а «отвёртка короткая stubby под биты»; не «пассатижи», а «тонкогубцы»), затем назови его.
+3. name_ru — точное русское название с ключевой спецификой (тип, назначение). name_es — как этот тип ищут в магазинах Испании (2–4 содержательных слова, без «set/kit/profesional»).
+4. brand — ТОЛЬКО с корпуса: логотип, тиснение, надпись. По цвету ручек бренд НЕ угадывать.
+5. mpn — номер модели/парт-номер: код с БУКВАМИ и цифрами (например «SPN-120», «1-65-400», «T 003») или явно подписанный «Ref/Art/Mod». Чисто числовые короткие значения (2–4 цифры: «350», «200») — почти всегда РАЗМЕР/длина, а НЕ номер модели → null. Номер под битой/на упаковке, которой нет в кадре, — не считается.
+6. confidence/brand_confidence/mpn_confidence — уверенность 0..1. Если уверенность в mpn ниже 0.7 — ставь mpn: null (лучше без номера, чем выдуманный).
+7. Ничего не выдумывай: не читается → null.
+8. Если на фото несколько предметов — опиши ГЛАВНЫЙ (центральный) предмет.`;
 }
 
 function parseItemJson(text) {
@@ -6990,8 +6994,9 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
         out.push({ ...r, match_by: matchBy });
       }
     };
-    // 1) MPN — самый точный матч
-    if (item.mpn) {
+    // 1) MPN — самый точный матч (v183: только осмысленный номер — ≥4 символов, есть буква, уверенность ≥ 0.7; «350» и т.п. пропускаем)
+    const mpnOk = item.mpn && String(item.mpn).length >= 4 && /[a-z]/i.test(String(item.mpn)) && (item.mpn_confidence == null || Number(item.mpn_confidence) >= 0.7);
+    if (mpnOk) {
       const { data } = await supabaseAdmin.from('parse_products').select(COLS)
         .ilike('mpn', item.mpn.replace(/[%_]/g, ' ')).order('price', { ascending: true, nullsFirst: false }).limit(30);
       push(data, 'mpn');
@@ -7018,7 +7023,7 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
         for (const w of latWords) if (nm.includes(w)) { score += 1; latHits++; }
         const brandHit = brandLc && String(r.brand || '').toLowerCase().includes(brandLc);
         if (brandHit) score += 3;
-        const mpnHit = item.mpn && r.mpn && String(r.mpn).toLowerCase() === String(item.mpn).toLowerCase();
+        const mpnHit = mpnOk && r.mpn && String(r.mpn).toLowerCase() === String(item.mpn).toLowerCase();
         if (mpnHit) score += 5;
         // v182: отсев мусора — нужно ≥2 испанских слова, ИЛИ бренд+слово, ИЛИ точный MPN (одно общее слово недостаточно)
         const ok = esHits >= 2 || (brandHit && (esHits + latHits) >= 1) || mpnHit || (esWords.length === 1 && esHits === 1);
@@ -7113,11 +7118,11 @@ async function rankImagesGemini(queryImg, candImgs, modelName) {
 }
 
 // OpenAI-совместимые (openrouter/github/mistral/kimi): массив image_url
-async function rankImagesOpenAICompat(queryImg, candImgs, providerKey) {
+async function rankImagesOpenAICompat(queryImg, candImgs, providerKey, modelOverride) {
   const cfg = OPENAI_COMPAT_PROVIDERS[providerKey];
   if (!cfg) throw new Error(`Unknown provider: ${providerKey}`);
   if (!cfg.apiKey) throw new Error(`${cfg.displayName} API key not configured`);
-  const model = cfg.defaultModel;
+  const model = modelOverride || cfg.defaultModel;
   const content = [
     { type: 'text', text: buildVisualRankPrompt(candImgs.length) + '\nИзображение №0 — первое ниже, далее №1..№' + candImgs.length + ' по порядку.' },
     { type: 'image_url', image_url: { url: `data:${queryImg.mime};base64,${queryImg.buffer.toString('base64')}` } }
@@ -7135,6 +7140,15 @@ async function rankImagesOpenAICompat(queryImg, candImgs, providerKey) {
   const out = res.data?.choices?.[0]?.message?.content;
   if (!out) throw new Error(`${cfg.displayName} вернул пустой ответ`);
   return parseVisualRankJson(out, candImgs.length);
+}
+
+// v183: визуальный поиск ВЫБРАННОЙ моделью (формат строки как у чеков)
+async function rankImagesPreferred(queryImg, candImgs, model) {
+  if (model.startsWith('gemini')) return { ranks: await rankImagesGemini(queryImg, candImgs, model), model: `gemini:${model}` };
+  for (const key of ['openrouter', 'github', 'mistral', 'kimi']) {
+    if (model.startsWith(key + '-')) return { ranks: await rankImagesOpenAICompat(queryImg, candImgs, key, model.slice(key.length + 1)), model };
+  }
+  throw new Error(`Неизвестная модель: ${model}`);
 }
 
 async function rankImagesWithFallback(queryImg, candImgs) {
@@ -7171,7 +7185,8 @@ app.get('/api/items/:id/similar-visual', requireAuth, async (req, res) => {
         candMap.set(key, { r, score: base });
       }
     };
-    if (item.mpn) {
+    const mpnOkV = item.mpn && String(item.mpn).length >= 4 && /[a-z]/i.test(String(item.mpn)) && (item.mpn_confidence == null || Number(item.mpn_confidence) >= 0.7); // v183
+    if (mpnOkV) {
       const { data } = await supabaseAdmin.from('parse_products').select(COLS)
         .ilike('mpn', item.mpn.replace(/[%_]/g, ' ')).not('image', 'is', null).limit(10);
       addCands(data, 100);
@@ -7195,7 +7210,7 @@ app.get('/api/items/:id/similar-visual', requireAuth, async (req, res) => {
         for (const w of esWords) if (nm.includes(w)) sc += 2;
         for (const w of latWords) if (nm.includes(w)) sc += 1;
         if (brandLc && String(r.brand || '').toLowerCase().includes(brandLc)) sc += 3;
-        if (item.mpn && r.mpn && String(r.mpn).toLowerCase() === String(item.mpn).toLowerCase()) sc += 5;
+        if (mpnOkV && r.mpn && String(r.mpn).toLowerCase() === String(item.mpn).toLowerCase()) sc += 5;
         if (sc >= 2) {
           const key = r.site + '|' + r.url;
           if (!candMap.has(key)) candMap.set(key, { r, score: sc });
@@ -7213,11 +7228,19 @@ app.get('/api/items/:id/similar-visual', requireAuth, async (req, res) => {
     dl.forEach((d, i) => { if (d.status === 'fulfilled') { okImgs.push(d.value); okCands.push(cands[i]); } });
     if (!okImgs.length) return res.json({ results: [], candidates: cands.length, message: 'Не удалось скачать фото кандидатов' });
 
-    // Стадия 2: vision-ранжирование — ДВА независимых прохода, консенсус (v182)
-    const pass1 = await rankImagesWithFallback(queryImg, okImgs);
+    // Стадия 2: vision-ранжирование — ДВА независимых прохода, консенсус (v182); v183: сначала ВЫБРАННАЯ модель
+    const wantModel = String(req.query.model || 'auto');
+    const rankAuto = async () => {
+      if (wantModel && wantModel !== 'auto' && wantModel !== 'local-mac-ocr') {
+        try { return await rankImagesPreferred(queryImg, okImgs, wantModel); }
+        catch (e) { console.warn(`visual: выбранная модель ${wantModel} failed: ${e.message} — fallback`); }
+      }
+      return rankImagesWithFallback(queryImg, okImgs);
+    };
+    const pass1 = await rankAuto();
     let ranks = pass1.ranks, model = pass1.model;
     try {
-      const pass2 = await rankImagesWithFallback(queryImg, okImgs);
+      const pass2 = await rankAuto();
       const m2 = new Map(pass2.ranks.map(x => [x.n, x.score]));
       const merged = new Map();
       for (const x of pass1.ranks) {
