@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Householder — сборщик цен",
+  "version": "1.27.2",
+  "description": "Открывает товары из каталога Householder в фоновых вкладках и отправляет точные цены в систему. Поддерживает параллельный сбор по магазинам.",
+  "permissions": [
+    "tabs",
+    "scripting",
+    "storage",
+    "alarms",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Открыть панель сбора цен"
+  },
+  "externally_connectable": {
+    "matches": [
+      "https://householder-web-production.up.railway.app/*"
+    ]
+  },
+  "side_panel": {
+    "default_path": "popup.html"
+  }
+}
