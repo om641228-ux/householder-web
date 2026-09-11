@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v180-2026-09-11', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v181-2026-09-11', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -7005,6 +7005,180 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
       }
     }
     res.json({ item: { id: item.id, name_ru: item.name_ru, name_es: item.name_es, brand: item.brand, mpn: item.mpn }, results: out.slice(0, 30) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// ========== v181: ВИЗУАЛЬНЫЙ ПОИСК «картинка по картинке» ==========
+// Двухстадийно: name_es/MPN дают кандидатов из parse_products → vision-модель
+// сравнивает фото предмета с фото кандидатов и возвращает score схожести.
+function buildVisualRankPrompt(count) {
+  return `Ты — эксперт по визуальному сравнению товаров. Первое изображение (№0) — фото предмета пользователя. Далее изображения №1..№${count} — товары из каталогов магазинов.
+Определи, какие товары каталога показывают ТОТ ЖЕ ТИП предмета, что на фото №0 (например: кусачки = кусачки, даже если другой бренд/цвет/ракурс).
+Верни СТРОГО JSON-массив без пояснений и markdown: [{"n": 1, "score": 0.95}, ...]
+- n — номер изображения каталога (от 1 до ${count});
+- score — визуальная схожесть от 0 до 1 (тип и форма предмета, конструкция; совпадение бренда/маркировки повышает score; другой тип предмета — НЕ включай);
+- включай только score >= 0.5, сортируй по убыванию score, максимум 10 элементов.
+Если ничего не похоже — верни [].`;
+}
+
+function parseVisualRankJson(text, maxN) {
+  let jsonStr = String(text || '');
+  const cb = jsonStr.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (cb) jsonStr = cb[1];
+  const am = jsonStr.match(/\[[\s\S]*\]/);
+  if (am) jsonStr = am[0];
+  const arr = JSON.parse(jsonStr);
+  if (!Array.isArray(arr)) return [];
+  const out = [];
+  for (const x of arr) {
+    const nn = Math.round(Number(x && x.n));
+    let sc = Number(x && x.score);
+    if (!isFinite(nn) || nn < 1 || nn > maxN || !isFinite(sc)) continue;
+    if (sc > 1) sc = sc / 100;
+    out.push({ n: nn, score: Math.min(1, Math.max(0, sc)) });
+  }
+  out.sort((a, b) => b.score - a.score);
+  return out.slice(0, 10);
+}
+
+async function downloadImageBuffer(url, timeoutMs = 10000) {
+  const u = String(url || '');
+  if (!/^https?:\/\//i.test(u)) throw new Error('bad url');
+  const r = await axios.get(u, { responseType: 'arraybuffer', timeout: timeoutMs, maxContentLength: 10 * 1024 * 1024, headers: { 'User-Agent': 'Mozilla/5.0 (items-visual-search)' } });
+  const mime = String(r.headers['content-type'] || 'image/jpeg').split(';')[0];
+  if (!/^image\//.test(mime)) throw new Error('not an image: ' + mime);
+  return { buffer: Buffer.from(r.data), mime };
+}
+
+// Gemini: запрос + N кандидатов одним вызовом
+async function rankImagesGemini(queryImg, candImgs, modelName) {
+  if (!genAI) throw new Error('Gemini API key not configured');
+  const model = genAI.getGenerativeModel({
+    model: modelName || DEFAULT_GEMINI_MODEL,
+    generationConfig: { maxOutputTokens: 1024, temperature: 0.1 }
+  });
+  const parts = [
+    { text: buildVisualRankPrompt(candImgs.length) },
+    { text: 'Изображение №0 (предмет пользователя):' },
+    { inlineData: { data: queryImg.buffer.toString('base64'), mimeType: queryImg.mime } }
+  ];
+  candImgs.forEach((c, i) => {
+    parts.push({ text: `Изображение №${i + 1} (каталог):` });
+    parts.push({ inlineData: { data: c.buffer.toString('base64'), mimeType: c.mime } });
+  });
+  const result = await model.generateContent(parts);
+  return parseVisualRankJson(result.response.text(), candImgs.length);
+}
+
+// OpenAI-совместимые (openrouter/github/mistral/kimi): массив image_url
+async function rankImagesOpenAICompat(queryImg, candImgs, providerKey) {
+  const cfg = OPENAI_COMPAT_PROVIDERS[providerKey];
+  if (!cfg) throw new Error(`Unknown provider: ${providerKey}`);
+  if (!cfg.apiKey) throw new Error(`${cfg.displayName} API key not configured`);
+  const model = cfg.defaultModel;
+  const content = [
+    { type: 'text', text: buildVisualRankPrompt(candImgs.length) + '\nИзображение №0 — первое ниже, далее №1..№' + candImgs.length + ' по порядку.' },
+    { type: 'image_url', image_url: { url: `data:${queryImg.mime};base64,${queryImg.buffer.toString('base64')}` } }
+  ];
+  for (const c of candImgs) content.push({ type: 'image_url', image_url: { url: `data:${c.mime};base64,${c.buffer.toString('base64')}` } });
+  const body = { model, messages: [{ role: 'user', content }], max_tokens: 1024, temperature: 0.1 };
+  if (providerKey === 'kimi') {
+    delete body.temperature;
+    if (/kimi-k3/i.test(model)) { delete body.max_tokens; body.max_completion_tokens = 1024; body.reasoning_effort = 'low'; }
+  }
+  const res = await axios.post(`${cfg.baseURL}/chat/completions`, body, {
+    headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', ...cfg.extraHeaders },
+    timeout: 180000
+  });
+  const out = res.data?.choices?.[0]?.message?.content;
+  if (!out) throw new Error(`${cfg.displayName} вернул пустой ответ`);
+  return parseVisualRankJson(out, candImgs.length);
+}
+
+async function rankImagesWithFallback(queryImg, candImgs) {
+  const errors = [];
+  if (genAI) {
+    for (const candidate of GEMINI_FALLBACK_CANDIDATES) {
+      try { return { ranks: await rankImagesGemini(queryImg, candImgs, candidate), model: `gemini:${candidate}` }; }
+      catch (e) { console.warn(`visual-rank gemini-${candidate} failed: ${e.message}`); errors.push(`gemini-${candidate}: ${e.message}`); }
+    }
+  }
+  for (const key of ['openrouter', 'github', 'mistral', 'kimi']) {
+    try { return { ranks: await rankImagesOpenAICompat(queryImg, candImgs, key), model: `${key}:${OPENAI_COMPAT_PROVIDERS[key].defaultModel}` }; }
+    catch (e) { console.warn(`visual-rank ${key} failed: ${e.message}`); errors.push(`${key}: ${e.message}`); }
+  }
+  throw new Error(errors.join(' | ') || 'Нет доступных vision-провайдеров');
+}
+
+// GET /api/items/:id/similar-visual — фото предмета против фото кандидатов (двухстадийный поиск)
+app.get('/api/items/:id/similar-visual', requireAuth, async (req, res) => {
+  try {
+    const { data: item, error: e1 } = await supabaseAdmin.from('home_items').select('*').eq('id', req.params.id).maybeSingle();
+    if (e1) throw e1;
+    if (!item) return res.status(404).json({ error: 'Предмет не найден' });
+    if (!item.photo_url) return res.status(400).json({ error: 'У предмета нет фото — визуальный поиск невозможен' });
+
+    // Стадия 1: кандидаты (как в /similar) — только с фото
+    const COLS = 'site,url,name,image,article,brand,mpn,price,price_original,discount_pct,last_seen';
+    const candMap = new Map();
+    const addCands = (rows, base) => {
+      for (const r of rows || []) {
+        if (!r.image || !/^https?:\/\//i.test(String(r.image))) continue;
+        const key = r.site + '|' + r.url;
+        if (candMap.has(key)) continue;
+        candMap.set(key, { r, score: base });
+      }
+    };
+    if (item.mpn) {
+      const { data } = await supabaseAdmin.from('parse_products').select(COLS)
+        .ilike('mpn', item.mpn.replace(/[%_]/g, ' ')).not('image', 'is', null).limit(10);
+      addCands(data, 100);
+    }
+    const STOP = new Set(['de', 'del', 'la', 'el', 'los', 'las', 'con', 'para', 'por', 'una', 'uno', 'y', 'en', 'al', 'un']);
+    const wordsOf = (txt, minLen, maxN) => String(txt || '')
+      .toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9\s-]/g, ' ').split(/\s+/)
+      .filter(w => w.length >= minLen && !STOP.has(w)).slice(0, maxN);
+    const esWords = wordsOf(item.name_es, 3, 4);
+    const latWords = wordsOf(item.name_original, 3, 3).filter(w => !item.brand || !String(item.brand).toLowerCase().includes(w));
+    const searchWords = [...new Set([...esWords, ...latWords])];
+    if (searchWords.length) {
+      const orExpr = searchWords.map(w => `name.ilike.%${w.replace(/[%_]/g, ' ')}%`).join(',');
+      const { data: rows } = await supabaseAdmin.from('parse_products').select(COLS)
+        .or(orExpr).not('image', 'is', null).limit(150);
+      const brandLc = String(item.brand || '').toLowerCase();
+      for (const r of rows || []) {
+        const nm = String(r.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        let sc = 0;
+        for (const w of esWords) if (nm.includes(w)) sc += 2;
+        for (const w of latWords) if (nm.includes(w)) sc += 1;
+        if (brandLc && String(r.brand || '').toLowerCase().includes(brandLc)) sc += 3;
+        if (item.mpn && r.mpn && String(r.mpn).toLowerCase() === String(item.mpn).toLowerCase()) sc += 5;
+        if (sc >= 2) {
+          const key = r.site + '|' + r.url;
+          if (!candMap.has(key)) candMap.set(key, { r, score: sc });
+        }
+      }
+    }
+    const cands = [...candMap.values()].sort((a, b) => b.score - a.score).slice(0, 12).map(x => x.r);
+    if (!cands.length) return res.json({ results: [], candidates: 0, message: 'Нет кандидатов с фото — сначала расширьте каталог парсинга' });
+
+    // Скачиваем фото запроса и кандидатов
+    const queryImg = await downloadImageBuffer(item.photo_url);
+    const dl = await Promise.allSettled(cands.map(c => downloadImageBuffer(c.image)));
+    const okImgs = [];
+    const okCands = [];
+    dl.forEach((d, i) => { if (d.status === 'fulfilled') { okImgs.push(d.value); okCands.push(cands[i]); } });
+    if (!okImgs.length) return res.json({ results: [], candidates: cands.length, message: 'Не удалось скачать фото кандидатов' });
+
+    // Стадия 2: vision-ранжирование
+    const { ranks, model } = await rankImagesWithFallback(queryImg, okImgs);
+    const results = ranks.map(x => ({ ...okCands[x.n - 1], visual_score: x.score, match_by: 'visual' }));
+    logActivity(req.user, 'Предметы', 'визуальный поиск', `${item.name_ru || req.params.id}: кандидатов ${okCands.length}, совпадений ${results.length} (${model})`, req);
+    res.json({ results, candidates: okCands.length, model });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

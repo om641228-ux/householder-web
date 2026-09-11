@@ -2248,7 +2248,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v180 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v181 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -5822,6 +5822,7 @@ function App() {
   const [itemSimilar, setItemSimilar] = useState({});      // id → {loading, results, error}
   const [itemFiles, setItemFiles] = useState([]);          // v180: выбранные фото во вкладке «Загрузка» предметов
   const [itemFilesIdx, setItemFilesIdx] = useState(0);
+  const [itemVisual, setItemVisual] = useState({});      // v181: id → {loading, results, error, model, candidates} — поиск «картинка по картинке»
   const [chatUnread, setChatUnread] = useState({}); // v83: непрочитанные по каналам
   const [cashQ, setCashQ] = useState('');           // v85: поиск по движениям (Cash)
   const [cashVals, setCashVals] = useState({});     // v85: редактируемые значения строк {id: {counterparty, operation_date, amount}}
@@ -6247,6 +6248,19 @@ function App() {
     const color = pct >= 90 ? '#1e8449' : (pct >= 70 ? '#b26a00' : '#c0392b');
     const bg = pct >= 90 ? '#e8f8ee' : (pct >= 70 ? '#fff4e0' : '#fdecea');
     return <span style={{ fontSize: 11, fontWeight: 700, color, background: bg, borderRadius: 6, padding: '1px 7px', whiteSpace: 'nowrap' }}>{pct}%</span>;
+  };
+
+  // v181: визуальный поиск — фото предмета против фото кандидатов из каталогов
+  const loadItemVisual = async (id) => {
+    setItemVisual(prev => ({ ...prev, [id]: { loading: true } }));
+    try {
+      const r = await fetch(`${API_URL}/api/items/${id}/similar-visual?token=${token}`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
+      setItemVisual(prev => ({ ...prev, [id]: { loading: false, results: d.results || [], model: d.model, candidates: d.candidates, message: d.message } }));
+    } catch (e) {
+      setItemVisual(prev => ({ ...prev, [id]: { loading: false, error: e.message } }));
+    }
   };
 
   const gotoTab = (t) => {
@@ -9734,7 +9748,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-11 · v180 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-11 · v181 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9747,7 +9761,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-11 · v180</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-11 · v181</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
@@ -11239,6 +11253,11 @@ ${bodyHtml}
                       style={{ border: 'none', background: '#8e44ad', color: '#fff', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
                       {itemSimilar[it.id]?.loading ? '⏳ Ищу…' : '🛒 Найти в магазинах'}
                     </button>
+                    <button onClick={() => loadItemVisual(it.id)} disabled={itemVisual[it.id]?.loading}
+                      title="Визуальный поиск: AI сравнивает фото предмета с фото товаров из каталогов"
+                      style={{ border: 'none', background: '#0a84ff', color: '#fff', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                      {itemVisual[it.id]?.loading ? '⏳ Сравниваю…' : '🖼 По фото'}
+                    </button>
                     <button onClick={() => deleteItem(it.id)}
                       style={{ marginLeft: 'auto', border: '1px solid #e74c3c', background: '#fff', color: '#c0392b', borderRadius: 6, padding: '5px 10px', fontSize: 12, cursor: 'pointer' }}>🗑</button>
                   </div>
@@ -11256,6 +11275,25 @@ ${bodyHtml}
                         <span style={{ fontWeight: 700, color: '#c0392b', flexShrink: 0 }}>{r.price != null ? `${r.price} €` : '—'}</span>
                         {r.price_original != null && r.price_original > (r.price || 0) && <span style={{ textDecoration: 'line-through', color: '#95a5a6', flexShrink: 0 }}>{r.price_original} €</span>}
                         {r.discount_pct != null && <span style={{ fontSize: 10, fontWeight: 700, color: '#1e8449', flexShrink: 0 }}>−{Math.round(r.discount_pct)}%</span>}
+                      </a>
+                    ))}
+                  </div>
+                )}
+
+                {itemVisual[it.id]?.error && <div style={{ fontSize: 12, color: '#c0392b' }}>Ошибка визуального поиска: {itemVisual[it.id].error}</div>}
+                {itemVisual[it.id]?.results && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <div style={{ fontSize: 11, color: '#0a84ff', fontWeight: 700 }}>
+                      🖼 Визуальный поиск: сравнено фото — {itemVisual[it.id].candidates ?? '?'} кандидатов{itemVisual[it.id].model ? ` · ${itemVisual[it.id].model}` : ''}
+                    </div>
+                    {!itemVisual[it.id].results.length && <div style={{ fontSize: 12, color: '#6e6e73' }}>{itemVisual[it.id].message || 'Визуально похожих товаров не найдено.'}</div>}
+                    {itemVisual[it.id].results.map((r, i) => (
+                      <a key={i} href={r.url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none', color: 'inherit', background: '#f0f7ff', borderRadius: 8, padding: '5px 8px', fontSize: 12 }}>
+                        {r.image && <img src={r.image} alt="" style={{ width: 34, height: 34, objectFit: 'contain', borderRadius: 5, background: '#fff', flexShrink: 0 }} />}
+                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.name}>{r.name}</span>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: r.visual_score >= 0.85 ? '#1e8449' : (r.visual_score >= 0.65 ? '#b26a00' : '#6e6e73'), background: '#fff', borderRadius: 6, padding: '1px 6px', flexShrink: 0 }}>🖼 {Math.round(r.visual_score * 100)}%</span>
+                        <span style={{ fontSize: 10, color: '#95a5a6', flexShrink: 0 }}>{String(r.site || '').replace('www.', '')}</span>
+                        <span style={{ fontWeight: 700, color: '#c0392b', flexShrink: 0 }}>{r.price != null ? `${r.price} €` : '—'}</span>
                       </a>
                     ))}
                   </div>
