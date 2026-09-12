@@ -11567,6 +11567,7 @@ ${bodyHtml}
                         {r.image && <img src={r.image} alt="" style={{ width: 34, height: 34, objectFit: 'contain', borderRadius: 5, background: '#fff', flexShrink: 0 }} />}
                         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.name}>{r.name}</span>
                         <span style={{ fontSize: 11, fontWeight: 700, color: r.visual_score >= 0.85 ? '#1e8449' : (r.visual_score >= 0.65 ? '#b26a00' : '#6e6e73'), background: '#fff', borderRadius: 6, padding: '1px 6px', flexShrink: 0 }}>🖼 {Math.round(r.visual_score * 100)}%{r.visual_verified !== false ? ' ✓×2' : ''}</span>
+                        {r.attr_checked && <span title={r.attr_notes || 'Атрибутная проверка пройдена'} style={{ fontSize: 11, flexShrink: 0, cursor: 'help' }}>🧬</span>}
                         <span style={{ fontSize: 10, color: '#95a5a6', flexShrink: 0 }}>{String(r.site || '').replace('www.', '')}</span>
                         <span style={{ fontWeight: 700, color: '#c0392b', flexShrink: 0 }}>{r.price != null ? `${r.price} €` : '—'}</span>
                       </a>
@@ -11624,10 +11625,21 @@ ${bodyHtml}
                     <a key={i} href={r.url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', color: 'inherit', background: '#f8f8fb', borderRadius: 9, padding: '7px 10px', fontSize: 13 }}>
                       {r.image && <img src={r.image} alt="" style={{ width: 42, height: 42, objectFit: 'contain', borderRadius: 6, background: '#fff', flexShrink: 0 }} />}
                       <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.name}>{r.name}</span>
-                      <span style={{ fontSize: 10.5, color: '#95a5a6', flexShrink: 0 }}>{({ mpn: '🔢MPN', name_es: '🇪🇸назв.', 'brand+name': '🏭+назв.', name: 'назв.', name_ru: 'назв.RU' })[r.match_by] || r.match_by} · {String(r.site || '').replace('www.', '')}</span>
+                      <span style={{ fontSize: 10.5, color: '#95a5a6', flexShrink: 0 }}>{({ mpn: '🔢MPN', name_es: '🇪🇸назв.', 'brand+name': '🏭+назв.', name: 'назв.', name_ru: 'назв.RU', embed: '🧠семант.' })[r.match_by] || r.match_by} · {String(r.site || '').replace('www.', '')}</span>
                       <span style={{ fontWeight: 700, color: '#c0392b', flexShrink: 0 }}>{r.price != null ? `${r.price} €` : '—'}</span>
                       {r.price_original != null && r.price_original > (r.price || 0) && <span style={{ textDecoration: 'line-through', color: '#95a5a6', flexShrink: 0 }}>{r.price_original} €</span>}
                       {r.discount_pct != null && <span style={{ fontSize: 11, fontWeight: 700, color: '#1e8449', flexShrink: 0 }}>−{Math.round(r.discount_pct)}%</span>}
+                      <span onClick={async (e) => { // v188 ход 6: «не тот товар» — запомнить и больше не показывать
+                          e.preventDefault(); e.stopPropagation();
+                          try {
+                            await fetch(`${API_URL}/api/items/${itemSearchModal.item.id}/feedback?token=${token}`, {
+                              method: 'POST', headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ product_url: r.url, verdict: 'bad' })
+                            });
+                            setItemSearchModal(prev => prev ? { ...prev, results: (prev.results || []).filter(x => x.url !== r.url) } : prev);
+                          } catch (err) { setItemError(err.message); }
+                        }} title="Не тот товар — запомню и уберу из выдачи"
+                        style={{ color: '#c0392b', fontSize: 13, fontWeight: 700, padding: '2px 5px', flexShrink: 0, cursor: 'pointer' }}>✕</span>
                     </a>
                   ))}
                 </div>

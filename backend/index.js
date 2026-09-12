@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v187-2026-09-12', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v188-2026-09-12', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -886,7 +886,10 @@ async function recognizeItemPreferred(imageBuffer, mimeType, model) {
 // ========== v178: РАСПОЗНАВАНИЕ ПРЕДМЕТОВ (модуль «📦 Предметы») ==========
 // Фото предмета → JSON: наименование (+ % схожести), производитель, номер производителя.
 // Отдельный промпт и отдельный парсер — чековая схема parseAIResponse сюда не подходит.
-function buildItemPrompt() {
+function buildItemPrompt(hints) {
+  const hintBlock = hints && hints.terms && hints.terms.length ? `
+9. СПРАВОЧНИК КАТАЛОГА МАГАЗИНОВ — как товары реально названы в каталогах: ${hints.terms.slice(0, 120).join(', ')}.
+   Если предмет соответствует одному из этих наименований — используй в name_es формулировку ИЗ СПРАВОЧНИКА (так его ищут магазины).` : '';
   return `Ты — эксперт по идентификации инструментов и домашних предметов по фото.
 Проанализируй изображение и верни СТРОГО JSON (без пояснений, без markdown):
 {
@@ -908,7 +911,7 @@ function buildItemPrompt() {
 5. mpn — номер модели/парт-номер: код с БУКВАМИ и цифрами (например «SPN-120», «1-65-400», «T 003») или явно подписанный «Ref/Art/Mod». Чисто числовые короткие значения (2–4 цифры: «350», «200») — почти всегда РАЗМЕР/длина, а НЕ номер модели → null. Номер под битой/на упаковке, которой нет в кадре, — не считается.
 6. confidence/brand_confidence/mpn_confidence — уверенность 0..1. Если уверенность в mpn ниже 0.7 — ставь mpn: null (лучше без номера, чем выдуманный).
 7. Ничего не выдумывай: не читается → null.
-8. Если на фото несколько предметов — опиши ГЛАВНЫЙ (центральный) предмет.`;
+8. Если на фото несколько предметов — опиши ГЛАВНЫЙ (центральный) предмет.${hintBlock}`;
 }
 
 function parseItemJson(text) {
@@ -941,6 +944,140 @@ function parseItemJson(text) {
   };
 }
 
+// ========== v188: умное сравнение с каталогом (справочник терминов/брендов, эмбеддинги, атрибуты, обратная связь) ==========
+const CATALOG_HINTS = { at: 0, terms: [], brands: [] }; // кэш на 6 часов
+const ES_STOP_HINT = new Set(['de', 'del', 'la', 'el', 'los', 'las', 'con', 'para', 'por', 'una', 'uno', 'y', 'en', 'al', 'un', 'set', 'pack', 'kit']);
+
+// Ход 1+6: справочник испанских наименований из РЕАЛЬНЫХ названий каталога (+ термины из ваших ручных правок)
+async function rebuildCatalogHints() {
+  const { data: rows } = await supabaseAdmin.from('parse_products').select('name').not('name', 'is', null).order('last_seen', { ascending: false }).limit(4000);
+  const uni = new Map(), bi = new Map();
+  for (const r of rows || []) {
+    const ws = String(r.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+      .filter(w => w.length >= 3 && !ES_STOP_HINT.has(w) && !/^\d+$/.test(w));
+    ws.slice(0, 8).forEach(w => uni.set(w, (uni.get(w) || 0) + 1));
+    for (let i = 0; i < Math.min(ws.length - 1, 4); i++) { const b = ws[i] + ' ' + ws[i + 1]; bi.set(b, (bi.get(b) || 0) + 1); }
+  }
+  const top = (m, min, lim) => [...m.entries()].filter(x => x[1] >= min).sort((a, b) => b[1] - a[1]).slice(0, lim).map(x => x[0]);
+  let feedbackTerms = [];
+  try {
+    const { data: fb } = await supabaseAdmin.from('item_feedback').select('new_value').eq('field', 'name_es').not('new_value', 'is', null).limit(200);
+    feedbackTerms = (fb || []).map(x => String(x.new_value || '').trim()).filter(Boolean);
+  } catch (e) {}
+  CATALOG_HINTS.terms = [...new Set([...feedbackTerms, ...top(bi, 3, 60), ...top(uni, 8, 60)])].slice(0, 120);
+  const { data: br } = await supabaseAdmin.from('parse_brands').select('name').limit(1000);
+  CATALOG_HINTS.brands = [...new Set((br || []).map(x => String(x.name || '').trim()).filter(Boolean))];
+  CATALOG_HINTS.at = Date.now();
+}
+async function getCatalogHints() {
+  if (!CATALOG_HINTS.at || Date.now() - CATALOG_HINTS.at > 6 * 3600e3) {
+    try { await rebuildCatalogHints(); } catch (e) { console.warn('catalog hints rebuild:', e.message); CATALOG_HINTS.at = CATALOG_HINTS.at || Date.now(); }
+  }
+  return CATALOG_HINTS;
+}
+
+// Ход 2: нормализация бренда к каноническому написанию из справочника parse_brands
+async function normalizeBrand(brand) {
+  if (!brand) return brand;
+  const h = await getCatalogHints();
+  const lc = String(brand).toLowerCase().trim();
+  const exact = h.brands.find(b => b.toLowerCase() === lc);
+  if (exact) return exact;
+  const incl = h.brands.find(b => b.length >= 3 && (lc.includes(b.toLowerCase()) || b.toLowerCase().includes(lc)));
+  return incl || brand;
+}
+function normalizeMpn(m) { const t = String(m || '').toUpperCase().replace(/[\s._-]+/g, ''); return t || null; }
+
+// Ход 4: эмбеддинг текста — СНАЧАЛА локальный AI (LOCAL_EMBED_URL, Ollama-совместимый), затем Gemini (768)
+async function embedText(text) {
+  const t = String(text || '').trim().slice(0, 2000);
+  if (!t) return null;
+  if (process.env.LOCAL_EMBED_URL) {
+    try {
+      const r = await axios.post(String(process.env.LOCAL_EMBED_URL).replace(/\/+$/, '') + '/api/embeddings',
+        { model: process.env.LOCAL_EMBED_MODEL || 'nomic-embed-text', prompt: t }, { timeout: 30000 });
+      const v = r.data && r.data.embedding;
+      if (Array.isArray(v) && v.length > 100) return v;
+    } catch (e) { console.warn('local embed failed:', e.message); }
+  }
+  if (process.env.GEMINI_API_KEY) {
+    try {
+      const r = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${process.env.GEMINI_API_KEY}`,
+        { content: { parts: [{ text: t }] }, outputDimensionality: 768 }, { timeout: 30000 });
+      const v = r.data && r.data.embedding && r.data.embedding.values;
+      if (Array.isArray(v) && v.length) return v;
+    } catch (e) { console.warn('gemini embed failed:', e.message); }
+  }
+  return null;
+}
+async function matchProductsByEmbedding(vec, k = 15) {
+  if (!Array.isArray(vec) || !vec.length) return [];
+  try {
+    const { data, error } = await supabaseAdmin.rpc('match_products', { query_embedding: JSON.stringify(vec), match_count: k });
+    if (error) { if (!/match_products|vector|does not exist/i.test(error.message || '')) console.warn('match_products:', error.message); return []; }
+    return data || [];
+  } catch (e) { return []; }
+}
+
+// Ход 5: атрибутная перепроверка топ-кандидатов
+function buildAttrRankPrompt(count) {
+  return `Ты — эксперт по визуальному сравнению товаров. Изображение №0 — предмет пользователя, изображения №1..№${count} — кандидаты из каталогов, уже отобранные как похожие.
+Для КАЖДОГО кандидата сравни атрибуты с предметом №0: цвет корпуса/рукояток, форму рабочей части (жало/губки/лезвие), длину/размерность, одиночный предмет или набор (и сколько предметов в наборе), читаемую маркировку на корпусе (бренд/номер модели).
+Верни СТРОГО JSON-массив без пояснений и markdown: [{"n":1,"attr_score":0.0,"notes":"что совпало/не совпало"}]
+- n — номер кандидата (1..${count}), верни записи для ВСЕХ кандидатов;
+- attr_score 0..1 — доля совпавших атрибутов; читаемая маркировка совпала → +0.3;
+- notes — до 12 слов по-русски.`;
+}
+function parseAttrRankJson(text, maxN) {
+  let js = String(text || '');
+  const cb = js.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (cb) js = cb[1];
+  const am = js.match(/\[[\s\S]*\]/);
+  if (am) js = am[0];
+  const arr = JSON.parse(js);
+  if (!Array.isArray(arr)) return [];
+  const out = [];
+  for (const x of arr) {
+    const nn = Math.round(Number(x && x.n));
+    let sc = Number(x && x.attr_score);
+    if (!isFinite(nn) || nn < 1 || nn > maxN || !isFinite(sc)) continue;
+    if (sc > 1) sc = sc / 100;
+    out.push({ n: nn, attr_score: Math.min(1, Math.max(0, sc)), notes: String(x.notes || '').slice(0, 120) });
+  }
+  return out;
+}
+async function rankAttributesGemini(queryImg, candImgs, modelName) {
+  if (!genAI) throw new Error('Gemini API key not configured');
+  const model = genAI.getGenerativeModel({ model: modelName || DEFAULT_GEMINI_MODEL, generationConfig: { maxOutputTokens: 1024, temperature: 0.1 } });
+  const parts = [{ text: buildAttrRankPrompt(candImgs.length) }, { text: 'Изображение №0 (предмет пользователя):' },
+    { inlineData: { data: queryImg.buffer.toString('base64'), mimeType: queryImg.mime } }];
+  candImgs.forEach((c, i) => { parts.push({ text: `Изображение №${i + 1} (кандидат):` }); parts.push({ inlineData: { data: c.buffer.toString('base64'), mimeType: c.mime } }); });
+  const result = await model.generateContent(parts);
+  return parseAttrRankJson(result.response.text(), candImgs.length);
+}
+async function rankAttributesOpenAICompat(queryImg, candImgs, providerKey, modelOverride) {
+  const cfg = OPENAI_COMPAT_PROVIDERS[providerKey];
+  if (!cfg || !cfg.apiKey) throw new Error('provider not configured');
+  const model = modelOverride || cfg.defaultModel;
+  const content = [{ type: 'text', text: buildAttrRankPrompt(candImgs.length) + '\nИзображение №0 — первое, далее №1..№' + candImgs.length + ' по порядку.' },
+    { type: 'image_url', image_url: { url: `data:${queryImg.mime};base64,${queryImg.buffer.toString('base64')}` } }];
+  for (const c of candImgs) content.push({ type: 'image_url', image_url: { url: `data:${c.mime};base64,${c.buffer.toString('base64')}` } });
+  const body = { model, messages: [{ role: 'user', content }], max_tokens: 1024, temperature: 0.1 };
+  if (providerKey === 'kimi') { delete body.temperature; if (/kimi-k3/i.test(model)) { delete body.max_tokens; body.max_completion_tokens = 1024; body.reasoning_effort = 'low'; } }
+  const res = await axios.post(`${cfg.baseURL}/chat/completions`, body, { headers: { 'Authorization': `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json', ...cfg.extraHeaders }, timeout: 180000 });
+  const out = res.data?.choices?.[0]?.message?.content;
+  if (!out) throw new Error('пустой ответ');
+  return parseAttrRankJson(out, candImgs.length);
+}
+async function rankAttributesAuto(queryImg, candImgs, wantModel) {
+  if (wantModel && wantModel.startsWith('gemini')) return rankAttributesGemini(queryImg, candImgs, wantModel);
+  for (const key of ['openrouter', 'mistral', 'kimi']) {
+    if (wantModel && wantModel.startsWith(key + '-')) return rankAttributesOpenAICompat(queryImg, candImgs, key, wantModel.slice(key.length + 1));
+  }
+  return rankAttributesGemini(queryImg, candImgs);
+}
+
 async function recognizeItemGemini(imageBuffer, modelName, mimeType) {
   if (!genAI) throw new Error('Gemini API key not configured');
   const model = genAI.getGenerativeModel({
@@ -949,7 +1086,7 @@ async function recognizeItemGemini(imageBuffer, modelName, mimeType) {
   });
   const result = await model.generateContent([
     { inlineData: { data: imageBuffer.toString('base64'), mimeType } },
-    buildItemPrompt()
+    buildItemPrompt(await getCatalogHints()) // v188 ход 1: справочник каталога в промпте
   ]);
   return parseItemJson(result.response.text());
 }
@@ -962,7 +1099,7 @@ async function recognizeItemOpenAICompat(imageBuffer, providerKey, modelOverride
   const body = {
     model,
     messages: [{ role: 'user', content: [
-      { type: 'text', text: buildItemPrompt() },
+      { type: 'text', text: buildItemPrompt(await getCatalogHints()) }, // v188 ход 1
       { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${imageBuffer.toString('base64')}` } }
     ] }],
     max_tokens: 2048,
@@ -6870,6 +7007,8 @@ app.post('/api/items/recognize', requireAuth, upload.single('image'), async (req
     try {
       photoUrl = await uploadToStorage(req.file.buffer, 'item_' + Date.now() + '.jpg', 'items/' + (req.user.id || 'anon'), mime);
     } catch (e) { console.warn('items photo upload (не критично):', e.message); }
+    rec.data.brand = await normalizeBrand(rec.data.brand); // v188 ход 2: каноническое написание бренда
+    const nameEmbed = await embedText([rec.data.name_es, rec.data.brand, rec.data.mpn].filter(Boolean).join(' ')); // v188 ход 4
     const row = {
       user_id: req.user.id ? String(req.user.id) : null,
       name_ru: rec.data.name_ru,
@@ -6885,10 +7024,11 @@ app.post('/api/items/recognize', requireAuth, upload.single('image'), async (req
       ai_raw: rec.data,
       photo_url: photoUrl
     };
+    if (nameEmbed) row.name_embed = JSON.stringify(nameEmbed);
     let { data, error } = await supabaseAdmin.from('home_items').insert(row).select('*').single();
-    if (error && /name_es/i.test(error.message || '')) {
-      // колонка name_es ещё не добавлена (миграция v180 не выполнена) — сохраняем без неё
-      delete row.name_es;
+    if (error && /name_es|name_embed/i.test(error.message || '')) {
+      // миграции v180/v188 ещё не выполнены — сохраняем без этих колонок
+      delete row.name_es; delete row.name_embed;
       ({ data, error } = await supabaseAdmin.from('home_items').insert(row).select('*').single());
     }
     if (error) {
@@ -6964,8 +7104,23 @@ app.put('/api/items/:id', requireAuth, async (req, res) => {
     }
     if (!Object.keys(patch).length) return res.status(400).json({ error: 'Нет полей для обновления' });
     patch.edited = true;
+    // v188 ход 6: запомнить старые значения — правки ключевых полей идут в петлю обучения
+    let oldVals = null;
+    try { const { data: ov } = await supabaseAdmin.from('home_items').select('name_es,brand,mpn').eq('id', req.params.id).maybeSingle(); oldVals = ov; } catch (e) {}
     const { data, error } = await supabaseAdmin.from('home_items').update(patch).eq('id', req.params.id).select('*').single();
     if (error) throw error;
+    if (oldVals) {
+      try {
+        const fbRows = [];
+        for (const f of ['name_es', 'brand', 'mpn']) {
+          if (f in patch && String(oldVals[f] || '') !== String(patch[f] || '') && patch[f]) {
+            fbRows.push({ item_id: req.params.id, field: f, old_value: String(oldVals[f] || '').slice(0, 300) || null, new_value: String(patch[f]).slice(0, 300), verdict: 'correction' });
+          }
+        }
+        if (fbRows.length) await supabaseAdmin.from('item_feedback').insert(fbRows);
+        CATALOG_HINTS.at = 0; // пересобрать справочник с учётом правок
+      } catch (e) { console.warn('item_feedback (не критично):', e.message); }
+    }
     logActivity(req.user, 'Предметы', 'правка предмета', `${data.name_ru || req.params.id}`, req);
     res.json({ item: data });
   } catch (e) {
@@ -7002,6 +7157,7 @@ app.post('/api/items/:id/rerecognize', requireAuth, async (req, res) => {
     } else {
       rec = await recognizeItemWithFallback(buffer, mime);
     }
+    rec.data.brand = await normalizeBrand(rec.data.brand); // v188 ход 2
     const patch = {
       name_ru: rec.data.name_ru, name_original: rec.data.name_original, name_es: rec.data.name_es,
       category: rec.data.category, confidence: rec.data.confidence,
@@ -7009,8 +7165,10 @@ app.post('/api/items/:id/rerecognize', requireAuth, async (req, res) => {
       mpn: rec.data.mpn, mpn_confidence: rec.data.mpn_confidence,
       ai_model: rec.model, ai_raw: rec.data, edited: false
     };
+    const reEmbed = await embedText([rec.data.name_es, rec.data.brand, rec.data.mpn].filter(Boolean).join(' ')); // v188 ход 4
+    if (reEmbed) patch.name_embed = JSON.stringify(reEmbed);
     let { data, error } = await supabaseAdmin.from('home_items').update(patch).eq('id', req.params.id).select('*').single();
-    if (error && /name_es/i.test(error.message || '')) { delete patch.name_es; ({ data, error } = await supabaseAdmin.from('home_items').update(patch).eq('id', req.params.id).select('*').single()); }
+    if (error && /name_es|name_embed/i.test(error.message || '')) { delete patch.name_es; delete patch.name_embed; ({ data, error } = await supabaseAdmin.from('home_items').update(patch).eq('id', req.params.id).select('*').single()); }
     if (error) throw error;
     logActivity(req.user, 'Предметы', 'перераспознан предмет', `${data.name_ru || '?'}`, req);
     res.json({ item: data });
@@ -7070,13 +7228,23 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
     const { data: item, error: e1 } = await supabaseAdmin.from('home_items').select('*').eq('id', req.params.id).maybeSingle();
     if (e1) throw e1;
     if (!item) return res.status(404).json({ error: 'Предмет не найден' });
-    const COLS = 'site,url,name,image,article,brand,mpn,price,price_original,discount_pct,last_seen';
+    const COLS = 'site,url,name,image,article,brand,mpn,category,price,price_original,discount_pct,last_seen'; // v188: +category (ход 3)
     const SITES = String(req.query.sites || req.query.site || '').split(',').map(x => x.trim()).filter(Boolean); // v187: несколько магазинов
     const bySite = (q) => !SITES.length ? q : (SITES.length === 1 ? q.eq('site', SITES[0]) : q.in('site', SITES));
+    // v188 ход 6: товары, отмеченные «не то» для этого предмета, больше не показываем
+    let badUrls = new Set();
+    try {
+      const { data: fb } = await supabaseAdmin.from('item_feedback').select('product_url').eq('item_id', req.params.id).eq('verdict', 'bad');
+      badUrls = new Set((fb || []).map(x => x.product_url));
+    } catch (e) {}
+    // v188 ход 3: карта «категория предмета → корни разделов каталога»
+    const CAT_ROOTS = { 'инструмент': ['herramient'], 'электроинструмент': ['herramient', 'electr'], 'электрика': ['electric', 'iluminac'], 'крепёж': ['ferreter', 'tornill', 'fijac'], 'сантехника': ['fontaner', 'bano', 'grifer'], 'расходники': [], 'бытовая техника': ['electrodom'], 'другое': [] };
+    const catRoots = CAT_ROOTS[String(item.category || '').toLowerCase()] || [];
     const seen = new Set();
     const out = [];
     const push = (rows, matchBy) => {
       for (const r of rows || []) {
+        if (badUrls.has(r.url)) continue;
         const key = r.site + '|' + r.url;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -7089,6 +7257,9 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
       const { data } = await bySite(supabaseAdmin.from('parse_products').select(COLS))
         .ilike('mpn', item.mpn.replace(/[%_]/g, ' ')).order('price', { ascending: true, nullsFirst: false }).limit(30);
       push(data, 'mpn');
+      const { data: art } = await bySite(supabaseAdmin.from('parse_products').select(COLS)) // v188 ход 2: артикул тоже
+        .ilike('article', item.mpn.replace(/[%_]/g, ' ')).order('price', { ascending: true, nullsFirst: false }).limit(20);
+      push(art, 'mpn');
     }
     // 2) v180: ГЛАВНЫЙ поиск — слова ИСПАНСКОГО названия (каталоги магазинов на испанском).
     // Кандидаты через OR по словам, затем скоринг в JS: +1 за каждое слово в названии, +3 за бренд, +5 за MPN.
@@ -7116,12 +7287,22 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
         if (brandHit) score += 3;
         const mpnHit = mpnOk && r.mpn && String(r.mpn).toLowerCase() === String(item.mpn).toLowerCase();
         if (mpnHit) score += 5;
+        if (catRoots.length && r.category && catRoots.some(c => String(r.category).toLowerCase().includes(c))) score += 4; // v188 ход 3: свой раздел каталога
         // v182: отсев мусора — нужно ≥2 испанских слова, ИЛИ бренд+слово, ИЛИ точный MPN (одно общее слово недостаточно)
         const ok = esHits >= 2 || (brandHit && (esHits + latHits) >= 1) || mpnHit || (esWords.length === 1 && esHits === 1);
         return { r, score, ok };
       }).filter(x => x.ok);
       scored.sort((a, b) => b.score - a.score || (a.r.price ?? 1e9) - (b.r.price ?? 1e9));
       push(scored.slice(0, 30).map(x => x.r), 'name_es');
+    }
+    // v188 ход 4: семантические кандидаты — эмбеддинг «name_es brand mpn» против векторов каталога (pgvector)
+    if (item.name_embed) {
+      try {
+        const vec = typeof item.name_embed === 'string' ? JSON.parse(item.name_embed) : item.name_embed;
+        const vrows = await matchProductsByEmbedding(vec, 15);
+        const vsel = SITES.length ? (vrows || []).filter(r => SITES.includes(r.site)) : (vrows || []);
+        push(vsel.filter(r => r.name).map(r => ({ ...r, price: r.price ?? null })), 'embed');
+      } catch (e) { console.warn('embed candidates:', e.message); }
     }
     // 3) слова русского названия (широкий поиск, вдруг каталог на русском)
     if (out.length < 10 && item.name_ru) {
@@ -7257,6 +7438,46 @@ async function rankImagesWithFallback(queryImg, candImgs) {
   throw new Error(errors.join(' | ') || 'Нет доступных vision-провайдеров');
 }
 
+// v188 ход 6: обратная связь — «не тот товар» / «верное совпадение»
+app.post('/api/items/:id/feedback', requireAuth, async (req, res) => {
+  try {
+    const { product_url, verdict } = req.body || {};
+    if (!product_url || !['good', 'bad'].includes(verdict)) return res.status(400).json({ error: 'Нужны product_url и verdict (good|bad)' });
+    const { error } = await supabaseAdmin.from('item_feedback').insert({ item_id: req.params.id, product_url: String(product_url).slice(0, 500), verdict });
+    if (error) {
+      if (/does not exist|schema cache|item_feedback/i.test(error.message || '')) return res.status(500).json({ error: 'Нужна миграция supabase-migration-v188-items-intel.sql', missing: true });
+      throw error;
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// v188 ход 4: проставить эмбеддинги названий каталога (порциями; локальный AI в приоритете через LOCAL_EMBED_URL)
+app.post('/api/parse/embed-catalog', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const lim = Math.min(500, Math.max(10, parseInt((req.body && req.body.limit) || '200', 10) || 200));
+    const { data: rows, error } = await supabaseAdmin.from('parse_products').select('id,name,brand,mpn').is('name_embed', null).not('name', 'is', null).limit(lim);
+    if (error) {
+      if (/name_embed|vector|schema cache/i.test(error.message || '')) return res.status(500).json({ error: 'Нужна миграция supabase-migration-v188-items-intel.sql (pgvector)', missing: true });
+      throw error;
+    }
+    let done = 0, failed = 0;
+    for (const r of rows || []) {
+      const vec = await embedText([r.name, r.brand, r.mpn].filter(Boolean).join(' '));
+      if (vec) {
+        const { error: ue } = await supabaseAdmin.from('parse_products').update({ name_embed: JSON.stringify(vec) }).eq('id', r.id);
+        if (ue) failed++; else done++;
+      } else failed++;
+    }
+    logActivity(req.user, 'Парсинг', 'эмбеддинги каталога', `проставлено ${done}, ошибок ${failed}`, req);
+    res.json({ done, failed, left: (rows || []).length === lim ? 'вызовите ещё раз — есть ещё порция' : 'каталог покрыт' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/items/:id/similar-visual — фото предмета против фото кандидатов (двухстадийный поиск)
 app.get('/api/items/:id/similar-visual', requireAuth, async (req, res) => {
   try {
@@ -7266,11 +7487,17 @@ app.get('/api/items/:id/similar-visual', requireAuth, async (req, res) => {
     if (!item.photo_url) return res.status(400).json({ error: 'У предмета нет фото — визуальный поиск невозможен' });
 
     // Стадия 1: кандидаты (как в /similar) — только с фото
-    const COLS = 'site,url,name,image,article,brand,mpn,price,price_original,discount_pct,last_seen';
+    const COLS = 'site,url,name,image,article,brand,mpn,category,price,price_original,discount_pct,last_seen';
+    let badUrlsV = new Set(); // v188 ход 6
+    try {
+      const { data: fb } = await supabaseAdmin.from('item_feedback').select('product_url').eq('item_id', req.params.id).eq('verdict', 'bad');
+      badUrlsV = new Set((fb || []).map(x => x.product_url));
+    } catch (e) {}
     const candMap = new Map();
     const addCands = (rows, base) => {
       for (const r of rows || []) {
         if (!r.image || !/^https?:\/\//i.test(String(r.image))) continue;
+        if (badUrlsV.has(r.url)) continue;
         const key = r.site + '|' + r.url;
         if (candMap.has(key)) continue;
         candMap.set(key, { r, score: base });
@@ -7347,6 +7574,26 @@ app.get('/api/items/:id/similar-visual', requireAuth, async (req, res) => {
       model += ' ×2-прохода';
     } catch (e) { console.warn('visual rank pass-2 failed (используем первый проход):', e.message); }
     const results = ranks.map(x => ({ ...okCands[x.n - 1], visual_score: x.score, visual_verified: x.verified !== false, match_by: 'visual' }));
+    // v188 ход 5: атрибутная перепроверка топ-5 — финальный score = 0.55×визуал + 0.45×атрибуты
+    if (ranks.length) {
+      try {
+        const topRanks = ranks.slice(0, 5);
+        const attrImgs = topRanks.map(x => okImgs[x.n - 1]);
+        const attrList = await rankAttributesAuto(queryImg, attrImgs, wantModel);
+        const am = new Map(attrList.map(a => [a.n, a]));
+        for (let i = 0; i < topRanks.length; i++) {
+          const a = am.get(topRanks[i].n);
+          if (a) {
+            results[i].visual_score = Math.round((0.55 * topRanks[i].score + 0.45 * a.attr_score) * 1000) / 1000;
+            results[i].attr_score = a.attr_score;
+            results[i].attr_notes = a.notes || null;
+            results[i].attr_checked = true;
+          }
+        }
+        results.sort((a, b) => b.visual_score - a.visual_score);
+        model += ' +атрибуты';
+      } catch (e) { console.warn('attr pass failed (не критично):', e.message); }
+    }
     logActivity(req.user, 'Предметы', 'визуальный поиск', `${item.name_ru || req.params.id}: кандидатов ${okCands.length}, совпадений ${results.length} (${model})`, req);
     res.json({ results, candidates: okCands.length, model });
   } catch (e) {
