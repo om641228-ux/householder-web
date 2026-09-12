@@ -5816,7 +5816,6 @@ function App() {
   const [itemsQuery, setItemsQuery] = useState('');
   const [itemEditId, setItemEditId] = useState(null);
   const [itemEditForm, setItemEditForm] = useState({});
-  const [itemSimilar, setItemSimilar] = useState({});      // id → {loading, results, error}
   const [itemFiles, setItemFiles] = useState([]);          // v180: выбранные фото во вкладке «Загрузка» предметов
   const [itemFilesIdx, setItemFilesIdx] = useState(0);
   const [itemVisual, setItemVisual] = useState({});      // v181: id → {loading, results, error, model, candidates} — поиск «картинка по картинке»
@@ -5829,6 +5828,8 @@ function App() {
   const [itemBulkBusy, setItemBulkBusy] = useState(false);
   const [itemShopMenu, setItemShopMenu] = useState(null); // id карточки с открытым меню магазинов
   const [itemMonthFilter, setItemMonthFilter] = useState(null); // 'YYYY-MM' из тайм-шкалы справа
+  const [itemShopSel, setItemShopSel] = useState([]);           // v187: отмеченные магазины в меню карточки ([] = все)
+  const [itemSearchModal, setItemSearchModal] = useState(null); // v187: {item, loading, results, error, sites} — результаты во всплывающем окне
   const ITEM_STORES = [['', '🌐 Все магазины'], ['www.leroymerlin.es', '🗂 Leroy Merlin'], ['canarias.worten.es', '🛒 Worten'], ['canarias.mediamarkt.es', '🛒 MediaMarkt'], ['www.tutrebol.es', '🍀 TuTrebol'], ['tienda.mercadona.es', '🛒 Mercadona'], ['chafiras.com', '🔩 Chafiras']];
   const [chatUnread, setChatUnread] = useState({}); // v83: непрочитанные по каналам
   const [cashQ, setCashQ] = useState('');           // v85: поиск по движениям (Cash)
@@ -6244,15 +6245,18 @@ function App() {
   };
 
   // v178: похожие товары в базах магазинов
-  const loadItemSimilar = async (id, site) => { // v186: site — искать в конкретном магазине
-    setItemSimilar(prev => ({ ...prev, [id]: { loading: true } }));
+  const loadItemSimilar = async (id, sites) => { // v187: sites — массив магазинов ([]=все); результаты — во всплывающем окне
+    const it = itemsList.find(x => x.id === id) || { id };
+    const arr = (Array.isArray(sites) ? sites : []).filter(Boolean);
+    setItemSearchModal({ item: it, loading: true, results: null, error: null, sites: arr });
     try {
-      const r = await fetch(`${API_URL}/api/items/${id}/similar?token=${token}&model=${encodeURIComponent(selectedModel)}${site ? '&site=' + encodeURIComponent(site) : ''}`); // v183+v186
+      const r = await fetch(`${API_URL}/api/items/${id}/similar?token=${token}&model=${encodeURIComponent(selectedModel)}${arr.length ? '&sites=' + encodeURIComponent(arr.join(',')) : ''}`);
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
-      setItemSimilar(prev => ({ ...prev, [id]: { loading: false, results: d.results || [], site: site || '' } }));
+      setItemSearchModal({ item: it, loading: false, results: d.results || [], error: null, sites: arr });
+      return;
     } catch (e) {
-      setItemSimilar(prev => ({ ...prev, [id]: { loading: false, error: e.message } }));
+      setItemSearchModal({ item: it, loading: false, results: null, error: e.message, sites: arr });
     }
   };
 
@@ -6302,6 +6306,10 @@ function App() {
     return rows.map(([k, c]) => ({ k, c, w: Math.round(Math.log(1 + c) / Math.log(1 + max) * 100) }));
   })();
 
+  const itemStorageHints = (() => { // v187: уже заполненные места/стеллажи/полки — для выпадающих подсказок
+    const pick = (k) => [...new Set(itemsList.map(it => it[k]).filter(v => v != null && String(v).trim() !== '').map(String))].slice(0, 50);
+    return { place: pick('storage_place'), rack: pick('storage_rack'), shelf: pick('storage_shelf') };
+  })();
   const toggleItemSel = (id) => setItemSel(prev => { const c = { ...prev }; if (c[id]) delete c[id]; else c[id] = true; return c; });
   const itemsSelectVisible = () => {
     const all = itemsVisible.every(it => itemSel[it.id]) && itemsVisible.length > 0;
@@ -11401,6 +11409,11 @@ ${bodyHtml}
             )}
           </div>
 
+          {/* v187: подсказки мест хранения — выбрать из существующих или ввести вручную */}
+          <datalist id="dl-item-place">{itemStorageHints.place.map(v => <option key={v} value={v} />)}</datalist>
+          <datalist id="dl-item-rack">{itemStorageHints.rack.map(v => <option key={v} value={v} />)}</datalist>
+          <datalist id="dl-item-shelf">{itemStorageHints.shelf.map(v => <option key={v} value={v} />)}</datalist>
+
           {itemsMissing && (
             <div style={{ background: '#fdecea', border: '1px solid #e74c3c', borderRadius: 10, padding: '10px 14px', marginBottom: 12, fontSize: 13, color: '#c0392b' }}>
               ⚠️ Таблица <b>home_items</b> ещё не создана. Выполните один раз в Supabase → SQL Editor файл <b>supabase-migration-v178-home-items.sql</b>.
@@ -11495,8 +11508,8 @@ ${bodyHtml}
                       <option value="Дубай">🇦🇪 Дубай</option>
                       <option value="Тенерифе">🇮🇨 Тенерифе</option>
                     </select>
-                    {[['storage_place', 'Место (гараж, кладовая…)'], ['storage_rack', 'Стеллаж'], ['storage_shelf', 'Полка']].map(([k, lbl]) => (
-                      <input key={k} type="text" placeholder={lbl} value={itemEditForm[k] ?? (it[k] || '')}
+                    {[['storage_place', 'Место (гараж, кладовая…) ▾', 'dl-item-place'], ['storage_rack', 'Стеллаж ▾', 'dl-item-rack'], ['storage_shelf', 'Полка ▾', 'dl-item-shelf']].map(([k, lbl, dl]) => (
+                      <input key={k} type="text" list={dl} placeholder={lbl} value={itemEditForm[k] ?? (it[k] || '')}
                         onChange={e => setItemEditForm(prev => ({ ...prev, [k]: e.target.value }))}
                         style={{ padding: '5px 8px', fontSize: 12, borderRadius: 5, border: '1px solid #ccc' }} />
                     ))}
@@ -11510,20 +11523,25 @@ ${bodyHtml}
                     <button onClick={() => { setItemEditId(it.id); setItemEditForm({ name_ru: it.name_ru || '', name_original: it.name_original || '', name_es: it.name_es || '', brand: it.brand || '', mpn: it.mpn || '', category: it.category || '', notes: it.notes || '', location_city: it.location_city || '', storage_place: it.storage_place || '', storage_rack: it.storage_rack || '', storage_shelf: it.storage_shelf || '' }); }}
                       style={{ border: '1px solid #ccc', background: '#fff', borderRadius: 6, padding: '5px 10px', fontSize: 12, cursor: 'pointer' }}>✏️ Правка</button>
                     <span style={{ position: 'relative', display: 'inline-block' }}>
-                      <button onClick={() => setItemShopMenu(itemShopMenu === it.id ? null : it.id)} disabled={itemSimilar[it.id]?.loading}
+                      <button onClick={() => setItemShopMenu(itemShopMenu === it.id ? null : it.id)}
                         style={{ border: 'none', background: '#8e44ad', color: '#fff', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
-                        {itemSimilar[it.id]?.loading ? '⏳ Ищу…' : '🛒 Найти в магазинах ▾'}
+                        🛒 Найти в магазинах ▾
                       </button>
                       {itemShopMenu === it.id && (
-                        <div style={{ position: 'absolute', zIndex: 60, top: '100%', left: 0, marginTop: 4, background: '#fff', border: '1px solid #d0d0d5', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,.18)', minWidth: 190, overflow: 'hidden' }}>
-                          {ITEM_STORES.map(([sv, lbl]) => (
-                            <div key={sv || 'all'} onClick={() => { setItemShopMenu(null); loadItemSimilar(it.id, sv || undefined); }}
-                              style={{ padding: '8px 12px', fontSize: 13, cursor: 'pointer', borderBottom: '1px solid #f0f0f3' }}
-                              onMouseEnter={e => e.currentTarget.style.background = '#f4ecfb'}
-                              onMouseLeave={e => e.currentTarget.style.background = '#fff'}>
-                              {lbl}{itemSimilar[it.id]?.site === sv && itemSimilar[it.id]?.results ? ' ✓' : ''}
-                            </div>
+                        <div style={{ position: 'absolute', zIndex: 60, top: '100%', left: 0, marginTop: 4, background: '#fff', border: '1px solid #d0d0d5', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,.18)', minWidth: 210, overflow: 'hidden' }}>
+                          <div style={{ padding: '7px 12px 3px', fontSize: 10.5, color: '#8e8e93', fontWeight: 700 }}>ГДЕ ИСКАТЬ — ни одной галки = 🌐 все:</div>
+                          {ITEM_STORES.filter(x => x[0]).map(([sv, lbl]) => (
+                            <label key={sv} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px', fontSize: 13, cursor: 'pointer' }}>
+                              <input type="checkbox" style={{ width: 15, height: 15, cursor: 'pointer', margin: 0 }}
+                                checked={itemShopSel.includes(sv)}
+                                onChange={() => setItemShopSel(prev => prev.includes(sv) ? prev.filter(x => x !== sv) : [...prev, sv])} />
+                              {lbl}
+                            </label>
                           ))}
+                          <button onClick={() => { setItemShopMenu(null); loadItemSimilar(it.id, itemShopSel); }}
+                            style={{ margin: 8, width: 'calc(100% - 16px)', border: 'none', background: '#8e44ad', color: '#fff', borderRadius: 7, padding: '7px 0', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+                            🔍 Найти{itemShopSel.length ? ` (${itemShopSel.length})` : ' везде'}
+                          </button>
                         </div>
                       )}
                     </span>
@@ -11556,26 +11574,6 @@ ${bodyHtml}
                   </div>
                 )}
 
-                {itemSimilar[it.id]?.error && <div style={{ fontSize: 12, color: '#c0392b' }}>Ошибка поиска: {itemSimilar[it.id].error}</div>}
-                {itemSimilar[it.id]?.results && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    <div style={{ fontSize: 11, color: '#8e44ad', fontWeight: 700 }}>
-                      🛒 Поиск: {(ITEM_STORES.find(x => x[0] === (itemSimilar[it.id].site || '')) || ITEM_STORES[0])[1]}
-                    </div>
-                    {!itemSimilar[it.id].results.length && <div style={{ fontSize: 12, color: '#6e6e73' }}>Похожих товаров в этом магазине не найдено.</div>}
-                    {itemSimilar[it.id].results.map((r, i) => (
-                      <a key={i} href={r.url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none', color: 'inherit', background: '#f8f8fb', borderRadius: 8, padding: '5px 8px', fontSize: 12 }}>
-                        {r.image && <img src={r.image} alt="" style={{ width: 34, height: 34, objectFit: 'contain', borderRadius: 5, background: '#fff', flexShrink: 0 }} />}
-                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.name}>{r.name}</span>
-                        <span style={{ fontSize: 10, color: '#95a5a6', flexShrink: 0 }}>{({ mpn: '🔢MPN', name_es: '🇪🇸назв.', 'brand+name': '🏭+назв.', name: 'назв.', name_ru: 'назв.RU' })[r.match_by] || r.match_by} · {String(r.site || '').replace('www.', '')}</span>
-                        <span style={{ fontWeight: 700, color: '#c0392b', flexShrink: 0 }}>{r.price != null ? `${r.price} €` : '—'}</span>
-                        {r.price_original != null && r.price_original > (r.price || 0) && <span style={{ textDecoration: 'line-through', color: '#95a5a6', flexShrink: 0 }}>{r.price_original} €</span>}
-                        {r.discount_pct != null && <span style={{ fontSize: 10, fontWeight: 700, color: '#1e8449', flexShrink: 0 }}>−{Math.round(r.discount_pct)}%</span>}
-                      </a>
-                    ))}
-                  </div>
-                )}
-
               </div>
             ))}
           </div>
@@ -11596,6 +11594,46 @@ ${bodyHtml}
             </div>
           )}
           </div>
+
+          {/* v187: результаты поиска по магазинам — во всплывающем окне, а не в карточке */}
+          {itemSearchModal && (
+            <div onClick={() => setItemSearchModal(null)}
+              style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+              <div onClick={e => e.stopPropagation()}
+                style={{ background: '#fff', borderRadius: 14, width: '100%', maxWidth: 640, maxHeight: '85vh', display: 'flex', flexDirection: 'column', boxShadow: '0 18px 60px rgba(0,0,0,.3)', overflow: 'hidden' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid #eee' }}>
+                  {itemSearchModal.item.photo_url && <img src={itemSearchModal.item.photo_url} alt="" style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 8, border: '1px solid #eee', flexShrink: 0 }} />}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{itemSearchModal.item.name_ru || 'Предмет'}</div>
+                    <div style={{ fontSize: 11.5, color: '#8e44ad', fontWeight: 700 }}>
+                      🛒 {itemSearchModal.sites && itemSearchModal.sites.length
+                        ? itemSearchModal.sites.map(sv => (ITEM_STORES.find(x => x[0] === sv) || [sv, sv])[1]).join(' · ')
+                        : '🌐 Все магазины'}
+                    </div>
+                  </div>
+                  <button onClick={() => setItemSearchModal(null)} title="Закрыть"
+                    style={{ border: 'none', background: '#f2f2f5', borderRadius: 8, width: 32, height: 32, fontSize: 15, cursor: 'pointer', flexShrink: 0 }}>✕</button>
+                </div>
+                <div style={{ padding: '12px 16px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  {itemSearchModal.loading && <div style={{ fontSize: 13, color: '#6e6e73', padding: 18, textAlign: 'center' }}>⏳ Ищу по базам магазинов…</div>}
+                  {itemSearchModal.error && <div style={{ fontSize: 13, color: '#c0392b' }}>Ошибка поиска: {itemSearchModal.error}</div>}
+                  {itemSearchModal.results && !itemSearchModal.results.length && (
+                    <div style={{ fontSize: 13, color: '#6e6e73', padding: 18, textAlign: 'center' }}>Похожих товаров не найдено{itemSearchModal.sites && itemSearchModal.sites.length ? ' в выбранных магазинах' : ''}.</div>
+                  )}
+                  {(itemSearchModal.results || []).map((r, i) => (
+                    <a key={i} href={r.url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', color: 'inherit', background: '#f8f8fb', borderRadius: 9, padding: '7px 10px', fontSize: 13 }}>
+                      {r.image && <img src={r.image} alt="" style={{ width: 42, height: 42, objectFit: 'contain', borderRadius: 6, background: '#fff', flexShrink: 0 }} />}
+                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.name}>{r.name}</span>
+                      <span style={{ fontSize: 10.5, color: '#95a5a6', flexShrink: 0 }}>{({ mpn: '🔢MPN', name_es: '🇪🇸назв.', 'brand+name': '🏭+назв.', name: 'назв.', name_ru: 'назв.RU' })[r.match_by] || r.match_by} · {String(r.site || '').replace('www.', '')}</span>
+                      <span style={{ fontWeight: 700, color: '#c0392b', flexShrink: 0 }}>{r.price != null ? `${r.price} €` : '—'}</span>
+                      {r.price_original != null && r.price_original > (r.price || 0) && <span style={{ textDecoration: 'line-through', color: '#95a5a6', flexShrink: 0 }}>{r.price_original} €</span>}
+                      {r.discount_pct != null && <span style={{ fontSize: 11, fontWeight: 700, color: '#1e8449', flexShrink: 0 }}>−{Math.round(r.discount_pct)}%</span>}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

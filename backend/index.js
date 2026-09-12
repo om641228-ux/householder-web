@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v186-2026-09-12', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v187-2026-09-12', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -6914,10 +6914,20 @@ app.get('/api/items', requireAuth, async (req, res) => {
       const words = q.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 4);
       for (const w of words) {
         const safe = w.replace(/[%_]/g, ' ');
-        query = query.or(`name_ru.ilike.%${safe}%,name_original.ilike.%${safe}%,name_es.ilike.%${safe}%,brand.ilike.%${safe}%,mpn.ilike.%${safe}%`);
+        query = query.or(`name_ru.ilike.%${safe}%,name_original.ilike.%${safe}%,name_es.ilike.%${safe}%,brand.ilike.%${safe}%,mpn.ilike.%${safe}%,category.ilike.%${safe}%,notes.ilike.%${safe}%,location_city.ilike.%${safe}%,storage_place.ilike.%${safe}%,storage_rack.ilike.%${safe}%,storage_shelf.ilike.%${safe}%`); // v187: поиск по ВСЕМ полям + место хранения
       }
     }
-    const { data, error } = await query;
+    let { data, error } = await query;
+    if (error && q && /location_city|storage_place|storage_rack|storage_shelf/i.test(error.message || '')) {
+      // миграция v186 ещё не выполнена — ищем по старому набору полей
+      let q2 = supabaseAdmin.from('home_items').select('*').order('created_at', { ascending: false }).limit(lim);
+      const words = q.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 4);
+      for (const w of words) {
+        const safe = w.replace(/[%_]/g, ' ');
+        q2 = q2.or(`name_ru.ilike.%${safe}%,name_original.ilike.%${safe}%,name_es.ilike.%${safe}%,brand.ilike.%${safe}%,mpn.ilike.%${safe}%`);
+      }
+      ({ data, error } = await q2);
+    }
     if (error) {
       if (/does not exist|relation|schema cache/i.test(error.message || '')) return res.json({ items: [], missing: true });
       throw error;
@@ -7061,8 +7071,8 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
     if (e1) throw e1;
     if (!item) return res.status(404).json({ error: 'Предмет не найден' });
     const COLS = 'site,url,name,image,article,brand,mpn,price,price_original,discount_pct,last_seen';
-    const SITE = String(req.query.site || '').trim(); // v186: искать только в выбранном магазине
-    const bySite = (q) => SITE ? q.eq('site', SITE) : q;
+    const SITES = String(req.query.sites || req.query.site || '').split(',').map(x => x.trim()).filter(Boolean); // v187: несколько магазинов
+    const bySite = (q) => !SITES.length ? q : (SITES.length === 1 ? q.eq('site', SITES[0]) : q.in('site', SITES));
     const seen = new Set();
     const out = [];
     const push = (rows, matchBy) => {
