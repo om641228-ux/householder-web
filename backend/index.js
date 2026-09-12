@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v193-2026-09-12', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v194-2026-09-12', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -1002,9 +1002,10 @@ async function getEmbedMode() {
   EMBED_MODE_CACHE = { mode, at: Date.now() };
   return mode;
 }
-async function embedTextLocal(t) {
-  if (!process.env.LOCAL_EMBED_URL) throw new Error('LOCAL_EMBED_URL не задан');
-  const r = await axios.post(String(process.env.LOCAL_EMBED_URL).replace(/\/+$/, '') + '/api/embeddings',
+async function embedTextLocal(t, urlOverride) {
+  const baseUrl = urlOverride || process.env.LOCAL_EMBED_URL;
+  if (!baseUrl) throw new Error('LOCAL_EMBED_URL не задан (укажите адрес локального AI в карточке Хода 4 или переменной окружения)');
+  const r = await axios.post(String(baseUrl).replace(/\/+$/, '') + '/api/embeddings',
     { model: process.env.LOCAL_EMBED_MODEL || 'nomic-embed-text', prompt: t }, { timeout: 30000 });
   const v = r.data && r.data.embedding;
   if (Array.isArray(v) && v.length > 100) return v;
@@ -1018,14 +1019,14 @@ async function embedTextCloud(t) {
   if (Array.isArray(v) && v.length) return v;
   throw new Error('gemini embedding вернул пустой вектор');
 }
-async function embedText(text) {
+async function embedText(text, opts = {}) {
   const t = String(text || '').trim().slice(0, 2000);
   if (!t) return null;
   const mode = await getEmbedMode();
-  if (mode === 'local') { try { return await embedTextLocal(t); } catch (e) { console.warn('local embed failed (режим local):', e.message); return null; } }
+  if (mode === 'local') { try { return await embedTextLocal(t, opts.urlOverride); } catch (e) { console.warn('local embed failed (режим local):', e.message); return null; } }
   if (mode === 'cloud') { try { return await embedTextCloud(t); } catch (e) { console.warn('cloud embed failed (режим cloud):', e.message); return null; } }
   // auto: локальный → облако
-  try { return await embedTextLocal(t); } catch (e) { console.warn('local embed failed (auto):', e.message); }
+  try { return await embedTextLocal(t, opts.urlOverride); } catch (e) { console.warn('local embed failed (auto):', e.message); }
   try { return await embedTextCloud(t); } catch (e) { console.warn('cloud embed failed (auto):', e.message); }
   return null;
 }
@@ -7574,6 +7575,15 @@ app.post('/api/items/:id/feedback', requireAuth, async (req, res) => {
 app.post('/api/parse/embed-catalog', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
   try {
     const lim = Math.min(500, Math.max(10, parseInt((req.body && req.body.limit) || '200', 10) || 200));
+    const embedUrl = (req.body && String(req.body.embed_url || '').trim()) || null; // v194: адрес локального AI из UI
+    const mode = await getEmbedMode();
+    if ((mode === 'local' || mode === 'auto') && !embedUrl && !process.env.LOCAL_EMBED_URL) {
+      if (mode === 'local') return res.status(400).json({ error: 'Режим «только локальный», но адрес локального AI не задан: впишите его в поле «адрес локального AI» в карточке Хода 4 (например http://IP:11434 с доступом с сервера) или задайте LOCAL_EMBED_URL на бэкенде.' });
+    }
+    if (embedUrl) { // быстрый пинг, чтобы не гонять порцию впустую
+      try { await axios.get(embedUrl.replace(/\/+$/, '') + '/api/tags', { timeout: 4000 }); }
+      catch (e) { return res.status(400).json({ error: `Локальный AI не отвечает по ${embedUrl}: ${e.message}. Сервер должен видеть этот адрес (localhost на вашем ПК серверу недоступен — нужен IP машины в сети/VPN или туннель).` }); }
+    }
     const { data: rows, error } = await supabaseAdmin.from('parse_products').select('id,name,brand,mpn').is('name_embed', null).not('name', 'is', null).limit(lim);
     if (error) {
       if (/name_embed|vector|schema cache/i.test(error.message || '')) return res.status(500).json({ error: 'Нужна миграция supabase-migration-v188-items-intel.sql (pgvector)', missing: true });
@@ -7581,14 +7591,14 @@ app.post('/api/parse/embed-catalog', requireAuth, requireRole('admin', 'manager'
     }
     let done = 0, failed = 0;
     for (const r of rows || []) {
-      const vec = await embedText([r.name, r.brand, r.mpn].filter(Boolean).join(' '));
+      const vec = await embedText([r.name, r.brand, r.mpn].filter(Boolean).join(' '), { urlOverride: embedUrl });
       if (vec) {
         const { error: ue } = await supabaseAdmin.from('parse_products').update({ name_embed: JSON.stringify(vec) }).eq('id', r.id);
         if (ue) failed++; else done++;
       } else failed++;
     }
     logActivity(req.user, 'Парсинг', 'эмбеддинги каталога', `проставлено ${done}, ошибок ${failed}`, req);
-    res.json({ done, failed, left: (rows || []).length === lim ? 'вызовите ещё раз — есть ещё порция' : 'каталог покрыт' });
+    res.json({ done, failed, engine: embedUrl ? 'local(ui)' : (process.env.LOCAL_EMBED_URL && (mode !== 'cloud') ? 'local(env)' : 'cloud'), left: (rows || []).length === lim ? 'вызовите ещё раз — есть ещё порция' : 'каталог покрыт' });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
