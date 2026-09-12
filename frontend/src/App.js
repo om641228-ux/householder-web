@@ -2245,7 +2245,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v195 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v196 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -6449,6 +6449,7 @@ function App() {
     setItemLabLoading(false);
   };
   // v190: прогон эмбеддингов каталога порциями с логом (кнопка во вкладке 🔬)
+  const [localAiStart, setLocalAiStart] = useState(null); // v196: запуск лаунчера на Mac
   const [localEmbedUrl, setLocalEmbedUrl] = useState(() => { // v194: адрес локального AI для эмбеддингов
     try { return localStorage.getItem('localEmbedUrl') || ''; } catch (e) { return ''; }
   });
@@ -9965,7 +9966,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-12 · v195 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-12 · v196 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9978,7 +9979,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-12 · v195</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-12 · v196</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
@@ -11664,6 +11665,41 @@ ${bodyHtml}
                     style={{ flex: 1, minWidth: 220, padding: '6px 10px', fontSize: 12, borderRadius: 7, border: '1px solid #d0d0d5', fontFamily: 'monospace' }} />
                   {localEmbedUrl && <button onClick={() => { setLocalEmbedUrl(''); try { localStorage.removeItem('localEmbedUrl'); } catch (e) {} }}
                     style={{ border: '1px solid #d0d0d5', background: '#fff', borderRadius: 7, padding: '6px 10px', fontSize: 12, cursor: 'pointer' }}>✕</button>}
+                </div>
+                <div style={{ display: 'flex', gap: 6, margin: '0 0 6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                  <button disabled={localAiStart && localAiStart.busy}
+                    onClick={async () => { // v196: одна кнопка — лаунчер на Mac поднимает Ollama+OCR+туннели
+                      setLocalAiStart({ busy: true });
+                      try {
+                        const r = await fetch('http://127.0.0.1:8790/start', { method: 'POST' });
+                        const dd = await r.json();
+                        if (!r.ok) throw new Error(dd.error || `Ошибка ${r.status}`);
+                        if (dd.ollama_url) {
+                          setLocalEmbedUrl(dd.ollama_url);
+                          try { localStorage.setItem('localEmbedUrl', dd.ollama_url); } catch (e) {}
+                        }
+                        if (dd.ocr_url) { try { localStorage.setItem('mac_ocr_url_v1', dd.ocr_url); } catch (e) {} }
+                        setLocalAiStart({ busy: false, done: true, ollama: dd.ollama, ocr: dd.ocr, ollama_url: dd.ollama_url, ocr_url: dd.ocr_url });
+                        loadItemLab();
+                      } catch (e) {
+                        setLocalAiStart({ busy: false, error: e.message });
+                      }
+                    }}
+                    style={{ border: 'none', background: '#1e8449', color: '#fff', borderRadius: 8, padding: '7px 14px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
+                    {localAiStart && localAiStart.busy ? '⏳ Запускаю (до 1 мин)…' : '🚀 Запустить локальный AI (Mac)'}
+                  </button>
+                  {localAiStart && localAiStart.done && (
+                    <span style={{ fontSize: 12, color: '#1e8449' }}>
+                      ✅ Ollama {localAiStart.ollama ? '✓' : '✗'} · OCR {localAiStart.ocr ? '✓' : '✗'}
+                      {localAiStart.ollama_url ? ' · адрес подставлен в поле выше' : ''}
+                      {localAiStart.ocr_url ? ' · OCR-туннель сохранён' : ''}
+                    </span>
+                  )}
+                  {localAiStart && localAiStart.error && (
+                    <span style={{ fontSize: 12, color: '#c0392b' }}>
+                      ❌ {localAiStart.error} — дважды кликните на Mac файл start-local-ai.command (лаунчер 127.0.0.1:8790 не запущен)
+                    </span>
+                  )}
                 </div>
                 <div style={{ fontSize: 11, color: '#b26a00', marginBottom: 4 }}>⚠️ Сервер должен ВИДЕТЬ этот адрес: если бэкенд в облаке, то <b>localhost:11434 на вашем ПК ему недоступен</b> — укажите IP компьютера в локальной сети/VPN (и разрешите Ollama слушать сеть: OLLAMA_HOST=0.0.0.0) или туннель (ngrok/cloudflared). Адрес из поля важнее переменной LOCAL_EMBED_URL на бэкенде.</div>
                 <div style={{ fontSize: 11, color: '#8e8e93', marginBottom: 4 }}>Это движок ЭМБЕДДИНГОВ (семантический поиск), а не распознавания: фото предметов распознаёт модель, выбранная в шапке.</div>
