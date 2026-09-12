@@ -2245,7 +2245,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v191 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v192 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -9955,7 +9955,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-12 · v191 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-12 · v192 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9968,7 +9968,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-12 · v191</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-12 · v192</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
@@ -11554,7 +11554,27 @@ ${bodyHtml}
               </Card>
               <Card n={4} title="Эмбеддинги pgvector — семантический поиск кандидатов" status={catPct > 50 ? 'ok' : catPct > 0 ? 'warn' : 'bad'}>
                 <KV k="движок эмбеддингов" v={String(d.embed_backend)} />
-                <div style={{ fontSize: 11, color: '#8e8e93', marginBottom: 4 }}>⚠️ Это движок ЭМБЕДДИНГОВ (семантический поиск), а не распознавания: фото предметов распознаёт модель, выбранная в шапке. Локальный движок включается переменной LOCAL_EMBED_URL на бэкенде.</div>
+                {d.local_embed_url && <KV k="локальный AI" v={`${d.local_embed_url} — ${d.local_embed_alive === true ? '🟢 доступен' : d.local_embed_alive === false ? '🔴 НЕ ОТВЕЧАЕТ' : '…'}`} />}
+                <div style={{ display: 'flex', gap: 6, margin: '6px 0 8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                  <span style={{ fontSize: 12, color: '#8e8e93' }}>Режим движка:</span>
+                  {[['auto', '⚖️ Авто (локальный → облако)'], ['local', '🖥 Только локальный'], ['cloud', '☁️ Только облако']].map(([mv, lbl]) => (
+                    <button key={mv} disabled={embedRun && embedRun.running}
+                      onClick={async () => {
+                        try {
+                          const r = await fetch(`${API_URL}/api/items/embed-backend?token=${token}`, {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: mv })
+                          });
+                          const dd = await r.json();
+                          if (!r.ok) throw new Error(dd.error || `Ошибка ${r.status}`);
+                          loadItemLab();
+                        } catch (e) { setItemError(e.message); }
+                      }}
+                      style={{ border: d.embed_mode === mv ? '2px solid #7c3aed' : '1px solid #d0d0d5', background: d.embed_mode === mv ? '#f4ecfb' : '#fff', color: d.embed_mode === mv ? '#7c3aed' : '#3a3a3c', borderRadius: 8, padding: '5px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                      {lbl}{d.embed_mode === mv ? ' ✓' : ''}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ fontSize: 11, color: '#8e8e93', marginBottom: 4 }}>⚠️ Это движок ЭМБЕДДИНГОВ (семантический поиск), а не распознавания: фото предметов распознаёт модель, выбранная в шапке. Локальный движок задаётся переменной LOCAL_EMBED_URL на бэкенде.</div>
                 <KV k="каталог с векторами" v={`${catEmb} из ${catTot} — ${catPct}%`} />
                 <Bar pct={catPct} color={catPct > 50 ? '#1e8449' : '#b26a00'} />
                 <KV k="предметы с векторами" v={`${itEmb} из ${itTot} — ${itPct}%`} />

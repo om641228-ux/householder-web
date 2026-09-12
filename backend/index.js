@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v191-2026-09-12', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v192-2026-09-12', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -989,26 +989,44 @@ async function normalizeBrand(brand) {
 }
 function normalizeMpn(m) { const t = String(m || '').toUpperCase().replace(/[\s._-]+/g, ''); return t || null; }
 
-// Ход 4: эмбеддинг текста — СНАЧАЛА локальный AI (LOCAL_EMBED_URL, Ollama-совместимый), затем Gemini (768)
+// Ход 4: эмбеддинг текста. v192: ВЫБОР ДВИЖКА — 'auto' (локальный → облако) | 'local' (только локальный) | 'cloud' (только Gemini).
+// Приоритет настройки: app_settings.embed_backend (переключатель во вкладке 🔬) → env EMBED_BACKEND → 'auto'.
+let EMBED_MODE_CACHE = { mode: null, at: 0 };
+async function getEmbedMode() {
+  if (EMBED_MODE_CACHE.mode && Date.now() - EMBED_MODE_CACHE.at < 60000) return EMBED_MODE_CACHE.mode;
+  let mode = String(process.env.EMBED_BACKEND || 'auto').toLowerCase();
+  try {
+    const { data } = await supabaseAdmin.from('app_settings').select('value').eq('key', 'embed_backend').maybeSingle();
+    if (data && data.value && ['auto', 'local', 'cloud'].includes(data.value)) mode = data.value;
+  } catch (e) {}
+  EMBED_MODE_CACHE = { mode, at: Date.now() };
+  return mode;
+}
+async function embedTextLocal(t) {
+  if (!process.env.LOCAL_EMBED_URL) throw new Error('LOCAL_EMBED_URL не задан');
+  const r = await axios.post(String(process.env.LOCAL_EMBED_URL).replace(/\/+$/, '') + '/api/embeddings',
+    { model: process.env.LOCAL_EMBED_MODEL || 'nomic-embed-text', prompt: t }, { timeout: 30000 });
+  const v = r.data && r.data.embedding;
+  if (Array.isArray(v) && v.length > 100) return v;
+  throw new Error('локальный AI вернул пустой эмбеддинг');
+}
+async function embedTextCloud(t) {
+  if (!process.env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY не задан');
+  const r = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${process.env.GEMINI_API_KEY}`,
+    { content: { parts: [{ text: t }] }, outputDimensionality: 768 }, { timeout: 30000 });
+  const v = r.data && r.data.embedding && r.data.embedding.values;
+  if (Array.isArray(v) && v.length) return v;
+  throw new Error('gemini embedding вернул пустой вектор');
+}
 async function embedText(text) {
   const t = String(text || '').trim().slice(0, 2000);
   if (!t) return null;
-  if (process.env.LOCAL_EMBED_URL) {
-    try {
-      const r = await axios.post(String(process.env.LOCAL_EMBED_URL).replace(/\/+$/, '') + '/api/embeddings',
-        { model: process.env.LOCAL_EMBED_MODEL || 'nomic-embed-text', prompt: t }, { timeout: 30000 });
-      const v = r.data && r.data.embedding;
-      if (Array.isArray(v) && v.length > 100) return v;
-    } catch (e) { console.warn('local embed failed:', e.message); }
-  }
-  if (process.env.GEMINI_API_KEY) {
-    try {
-      const r = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${process.env.GEMINI_API_KEY}`,
-        { content: { parts: [{ text: t }] }, outputDimensionality: 768 }, { timeout: 30000 });
-      const v = r.data && r.data.embedding && r.data.embedding.values;
-      if (Array.isArray(v) && v.length) return v;
-    } catch (e) { console.warn('gemini embed failed:', e.message); }
-  }
+  const mode = await getEmbedMode();
+  if (mode === 'local') { try { return await embedTextLocal(t); } catch (e) { console.warn('local embed failed (режим local):', e.message); return null; } }
+  if (mode === 'cloud') { try { return await embedTextCloud(t); } catch (e) { console.warn('cloud embed failed (режим cloud):', e.message); return null; } }
+  // auto: локальный → облако
+  try { return await embedTextLocal(t); } catch (e) { console.warn('local embed failed (auto):', e.message); }
+  try { return await embedTextCloud(t); } catch (e) { console.warn('cloud embed failed (auto):', e.message); }
   return null;
 }
 async function matchProductsByEmbedding(vec, k = 15) {
@@ -7478,11 +7496,40 @@ app.get('/api/items/debug', requireAuth, async (req, res) => {
     const m = {}; for (const r of data || []) m[r.verdict] = (m[r.verdict] || 0) + 1;
     out.feedback = m;
   } catch (e) { out.feedback = 'нет таблицы — выполните миграцию v188'; }
-  out.embed_note = 'Это движок ЭМБЕДДИНГОВ (семантический поиск), а не распознавания: фото распознаёт модель, выбранная в шапке. Локальный движок включается переменной LOCAL_EMBED_URL.';
-  out.embed_backend = process.env.LOCAL_EMBED_URL
-    ? `локальный AI: ${process.env.LOCAL_EMBED_URL} (${process.env.LOCAL_EMBED_MODEL || 'nomic-embed-text'})`
-    : (process.env.GEMINI_API_KEY ? 'gemini-embedding-001 (облако)' : 'НЕ НАСТРОЕН');
+  out.embed_note = 'Это движок ЭМБЕДДИНГОВ (семантический поиск), а не распознавания: фото распознаёт модель, выбранная в шапке.';
+  out.embed_mode = await getEmbedMode(); // v192: auto | local | cloud
+  out.local_embed_url = process.env.LOCAL_EMBED_URL || null;
+  out.local_embed_alive = null;
+  if (process.env.LOCAL_EMBED_URL) { // жив ли локальный AI (быстрый пинг)
+    try {
+      await axios.get(String(process.env.LOCAL_EMBED_URL).replace(/\/+$/, '') + '/api/tags', { timeout: 3000 });
+      out.local_embed_alive = true;
+    } catch (e) { out.local_embed_alive = false; }
+  }
+  out.embed_backend = out.embed_mode === 'local'
+    ? (process.env.LOCAL_EMBED_URL ? `локальный AI: ${process.env.LOCAL_EMBED_URL} (${process.env.LOCAL_EMBED_MODEL || 'nomic-embed-text'})` : 'локальный, но LOCAL_EMBED_URL не задан!')
+    : out.embed_mode === 'cloud'
+      ? (process.env.GEMINI_API_KEY ? 'gemini-embedding-001 (облако)' : 'облако, но GEMINI_API_KEY не задан!')
+      : (process.env.LOCAL_EMBED_URL ? `авто: локальный ${process.env.LOCAL_EMBED_URL} → облако` : 'авто: облако (gemini-embedding-001)');
   res.json(out);
+});
+
+// v192: переключение движка эмбеддингов (auto | local | cloud) — хранится в app_settings
+app.post('/api/items/embed-backend', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const mode = String((req.body && req.body.mode) || '').toLowerCase();
+    if (!['auto', 'local', 'cloud'].includes(mode)) return res.status(400).json({ error: 'mode: auto | local | cloud' });
+    const { error } = await supabaseAdmin.from('app_settings').upsert({ key: 'embed_backend', value: mode, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+    if (error) {
+      if (/does not exist|schema cache|app_settings/i.test(error.message || '')) return res.status(500).json({ error: 'Нужна миграция supabase-migration-v192-app-settings.sql', missing: true });
+      throw error;
+    }
+    EMBED_MODE_CACHE = { mode, at: Date.now() };
+    logActivity(req.user, 'Предметы', 'движок эмбеддингов', mode, req);
+    res.json({ ok: true, mode });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // v188 ход 6: обратная связь — «не тот товар» / «верное совпадение»
