@@ -2245,7 +2245,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v190 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v191 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -5832,6 +5832,10 @@ function App() {
   const [itemSearchModal, setItemSearchModal] = useState(null); // v187: {item, loading, results, error, sites} — результаты во всплывающем окне
   const [itemDebugModal, setItemDebugModal] = useState(null);   // v189: глобальная AI-отладка
   const [itemLab, setItemLab] = useState(null);                 // v190: вкладка 🔬 — данные дашборда
+  // v191: журнал поисков (вкладка 🔎) — сюда падают результаты «Найти в магазинах» и «По фото»
+  const [itemSearchLog, setItemSearchLog] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('itemSearchLog') || '[]'); } catch (e) { return []; }
+  });
   const [itemLabLoading, setItemLabLoading] = useState(false);
   const [embedRun, setEmbedRun] = useState(null);               // v190: прогон эмбеддингов {running, log: []}
   const ITEM_STORES = [['', '🌐 Все магазины'], ['www.leroymerlin.es', '🗂 Leroy Merlin'], ['canarias.worten.es', '🛒 Worten'], ['canarias.mediamarkt.es', '🛒 MediaMarkt'], ['www.tutrebol.es', '🍀 TuTrebol'], ['tienda.mercadona.es', '🛒 Mercadona'], ['chafiras.com', '🔩 Chafiras']];
@@ -6249,18 +6253,26 @@ function App() {
   };
 
   // v178: похожие товары в базах магазинов
-  const loadItemSimilar = async (id, sites) => { // v187: sites — массив магазинов ([]=все); результаты — во всплывающем окне
+  // v191: журнал поисков — каждая проверка = запись; нажатие переводит на вкладку 🔎
+  const pushSearchLog = (entry) => {
+    const id = 'log' + Date.now() + Math.random().toString(36).slice(2, 6);
+    setItemSearchLog(prev => [{ id, ts: Date.now(), open: true, ...entry }, ...prev].slice(0, 50));
+    return id;
+  };
+  const updateSearchLog = (logId, patch) => setItemSearchLog(prev => prev.map(e => e.id === logId ? { ...e, ...patch } : e));
+
+  const loadItemSimilar = async (id, sites) => { // v187: sites — массив ([]=все); v191: результат — в журнал 🔎
     const it = itemsList.find(x => x.id === id) || { id };
     const arr = (Array.isArray(sites) ? sites : []).filter(Boolean);
-    setItemSearchModal({ item: it, loading: true, results: null, error: null, sites: arr });
+    setActiveTab('journal');
+    const logId = pushSearchLog({ kind: 'text', item: { id: it.id, name_ru: it.name_ru, photo_url: it.photo_url }, sites: arr, model: selectedModel, loading: true });
     try {
       const r = await fetch(`${API_URL}/api/items/${id}/similar?token=${token}&model=${encodeURIComponent(selectedModel)}${arr.length ? '&sites=' + encodeURIComponent(arr.join(',')) : ''}`);
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
-      setItemSearchModal({ item: it, loading: false, results: d.results || [], error: null, sites: arr, debug: d.debug || null }); // v189
-      return;
+      updateSearchLog(logId, { loading: false, results: d.results || [], debug: d.debug || null });
     } catch (e) {
-      setItemSearchModal({ item: it, loading: false, results: null, error: e.message, sites: arr });
+      updateSearchLog(logId, { loading: false, error: e.message });
     }
   };
 
@@ -6273,15 +6285,17 @@ function App() {
   };
 
   // v181: визуальный поиск — фото предмета против фото кандидатов из каталогов
-  const loadItemVisual = async (id) => {
-    setItemVisual(prev => ({ ...prev, [id]: { loading: true } }));
+  const loadItemVisual = async (id) => { // v191: результат — в журнал 🔎
+    const it = itemsList.find(x => x.id === id) || { id };
+    setActiveTab('journal');
+    const logId = pushSearchLog({ kind: 'visual', item: { id: it.id, name_ru: it.name_ru, photo_url: it.photo_url }, model: selectedModel, loading: true });
     try {
       const r = await fetch(`${API_URL}/api/items/${id}/similar-visual?token=${token}&model=${encodeURIComponent(selectedModel)}`); // v183: выбранная модель
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
-      setItemVisual(prev => ({ ...prev, [id]: { loading: false, results: d.results || [], model: d.model, candidates: d.candidates, message: d.message } }));
+      updateSearchLog(logId, { loading: false, results: d.results || [], modelUsed: d.model, candidates: d.candidates, message: d.message });
     } catch (e) {
-      setItemVisual(prev => ({ ...prev, [id]: { loading: false, error: e.message } }));
+      updateSearchLog(logId, { loading: false, error: e.message });
     }
   };
 
@@ -6314,6 +6328,10 @@ function App() {
     const pick = (k) => [...new Set(itemsList.map(it => it[k]).filter(v => v != null && String(v).trim() !== '').map(String))].slice(0, 50);
     return { place: pick('storage_place'), rack: pick('storage_rack'), shelf: pick('storage_shelf') };
   })();
+  // v191: журнал поисков — сохранение между перезагрузками
+  useEffect(() => {
+    try { localStorage.setItem('itemSearchLog', JSON.stringify(itemSearchLog.filter(e => !e.loading).slice(0, 30))); } catch (e) {}
+  }, [itemSearchLog]);
   const toggleItemSel = (id) => setItemSel(prev => { const c = { ...prev }; if (c[id]) delete c[id]; else c[id] = true; return c; });
   const itemsSelectVisible = () => {
     const all = itemsVisible.every(it => itemSel[it.id]) && itemsVisible.length > 0;
@@ -6473,7 +6491,7 @@ function App() {
     tabAllowed('chat') && 'chat',
     user?.role === 'admin' && 'users',
     user?.role === 'admin' && 'log'
-  ].filter(Boolean).filter(t => appMode === 'items' ? ['upload', 'tools', 'lab'].includes(t) : (t !== 'tools' && t !== 'lab')); // v179/v190: «Предметы» — Загрузка + Tools + 🔬
+  ].filter(Boolean).filter(t => appMode === 'items' ? ['upload', 'tools', 'lab', 'journal'].includes(t) : !['tools', 'lab', 'journal'].includes(t)); // v179-v191: «Предметы» — Загрузка + Tools + 🔬 + 🔎
   const swipeRef = useRef(null);
   const onAppTouchStart = (e) => {
     if (!isMobileView) return;
@@ -9937,7 +9955,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-12 · v190 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-12 · v191 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9950,7 +9968,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-12 · v190</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-12 · v191</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
@@ -9962,6 +9980,9 @@ ${bodyHtml}
             )}
             {appMode === 'items' && tabAllowed('list') && (
               <button className={activeTab === 'lab' ? 'active' : ''} title="Улучшение распознавания и сравнения — дашборд AI" onClick={() => { setActiveTab('lab'); loadItemLab(); }}>🔬</button>
+            )}
+            {appMode === 'items' && tabAllowed('list') && (
+              <button className={activeTab === 'journal' ? 'active' : ''} title="Журнал поисков — результаты «Найти в магазинах» и «По фото»" onClick={() => setActiveTab('journal')}>🔎 Журнал{itemSearchLog.length ? ` (${itemSearchLog.length})` : ''}</button>
             )}
             {appMode !== 'items' && (<>
             {tabAllowed('list') && (
@@ -10057,6 +10078,11 @@ ${bodyHtml}
           {appMode === 'items' && tabAllowed('list') && (
             <button className={activeTab === 'lab' ? 'active' : ''} onClick={() => { setActiveTab('lab'); loadItemLab(); }}>
               <span className="mbn-ico">🔬</span>
+            </button>
+          )}
+          {appMode === 'items' && tabAllowed('list') && (
+            <button className={activeTab === 'journal' ? 'active' : ''} onClick={() => setActiveTab('journal')}>
+              <span className="mbn-ico">🔎</span>
             </button>
           )}
           {appMode !== 'items' && (<>
@@ -11383,6 +11409,90 @@ ${bodyHtml}
       )}
 
       {/* v178: модуль «Предметы» — загрузка фото → AI-распознавание → база дома → поиск по магазинам */}
+      {/* v191: вкладка 🔎 Журнал — все проверки «Найти в магазинах» / «По фото», каждая запись открывается/закрывается */}
+      {activeTab === 'journal' && (
+        <div className="list-section">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, background: '#fff', border: '1px solid #e0e0e5', borderRadius: 10, padding: '10px 14px' }}>
+            <b style={{ fontSize: 16 }}>🔎 Журнал поисков</b>
+            <span style={{ fontSize: 12, color: '#8e8e93' }}>каждое нажатие «🛒 Найти в магазинах» и «🖼 По фото» — запись ниже; клик по записи — раскрыть/свернуть</span>
+            <button onClick={() => { setItemSearchLog([]); try { localStorage.removeItem('itemSearchLog'); } catch (e) {} }}
+              style={{ marginLeft: 'auto', padding: '6px 12px', fontSize: 12, borderRadius: 7, border: '1px solid #e74c3c', background: '#fff', color: '#c0392b', cursor: 'pointer', fontWeight: 700 }}>
+              🗑 Очистить журнал
+            </button>
+          </div>
+          {!itemSearchLog.length && (
+            <div style={{ padding: 24, textAlign: 'center', color: '#6e6e73', fontSize: 13 }}>Пока пусто. Нажмите в карточке предмета «🛒 Найти в магазинах» или «🖼 По фото» — результат появится здесь.</div>
+          )}
+          {itemSearchLog.map(en => (
+            <div key={en.id} style={{ background: '#fff', border: '1px solid #e0e0e5', borderRadius: 12, marginBottom: 10, overflow: 'hidden' }}>
+              <div onClick={() => updateSearchLog(en.id, { open: !en.open })}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', cursor: 'pointer', background: en.open ? '#f8f8fb' : '#fff' }}>
+                {en.item.photo_url && <img src={en.item.photo_url} alt="" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 8, border: '1px solid #eee', flexShrink: 0 }} />}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {en.kind === 'visual' ? '🖼' : '🛒'} {en.item.name_ru || 'Предмет'}
+                    {en.loading && <span style={{ color: '#0a84ff', fontWeight: 400 }}> — ⏳ идёт проверка…</span>}
+                    {!en.loading && en.error && <span style={{ color: '#c0392b', fontWeight: 400 }}> — ❌ {en.error}</span>}
+                    {!en.loading && !en.error && en.results && <span style={{ color: en.results.length ? '#1e8449' : '#b26a00', fontWeight: 400 }}> — совпадений: {en.results.length}</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#8e8e93' }}>
+                    {new Date(en.ts).toLocaleString('ru-RU')}
+                    {' · модель: '}{en.modelUsed || en.model || '—'}
+                    {en.kind === 'text' && en.sites && <>{' · '}{en.sites.length ? en.sites.map(sv => (ITEM_STORES.find(x => x[0] === sv) || [sv, sv])[1]).join(' · ') : '🌐 Все магазины'}</>}
+                    {en.kind === 'visual' && en.candidates != null && ` · сравнено фото: ${en.candidates}`}
+                  </div>
+                </div>
+                <span style={{ fontSize: 13, color: '#8e8e93', flexShrink: 0 }}>{en.open ? '▾' : '▸'}</span>
+              </div>
+              {en.open && (
+                <div style={{ padding: '8px 14px 12px', display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  {en.debug && (
+                    <div style={{ fontSize: 10.5, color: '#8e8e93', lineHeight: 1.5, background: '#f8f8fb', borderRadius: 7, padding: '5px 8px' }}>
+                      🔬 MPN {en.debug.mpn_ok ? '✓' : '—'}
+                      {' · '}слова: {(en.debug.search_words || []).join(', ') || '—'}
+                      {' · '}кандидаты: {Object.entries(en.debug.by_source || {}).map(([k, v]) => `${({ mpn: '🔢', name_es: '🇪🇸', name_ru: 'RU', embed: '🧠' })[k] || k}×${v}`).join(' ') || '0'}
+                      {' · 🧠'}{en.debug.embed_used ? '✓' : '✗'}
+                      {en.debug.cat_roots && en.debug.cat_roots.length ? ` · раздел: ${en.debug.cat_roots.join('/')}` : ''}
+                      {en.debug.bad_excluded ? ` · отсеяно «не то»: ${en.debug.bad_excluded}` : ''}
+                    </div>
+                  )}
+                  {en.message && !en.error && <div style={{ fontSize: 12, color: '#6e6e73' }}>{en.message}</div>}
+                  {!en.loading && !en.error && en.results && !en.results.length && <div style={{ fontSize: 12, color: '#6e6e73' }}>Совпадений не найдено.</div>}
+                  {(en.results || []).map((r, i) => (
+                    <a key={i} href={r.url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', color: 'inherit', background: en.kind === 'visual' ? '#f0f7ff' : '#f8f8fb', borderRadius: 9, padding: '7px 10px', fontSize: 13 }}>
+                      {r.image && <img src={r.image} alt="" style={{ width: 42, height: 42, objectFit: 'contain', borderRadius: 6, background: '#fff', flexShrink: 0 }} />}
+                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.name}>{r.name}</span>
+                      {en.kind === 'visual' && r.visual_score != null && (
+                        <span style={{ fontSize: 11, fontWeight: 700, color: r.visual_score >= 0.85 ? '#1e8449' : (r.visual_score >= 0.65 ? '#b26a00' : '#6e6e73'), background: '#fff', borderRadius: 6, padding: '1px 6px', flexShrink: 0 }}>
+                          🖼 {Math.round(r.visual_score * 100)}%{r.visual_verified !== false ? ' ✓×2' : ''}
+                        </span>
+                      )}
+                      {r.attr_checked && <span title={r.attr_notes || 'Атрибутная проверка пройдена'} style={{ fontSize: 11, flexShrink: 0, cursor: 'help' }}>🧬</span>}
+                      {en.kind === 'text' && <span style={{ fontSize: 10.5, color: '#95a5a6', flexShrink: 0 }}>{({ mpn: '🔢MPN', name_es: '🇪🇸назв.', name_ru: 'назв.RU', embed: '🧠семант.' })[r.match_by] || r.match_by}</span>}
+                      <span style={{ fontSize: 10.5, color: '#95a5a6', flexShrink: 0 }}>{String(r.site || '').replace('www.', '')}</span>
+                      <span style={{ fontWeight: 700, color: '#c0392b', flexShrink: 0 }}>{r.price != null ? `${r.price} €` : '—'}</span>
+                      {r.price_original != null && r.price_original > (r.price || 0) && <span style={{ textDecoration: 'line-through', color: '#95a5a6', flexShrink: 0 }}>{r.price_original} €</span>}
+                      {r.discount_pct != null && <span style={{ fontSize: 11, fontWeight: 700, color: '#1e8449', flexShrink: 0 }}>−{Math.round(r.discount_pct)}%</span>}
+                      <span onClick={async (e) => { // «не тот товар» — запомнить и убрать
+                          e.preventDefault(); e.stopPropagation();
+                          try {
+                            await fetch(`${API_URL}/api/items/${en.item.id}/feedback?token=${token}`, {
+                              method: 'POST', headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ product_url: r.url, verdict: 'bad' })
+                            });
+                            updateSearchLog(en.id, { results: (en.results || []).filter(x => x.url !== r.url) });
+                          } catch (err) { setItemError(err.message); }
+                        }} title="Не тот товар — запомню и уберу из выдачи"
+                        style={{ color: '#c0392b', fontSize: 13, fontWeight: 700, padding: '2px 5px', flexShrink: 0, cursor: 'pointer' }}>✕</span>
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* v190: вкладка 🔬 — дашборд улучшений распознавания и сравнения с прогресс-барами */}
       {activeTab === 'lab' && (
         <div className="list-section">
@@ -11444,6 +11554,7 @@ ${bodyHtml}
               </Card>
               <Card n={4} title="Эмбеддинги pgvector — семантический поиск кандидатов" status={catPct > 50 ? 'ok' : catPct > 0 ? 'warn' : 'bad'}>
                 <KV k="движок эмбеддингов" v={String(d.embed_backend)} />
+                <div style={{ fontSize: 11, color: '#8e8e93', marginBottom: 4 }}>⚠️ Это движок ЭМБЕДДИНГОВ (семантический поиск), а не распознавания: фото предметов распознаёт модель, выбранная в шапке. Локальный движок включается переменной LOCAL_EMBED_URL на бэкенде.</div>
                 <KV k="каталог с векторами" v={`${catEmb} из ${catTot} — ${catPct}%`} />
                 <Bar pct={catPct} color={catPct > 50 ? '#1e8449' : '#b26a00'} />
                 <KV k="предметы с векторами" v={`${itEmb} из ${itTot} — ${itPct}%`} />

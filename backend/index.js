@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v189-2026-09-12', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v191-2026-09-12', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -7289,7 +7289,10 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
         if (mpnHit) score += 5;
         if (catRoots.length && r.category && catRoots.some(c => String(r.category).toLowerCase().includes(c))) score += 4; // v188 ход 3: свой раздел каталога
         // v182: отсев мусора — нужно ≥2 испанских слова, ИЛИ бренд+слово, ИЛИ точный MPN (одно общее слово недостаточно)
-        const ok = esHits >= 2 || (brandHit && (esHits + latHits) >= 1) || mpnHit || (esWords.length === 1 && esHits === 1);
+        // v191: ГЛАВНОЕ существительное (первое слово name_es = тип предмета) обязано быть в названии кандидата —
+        // иначе «alicates de punta larga» матчился с «punta de destornillador … larga» по словам punta/larga
+        const headHit = !esWords.length || nm.includes(esWords[0]);
+        const ok = mpnHit || (headHit && (esHits >= 2 || (brandHit && (esHits + latHits) >= 1) || (esWords.length === 1 && esHits === 1)));
         return { r, score, ok };
       }).filter(x => x.ok);
       scored.sort((a, b) => b.score - a.score || (a.r.price ?? 1e9) - (b.r.price ?? 1e9));
@@ -7475,6 +7478,7 @@ app.get('/api/items/debug', requireAuth, async (req, res) => {
     const m = {}; for (const r of data || []) m[r.verdict] = (m[r.verdict] || 0) + 1;
     out.feedback = m;
   } catch (e) { out.feedback = 'нет таблицы — выполните миграцию v188'; }
+  out.embed_note = 'Это движок ЭМБЕДДИНГОВ (семантический поиск), а не распознавания: фото распознаёт модель, выбранная в шапке. Локальный движок включается переменной LOCAL_EMBED_URL.';
   out.embed_backend = process.env.LOCAL_EMBED_URL
     ? `локальный AI: ${process.env.LOCAL_EMBED_URL} (${process.env.LOCAL_EMBED_MODEL || 'nomic-embed-text'})`
     : (process.env.GEMINI_API_KEY ? 'gemini-embedding-001 (облако)' : 'НЕ НАСТРОЕН');
@@ -7572,7 +7576,8 @@ app.get('/api/items/:id/similar-visual', requireAuth, async (req, res) => {
         for (const w of latWords) if (nm.includes(w)) sc += 1;
         if (brandLc && String(r.brand || '').toLowerCase().includes(brandLc)) sc += 3;
         if (mpnOkV && r.mpn && String(r.mpn).toLowerCase() === String(item.mpn).toLowerCase()) sc += 5;
-        if (sc >= 2) {
+        const headOkV = !esWords.length || nm.includes(esWords[0]); // v191: тип предмета обязателен
+        if (sc >= 2 && headOkV) {
           const key = r.site + '|' + r.url;
           if (!candMap.has(key)) candMap.set(key, { r, score: sc });
         }
