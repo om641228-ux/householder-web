@@ -1,0 +1,74 @@
+# Leroy Merlin — разделы верхнего уровня (витрина включает подразделы)
+# Всего: 24 разделов · сгенерировано из sitemap-category1.xml
+
+# === Banos (473 подразделов) ===
+https://www.leroymerlin.es/productos/banos/
+
+# === Calefaccion y climatizacion (183 подразделов) ===
+https://www.leroymerlin.es/productos/calefaccion-y-climatizacion/
+
+# === Ceramica (141 подразделов) ===
+https://www.leroymerlin.es/productos/ceramica/
+
+# === Cocinas (474 подразделов) ===
+https://www.leroymerlin.es/productos/cocinas/
+
+# === Construccion (159 подразделов) ===
+https://www.leroymerlin.es/productos/construccion/
+
+# === Decoracion navidena (58 подразделов) ===
+https://www.leroymerlin.es/productos/decoracion-navidena/
+
+# === Decoracion (740 подразделов) ===
+https://www.leroymerlin.es/productos/decoracion/
+
+# === Eficiencia energetica (18 подразделов) ===
+https://www.leroymerlin.es/productos/eficiencia-energetica/
+
+# === Electricidad y domotica (246 подразделов) ===
+https://www.leroymerlin.es/productos/electricidad-y-domotica/
+
+# === Energias renovables (67 подразделов) ===
+https://www.leroymerlin.es/productos/energias-renovables/
+
+# === Equipamiento de emergencia para el hogar (1 подразделов) ===
+https://www.leroymerlin.es/productos/equipamiento-de-emergencia-para-el-hogar/
+
+# === Ferreteria y seguridad (358 подразделов) ===
+https://www.leroymerlin.es/productos/ferreteria-y-seguridad/
+
+# === Fontaneria (118 подразделов) ===
+https://www.leroymerlin.es/productos/fontaneria/
+
+# === Herramientas (385 подразделов) ===
+https://www.leroymerlin.es/productos/herramientas/
+
+# === Home index (2 подразделов) ===
+https://www.leroymerlin.es/productos/home-index/
+
+# === Iluminacion (220 подразделов) ===
+https://www.leroymerlin.es/productos/iluminacion/
+
+# === Jardin y terraza (827 подразделов) ===
+https://www.leroymerlin.es/productos/jardin-y-terraza/
+
+# === Madera (91 подразделов) ===
+https://www.leroymerlin.es/productos/madera/
+
+# === Muebles armarios y ordenacion (366 подразделов) ===
+https://www.leroymerlin.es/productos/muebles-armarios-y-ordenacion/
+
+# === Novedades (1 подразделов) ===
+https://www.leroymerlin.es/productos/novedades/
+
+# === Pintura y drogueria (277 подразделов) ===
+https://www.leroymerlin.es/productos/pintura-y-drogueria/
+
+# === Puertas ventanas y escaleras (345 подразделов) ===
+https://www.leroymerlin.es/productos/puertas-ventanas-y-escaleras/
+
+# === Seleccion productos (120 подразделов) ===
+https://www.leroymerlin.es/productos/seleccion-productos/
+
+# === Suelos (66 подразделов) ===
+https://www.leroymerlin.es/productos/suelos/

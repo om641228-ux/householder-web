@@ -443,10 +443,10 @@ const FALLBACK_MODELS = [
   { name: 'ocrspace-engine1', displayName: 'OCR.space Engine 1 (Basic)', provider: 'OCR.space' },
   { name: 'ocrspace-engine2', displayName: 'OCR.space Engine 2 (Advanced)', provider: 'OCR.space' },
   { name: 'ocrspace-engine3', displayName: 'OCR.space Engine 3 (Handwriting)', provider: 'OCR.space' },
-  { name: 'gemini-3.5-flash', displayName: 'Gemini 3.5 Flash', provider: 'Gemini' },
-  { name: 'gemini-3.1-pro-preview', displayName: 'Gemini 3.1 Pro Preview ★ vision', provider: 'Gemini' },
   { name: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash', provider: 'Gemini' },
   { name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro', provider: 'Gemini' },
+  { name: 'gemini-3.5-flash', displayName: 'Gemini 3.5 Flash', provider: 'Gemini' },
+  { name: 'gemini-3.1-pro-preview', displayName: 'Gemini 3.1 Pro Preview', provider: 'Gemini' },
   { name: 'gemini-3.1-flash-lite', displayName: 'Gemini 3.1 Flash Lite', provider: 'Gemini' },
   { name: 'gemini-3-flash-preview', displayName: 'Gemini 3 Flash Preview', provider: 'Gemini' },
   { name: 'gemini-3-pro-image', displayName: 'Gemini 3 Pro Image', provider: 'Gemini' },
@@ -473,10 +473,13 @@ const FALLBACK_MODELS = [
   { name: 'openrouter-google/gemma-4-26b-a4b-it:free', displayName: 'Gemma 4 26B (Free)', provider: 'OpenRouter' },
   { name: 'openrouter-google/gemma-4-31b-it:free', displayName: 'Gemma 4 31B (Free)', provider: 'OpenRouter' },
   { name: 'openrouter-nvidia/nemotron-nano-12b-v2-vl:free', displayName: 'Nemotron Nano 12B v2 VL — документы/OCR (Free)', provider: 'OpenRouter' },
-  { name: 'openrouter-nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', displayName: 'Nemotron 3 Nano Omni VL (Free)', provider: 'OpenRouter' },
-  { name: 'openrouter-openrouter/free', displayName: 'OpenRouter Free (автовыбор)', provider: 'OpenRouter' },
+  { name: 'openrouter-qwen/qwen2.5-vl-32b-instruct:free', displayName: 'Qwen 2.5 VL 32B (Free)', provider: 'OpenRouter' },
+  { name: 'openrouter-qwen/qwen2.5-vl-72b-instruct:free', displayName: 'Qwen 2.5 VL 72B (Free)', provider: 'OpenRouter' },
+  { name: 'github-openai/gpt-4o-mini', displayName: 'GPT-4o mini (GitHub)', provider: 'GitHub' },
+  { name: 'github-openai/gpt-4o', displayName: 'GPT-4o (GitHub)', provider: 'GitHub' },
+  { name: 'github-meta/Llama-4-Scout-17B-16E-Instruct', displayName: 'Llama 4 Scout (GitHub)', provider: 'GitHub' },
   { name: 'mistral-mistral-small-latest', displayName: 'Mistral Small Latest', provider: 'Mistral' },
-  { name: 'mistral-pixtral-large-latest', displayName: 'Pixtral Large (124B)', provider: 'Mistral' },
+  { name: 'mistral-pixtral-12b-2409', displayName: 'Pixtral 12B (legacy)', provider: 'Mistral' },
   { name: 'kimi-kimi-k3', displayName: 'Kimi K3', provider: 'Kimi' },
   { name: 'kimi-kimi-k2.6', displayName: 'Kimi K2.6', provider: 'Kimi' },
   { name: 'kimi-moonshot-v1-8k-vision-preview', displayName: 'Kimi Vision 8K (legacy)', provider: 'Kimi' },
@@ -2245,7 +2248,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v188 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v179 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -3489,11 +3492,11 @@ function ParseTab({ token, isMobileView, canRun }) {
                     {catTh('brand', 'Производитель', { whiteSpace: 'nowrap' })}
                     {catTh('mpn', '№ производителя', { whiteSpace: 'nowrap' })}
                     {catTh('category', 'Раздел')}
-                    {catTh('date', 'Дата загрузки', { whiteSpace: 'nowrap' })}
                     {catTh('price', 'Цена', { whiteSpace: 'nowrap' })}
                     {catTh('price_original', 'Без скидки', { whiteSpace: 'nowrap' })}
                     {catTh('discount_pct', '−%', { whiteSpace: 'nowrap' })}
                     {catTh('discount_abs', '−€', { whiteSpace: 'nowrap' })}
+                    {catTh('date', 'Дата', { whiteSpace: 'nowrap' })}
                     {canRun && <th style={{ padding: '6px 8px', position: 'sticky', right: 0, background: '#fff', boxShadow: '-4px 0 6px rgba(0,0,0,.05)' }}></th>}
                   </tr>
                 </thead>
@@ -3523,10 +3526,6 @@ function ParseTab({ token, isMobileView, canRun }) {
                           ? <span onClick={() => pickCat(p.category)} style={{ cursor: 'pointer' }}>{p.category.split(' > ').slice(-2).join(' › ')}</span>
                           : '—'}
                       </td>
-                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontSize: 11, color: '#8e8e93' }}
-                        title={p.last_seen ? ('Дата парсинга: ' + new Date(p.last_seen).toLocaleString('ru-RU') + (p.first_seen ? ' · впервые: ' + new Date(p.first_seen).toLocaleString('ru-RU') : '') + (p.price_at ? ' · цена: ' + new Date(p.price_at).toLocaleString('ru-RU') : '')) : ''}>
-                        {p.last_seen ? new Date(p.last_seen).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }) + ' ' + new Date(p.last_seen).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '—'}
-                      </td>
                       <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
                         {p.price != null ? <b>{p.price} {p.currency || '€'}</b> : (p.price_estimate != null ? <span style={{ color: '#e67e22' }}>≈ {p.price_estimate} {p.currency || '€'} <span style={{ fontSize: 10 }}>(оценка)</span></span> : <span style={{ color: '#c7c7cc' }}>—</span>)}
                         {p.price_source === 'ai-search' && <span title="Цена найдена AI через веб-поиск (подтверждена по артикулу)" style={{ fontSize: 10, color: '#7c3aed', marginLeft: 4 }}>🤖</span>}
@@ -3542,6 +3541,10 @@ function ParseTab({ token, isMobileView, canRun }) {
                       </td>
                       <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontSize: 11 }} title="Скидка в евро (например, при покупке онлайн)">
                         {p.discount_abs != null ? <b style={{ color: '#d70015' }}>−{p.discount_abs} {p.currency || '€'}</b> : <span style={{ color: '#e5e5ea' }}>—</span>}
+                      </td>
+                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontSize: 11, color: '#8e8e93' }}
+                        title={p.last_seen ? ('Дата парсинга: ' + new Date(p.last_seen).toLocaleString('ru-RU') + (p.first_seen ? ' · впервые: ' + new Date(p.first_seen).toLocaleString('ru-RU') : '') + (p.price_at ? ' · цена: ' + new Date(p.price_at).toLocaleString('ru-RU') : '')) : ''}>
+                        {p.last_seen ? new Date(p.last_seen).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }) + ' ' + new Date(p.last_seen).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '—'}
                       </td>
                       {canRun && (
                         <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', position: 'sticky', right: 0, background: '#fff', boxShadow: '-4px 0 6px rgba(0,0,0,.05)' }}>
@@ -5816,21 +5819,7 @@ function App() {
   const [itemsQuery, setItemsQuery] = useState('');
   const [itemEditId, setItemEditId] = useState(null);
   const [itemEditForm, setItemEditForm] = useState({});
-  const [itemFiles, setItemFiles] = useState([]);          // v180: выбранные фото во вкладке «Загрузка» предметов
-  const [itemFilesIdx, setItemFilesIdx] = useState(0);
-  const [itemVisual, setItemVisual] = useState({});      // v181: id → {loading, results, error, model, candidates} — поиск «картинка по картинке»
-  const [itemProgress, setItemProgress] = useState({ done: 0, total: 0, name: '' }); // v182: прогресс пакетного распознавания
-  // v186: сортировка/пагинация/выбор/пакетные действия/магазины/место хранения
-  const [itemSort, setItemSort] = useState('created_desc');
-  const [itemPerPage, setItemPerPage] = useState(24);
-  const [itemPage, setItemPage] = useState(1);
-  const [itemSel, setItemSel] = useState({});            // id → true
-  const [itemBulkBusy, setItemBulkBusy] = useState(false);
-  const [itemShopMenu, setItemShopMenu] = useState(null); // id карточки с открытым меню магазинов
-  const [itemMonthFilter, setItemMonthFilter] = useState(null); // 'YYYY-MM' из тайм-шкалы справа
-  const [itemShopSel, setItemShopSel] = useState([]);           // v187: отмеченные магазины в меню карточки ([] = все)
-  const [itemSearchModal, setItemSearchModal] = useState(null); // v187: {item, loading, results, error, sites} — результаты во всплывающем окне
-  const ITEM_STORES = [['', '🌐 Все магазины'], ['www.leroymerlin.es', '🗂 Leroy Merlin'], ['canarias.worten.es', '🛒 Worten'], ['canarias.mediamarkt.es', '🛒 MediaMarkt'], ['www.tutrebol.es', '🍀 TuTrebol'], ['tienda.mercadona.es', '🛒 Mercadona'], ['chafiras.com', '🔩 Chafiras']];
+  const [itemSimilar, setItemSimilar] = useState({});      // id → {loading, results, error}
   const [chatUnread, setChatUnread] = useState({}); // v83: непрочитанные по каналам
   const [cashQ, setCashQ] = useState('');           // v85: поиск по движениям (Cash)
   const [cashVals, setCashVals] = useState({});     // v85: редактируемые значения строк {id: {counterparty, operation_date, amount}}
@@ -6176,7 +6165,6 @@ function App() {
     try {
       const fd = new FormData();
       fd.append('image', file);
-      fd.append('model', selectedModel); // v182: распознавать ВЫБРАННОЙ моделью
       const r = await fetch(`${API_URL}/api/items/recognize?token=${token}`, { method: 'POST', body: fd });
       const d = await r.json();
       if (!r.ok) {
@@ -6185,39 +6173,6 @@ function App() {
       }
       setItemsList(prev => [d.item, ...prev]);
     } catch (e) { setItemError(e.message); }
-    setItemBusy(false);
-  };
-
-  // v180: вкладка «Загрузка» предметов — выбор/дроп фото + пакетное распознавание (как у чеков)
-  const addItemFiles = (files) => {
-    const imgs = Array.from(files || []).filter(f => /^image\//.test(f.type));
-    if (!imgs.length) return;
-    setItemFiles(prev => [...prev, ...imgs]);
-    setItemError('');
-  };
-  const itemDrop = (e) => { e.preventDefault(); addItemFiles(e.dataTransfer.files); };
-  const recognizeItemFiles = async () => {
-    if (!itemFiles.length || itemBusy) return;
-    setItemBusy(true); setItemError('');
-    const files = itemFiles.slice();
-    setItemProgress({ done: 0, total: files.length, name: '' });
-    const errs = [];
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      setItemProgress({ done: i, total: files.length, name: f.name });
-      try {
-        const fd = new FormData();
-        fd.append('image', f);
-        fd.append('model', selectedModel); // v182: распознавать ВЫБРАННОЙ моделью
-        const r = await fetch(`${API_URL}/api/items/recognize?token=${token}`, { method: 'POST', body: fd });
-        const d = await r.json();
-        if (!r.ok) { if (d.missing) setItemsMissing(true); throw new Error(d.error || `Ошибка ${r.status}`); }
-        setItemsList(prev => [d.item, ...prev]);
-      } catch (e) { errs.push(`${f.name}: ${e.message}`); }
-    }
-    if (errs.length) setItemError(errs.join(' · '));
-    setItemProgress({ done: 0, total: 0, name: '' });
-    setItemFiles([]); setItemFilesIdx(0);
     setItemBusy(false);
   };
 
@@ -6245,18 +6200,15 @@ function App() {
   };
 
   // v178: похожие товары в базах магазинов
-  const loadItemSimilar = async (id, sites) => { // v187: sites — массив магазинов ([]=все); результаты — во всплывающем окне
-    const it = itemsList.find(x => x.id === id) || { id };
-    const arr = (Array.isArray(sites) ? sites : []).filter(Boolean);
-    setItemSearchModal({ item: it, loading: true, results: null, error: null, sites: arr });
+  const loadItemSimilar = async (id) => {
+    setItemSimilar(prev => ({ ...prev, [id]: { loading: true } }));
     try {
-      const r = await fetch(`${API_URL}/api/items/${id}/similar?token=${token}&model=${encodeURIComponent(selectedModel)}${arr.length ? '&sites=' + encodeURIComponent(arr.join(',')) : ''}`);
+      const r = await fetch(`${API_URL}/api/items/${id}/similar?token=${token}`);
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
-      setItemSearchModal({ item: it, loading: false, results: d.results || [], error: null, sites: arr });
-      return;
+      setItemSimilar(prev => ({ ...prev, [id]: { loading: false, results: d.results || [] } }));
     } catch (e) {
-      setItemSearchModal({ item: it, loading: false, results: null, error: e.message, sites: arr });
+      setItemSimilar(prev => ({ ...prev, [id]: { loading: false, error: e.message } }));
     }
   };
 
@@ -6266,152 +6218,6 @@ function App() {
     const color = pct >= 90 ? '#1e8449' : (pct >= 70 ? '#b26a00' : '#c0392b');
     const bg = pct >= 90 ? '#e8f8ee' : (pct >= 70 ? '#fff4e0' : '#fdecea');
     return <span style={{ fontSize: 11, fontWeight: 700, color, background: bg, borderRadius: 6, padding: '1px 7px', whiteSpace: 'nowrap' }}>{pct}%</span>;
-  };
-
-  // v181: визуальный поиск — фото предмета против фото кандидатов из каталогов
-  const loadItemVisual = async (id) => {
-    setItemVisual(prev => ({ ...prev, [id]: { loading: true } }));
-    try {
-      const r = await fetch(`${API_URL}/api/items/${id}/similar-visual?token=${token}&model=${encodeURIComponent(selectedModel)}`); // v183: выбранная модель
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
-      setItemVisual(prev => ({ ...prev, [id]: { loading: false, results: d.results || [], model: d.model, candidates: d.candidates, message: d.message } }));
-    } catch (e) {
-      setItemVisual(prev => ({ ...prev, [id]: { loading: false, error: e.message } }));
-    }
-  };
-
-  // ===== v186: Tools — сортировка, выбор галками, пакетные действия, выгрузка в папку, место хранения =====
-  const itemsSorted = (() => {
-    const arr = itemsList.slice();
-    if (itemMonthFilter) arr.splice(0, arr.length, ...arr.filter(it => String(it.created_at || '').slice(0, 7) === itemMonthFilter));
-    switch (itemSort) {
-      case 'created_asc': arr.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))); break;
-      case 'name': arr.sort((a, b) => String(a.name_ru || '').localeCompare(String(b.name_ru || ''), 'ru')); break;
-      case 'brand': arr.sort((a, b) => String(a.brand || 'яя').localeCompare(String(b.brand || 'яя'), 'ru')); break;
-      case 'confidence': arr.sort((a, b) => (b.confidence ?? -1) - (a.confidence ?? -1)); break;
-      default: arr.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))); // created_desc = дата загрузки/распознавания
-    }
-    return arr;
-  })();
-  const itemPages = itemPerPage >= 100000 ? 1 : Math.max(1, Math.ceil(itemsSorted.length / itemPerPage));
-  const itemPageSafe = Math.min(itemPage, itemPages);
-  const itemsVisible = itemPerPage >= 100000 ? itemsSorted : itemsSorted.slice((itemPageSafe - 1) * itemPerPage, itemPageSafe * itemPerPage);
-  const itemsSelList = itemsSorted.filter(it => itemSel[it.id]);
-  const itemMonths = (() => { // тайм-шкала справа: месяцы + логарифмические бары
-    const m = new Map();
-    for (const it of itemsList) { const k = String(it.created_at || '').slice(0, 7); if (k.length === 7) m.set(k, (m.get(k) || 0) + 1); }
-    const rows = [...m.entries()].sort((a, b) => b[0].localeCompare(a[0]));
-    const max = Math.max(1, ...rows.map(r => r[1]));
-    return rows.map(([k, c]) => ({ k, c, w: Math.round(Math.log(1 + c) / Math.log(1 + max) * 100) }));
-  })();
-
-  const itemStorageHints = (() => { // v187: уже заполненные места/стеллажи/полки — для выпадающих подсказок
-    const pick = (k) => [...new Set(itemsList.map(it => it[k]).filter(v => v != null && String(v).trim() !== '').map(String))].slice(0, 50);
-    return { place: pick('storage_place'), rack: pick('storage_rack'), shelf: pick('storage_shelf') };
-  })();
-  const toggleItemSel = (id) => setItemSel(prev => { const c = { ...prev }; if (c[id]) delete c[id]; else c[id] = true; return c; });
-  const itemsSelectVisible = () => {
-    const all = itemsVisible.every(it => itemSel[it.id]) && itemsVisible.length > 0;
-    setItemSel(prev => { const c = { ...prev }; for (const it of itemsVisible) { if (all) delete c[it.id]; else c[it.id] = true; } return c; });
-  };
-
-  const itemsBulkDelete = async () => {
-    if (!itemsSelList.length) return;
-    if (!window.confirm(`Удалить выбранные предметы (${itemsSelList.length} шт.)?`)) return;
-    setItemBulkBusy(true); setItemError('');
-    const errs = [];
-    for (const it of itemsSelList) {
-      try {
-        const r = await fetch(`${API_URL}/api/items/${it.id}?token=${token}`, { method: 'DELETE' });
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
-        setItemsList(prev => prev.filter(x => x.id !== it.id));
-      } catch (e) { errs.push(`${it.name_ru || it.id}: ${e.message}`); }
-    }
-    if (errs.length) setItemError(errs.join(' · '));
-    setItemSel({}); setItemBulkBusy(false);
-  };
-
-  const itemsBulkRerecognize = async () => {
-    if (!itemsSelList.length || itemBulkBusy) return;
-    setItemBulkBusy(true); setItemError('');
-    setItemProgress({ done: 0, total: itemsSelList.length, name: '' });
-    const errs = [];
-    for (let i = 0; i < itemsSelList.length; i++) {
-      const it = itemsSelList[i];
-      setItemProgress({ done: i, total: itemsSelList.length, name: it.name_ru || '' });
-      try {
-        const r = await fetch(`${API_URL}/api/items/${it.id}/rerecognize?token=${token}`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: selectedModel })
-        });
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
-        setItemsList(prev => prev.map(x => x.id === it.id ? d.item : x));
-      } catch (e) { errs.push(`${it.name_ru || it.id}: ${e.message}`); }
-    }
-    if (errs.length) setItemError(errs.join(' · '));
-    setItemProgress({ done: 0, total: 0, name: '' });
-    setItemBulkBusy(false);
-  };
-
-  // выгрузка выбранных в ВЫБРАННУЮ папку (File System Access API); fallback — скачивание файлов
-  const exportSelectedItems = async () => {
-    if (!itemsSelList.length || itemBulkBusy) return;
-    setItemBulkBusy(true); setItemError('');
-    try {
-      const safe = (t) => String(t || 'item').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 60);
-      const files = [];
-      for (const it of itemsSelList) {
-        const base = `${safe(it.name_ru)}_${String(it.id).slice(0, 8)}`;
-        if (it.photo_url) {
-          try {
-            const b = await (await fetch(it.photo_url)).blob();
-            files.push({ name: base + '.jpg', blob: b });
-          } catch (e) {}
-        }
-      }
-      const jsonBlob = new Blob([JSON.stringify(itemsSelList, null, 2)], { type: 'application/json' });
-      files.push({ name: 'items.json', blob: jsonBlob });
-      if (window.showDirectoryPicker) {
-        const dir = await window.showDirectoryPicker({ mode: 'readwrite' });
-        for (const f of files) {
-          const h = await dir.getFileHandle(f.name, { create: true });
-          const w = await h.createWritable();
-          await w.write(f.blob); await w.close();
-        }
-      } else {
-        for (const f of files) { // старый браузер — просто скачиваем всё
-          const a = document.createElement('a');
-          a.href = URL.createObjectURL(f.blob); a.download = f.name; a.click();
-          await new Promise(r => setTimeout(r, 250));
-        }
-      }
-    } catch (e) { if (e && e.name !== 'AbortError') setItemError(e.message); }
-    setItemBulkBusy(false);
-  };
-
-  const uploadItemStorageMedia = async (id, file) => {
-    if (!file) return;
-    setItemError('');
-    try {
-      const fd = new FormData();
-      fd.append('media', file);
-      const r = await fetch(`${API_URL}/api/items/${id}/storage-media?token=${token}`, { method: 'POST', body: fd });
-      const d = await r.json();
-      if (!r.ok) { if (d.missing) setItemsMissing(true); throw new Error(d.error || `Ошибка ${r.status}`); }
-      setItemsList(prev => prev.map(x => x.id === id ? d.item : x));
-    } catch (e) { setItemError(e.message); }
-  };
-  const deleteItemStorageMedia = async (id, url) => {
-    try {
-      const r = await fetch(`${API_URL}/api/items/${id}/storage-media?token=${token}`, {
-        method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url })
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
-      setItemsList(prev => prev.map(x => x.id === id ? d.item : x));
-    } catch (e) { setItemError(e.message); }
   };
 
   const gotoTab = (t) => {
@@ -9876,11 +9682,11 @@ ${bodyHtml}
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#95a5a6', fontWeight: 400 }}>{activeModelDisplay.displayName}</span>
               </button>
               {/* v177: ВЕРХНИЙ переключатель проекта — Чеки (основной проект, по умолчанию) / Предметы (клон проекта под базу предметов) */}
-              <div style={{ display: 'flex', gap: 8, marginLeft: 10 }}>
+              <div style={{ display: 'flex', border: '1px solid #d0d0d5', borderRadius: 9, overflow: 'hidden', background: '#fff', marginLeft: 10 }}>
                 {[['checks', '🧾 Чеки'], ['items', '📦 Предметы']].map(([mode, label]) => (
                   <button key={mode}
                     onClick={() => { setAppMode(mode); if (mode === 'items') { setActiveTab('tools'); loadItems(); } else { setActiveTab('list'); loadReceipts(); } }}
-                    style={{ border: appMode === mode ? 'none' : '1px solid #d0d0d5', background: appMode === mode ? '#0071e3' : '#f2f2f5', color: appMode === mode ? '#fff' : '#333', borderRadius: 9, padding: '7px 16px', fontSize: 13, fontWeight: appMode === mode ? 700 : 400, cursor: 'pointer', minHeight: 0, whiteSpace: 'nowrap', boxShadow: appMode === mode ? '0 1px 4px rgba(0,113,227,0.35)' : 'none' }}
+                    style={{ border: 'none', background: appMode === mode ? '#0071e3' : 'transparent', color: appMode === mode ? '#fff' : '#333', borderRadius: 0, padding: '6px 14px', fontSize: 13, fontWeight: appMode === mode ? 700 : 400, cursor: 'pointer', minHeight: 0, whiteSpace: 'nowrap' }}
                   >{label}</button>
                 ))}
               </div>
@@ -9899,7 +9705,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-12 · v188 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-11 · v179 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9912,7 +9718,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-12 · v188</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-11 · v179</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
@@ -9920,7 +9726,7 @@ ${bodyHtml}
               <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>Загрузка</button>
             )}
             {appMode === 'items' && tabAllowed('list') && (
-              <button className={activeTab === 'tools' ? 'active' : ''} onClick={() => { setActiveTab('tools'); loadItems(); }}>🔧 Tools{itemsList.length ? ` (${itemsList.length})` : ''}</button>
+              <button className={activeTab === 'tools' ? 'active' : ''} onClick={() => { setActiveTab('tools'); loadItems(); }}>🔧 Tools</button>
             )}
             {appMode !== 'items' && (<>
             {tabAllowed('list') && (
@@ -10010,7 +9816,7 @@ ${bodyHtml}
           )}
           {appMode === 'items' && tabAllowed('list') && (
             <button className={activeTab === 'tools' ? 'active' : ''} onClick={() => gotoTab('tools')}>
-              <span className="mbn-ico">🔧</span>Tools{itemsList.length ? ` (${itemsList.length})` : ''}
+              <span className="mbn-ico">🔧</span>Tools
             </button>
           )}
           {appMode !== 'items' && (<>
@@ -10808,76 +10614,21 @@ ${bodyHtml}
         </div>
       )}
 
-      {/* v180: режим «Предметы» — вкладка «Загрузка» как у чеков: тулбар + drop-зона + «Распознать и сохранить» */}
+      {/* v179: режим «Предметы» — окно загрузки фото предмета (как у чеков: фото → AI → запись в базу) */}
       {appMode === 'items' && activeTab === 'upload' && (
         <div className="upload-section">
-          <div className="upload-toolbar">
-            <label className="btn-camera" style={{ cursor: 'pointer' }}>
-              📷 {Capacitor.getPlatform() === 'ios' ? 'Камера' : 'Фото'}
-              <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
-                onChange={e => { addItemFiles(e.target.files); e.target.value = ''; }} />
+          <div style={{ background: '#fff', border: '1px solid #e0e0e5', borderRadius: 12, padding: 24, textAlign: 'center' }}>
+            <div style={{ fontSize: 40, marginBottom: 8 }}>🔧</div>
+            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Распознавание предмета</div>
+            <div style={{ fontSize: 13, color: '#6e6e73', marginBottom: 16, maxWidth: 460, margin: '0 auto 16px' }}>Сфотографируйте предмет — AI определит название (с % схожести), производителя и номер производителя, и сохранит карточку в Tools.</div>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: itemBusy ? '#b9c8bd' : '#0071e3', color: '#fff', borderRadius: 9, padding: '12px 22px', fontSize: 15, fontWeight: 700, cursor: itemBusy ? 'default' : 'pointer' }}>
+              {itemBusy ? '⏳ Распознаю…' : '📷 Сфотографировать / выбрать фото'}
+              <input type="file" accept="image/*" capture="environment" disabled={itemBusy} style={{ display: 'none' }}
+                onChange={e => { const f = e.target.files && e.target.files[0]; if (f) recognizeItemPhoto(f); e.target.value = ''; }} />
             </label>
-            <label className="btn-file" style={{ cursor: 'pointer' }}>
-              📁 Выбрать файл
-              <input type="file" accept="image/*" multiple style={{ display: 'none' }}
-                onChange={e => { addItemFiles(e.target.files); e.target.value = ''; }} />
-            </label>
-            <label className="btn-folder" style={{ cursor: 'pointer' }} title="Выбрать папку — распознаются все изображения внутри">
-              📁 Распознать папку
-              <input type="file" accept="image/*" multiple webkitdirectory="" style={{ display: 'none' }}
-                onChange={e => { addItemFiles(e.target.files); e.target.value = ''; }} />
-            </label>
-            <button className="btn-file" onClick={recognizeItemFiles} disabled={!itemFiles.length || itemBusy}
-              style={{ background: (!itemFiles.length || itemBusy) ? '#c7d7ea' : '#0071e3', color: '#fff', border: 'none', cursor: (!itemFiles.length || itemBusy) ? 'not-allowed' : 'pointer' }}>
-              {itemBusy ? '⏳ Распознаю…' : `⚡ Распознать и сохранить${itemFiles.length > 1 ? ` (${itemFiles.length})` : ''}`}
-            </button>
-            <span style={{ fontSize: 12, color: '#6e6e73' }}>Модель: <b>{activeModelDisplay.displayName}</b> (смена — в шапке)</span>
+            {itemError && <div style={{ marginTop: 12, background: '#fdecea', border: '1px solid #e74c3c', borderRadius: 10, padding: '8px 14px', fontSize: 13, color: '#c0392b' }}>Ошибка: {itemError}</div>}
+            <div style={{ marginTop: 14, fontSize: 12, color: '#95a5a6' }}>Карточки сохраняются во вкладке 🔧 Tools.</div>
           </div>
-
-          {itemBusy && itemProgress.total > 0 && (
-            <div style={{ margin: '10px 0', background: '#fff', border: '1px solid #e0e0e5', borderRadius: 10, padding: '10px 14px' }}>
-              <div style={{ fontSize: 13, marginBottom: 6, color: '#1d1d1f' }}>⚡ Распознаю {itemProgress.done} / {itemProgress.total}{itemProgress.name ? ` — ${itemProgress.name}` : ''}</div>
-              <div style={{ height: 8, background: '#f0f0f3', borderRadius: 4, overflow: 'hidden' }}>
-                <div style={{ height: '100%', width: `${Math.round(itemProgress.done / itemProgress.total * 100)}%`, background: '#0071e3', transition: 'width .3s' }} />
-              </div>
-            </div>
-          )}
-
-          <div className="drop-zone" onDrop={itemDrop} onDragOver={e => e.preventDefault()}>
-            {itemFiles.length ? (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: 10 }}>
-                <img src={URL.createObjectURL(itemFiles[Math.min(itemFilesIdx, itemFiles.length - 1)])} alt="preview" className="preview" />
-                {itemFiles.length > 1 && (
-                  <div className="file-nav">
-                    <button onClick={() => setItemFilesIdx(i => Math.max(0, i - 1))} disabled={itemFilesIdx === 0}>◀</button>
-                    <span>{itemFilesIdx + 1} / {itemFiles.length}</span>
-                    <button onClick={() => setItemFilesIdx(i => Math.min(itemFiles.length - 1, i + 1))} disabled={itemFilesIdx >= itemFiles.length - 1}>▶</button>
-                  </div>
-                )}
-                <p style={{ fontSize: 12, color: '#7f8c8d', margin: 0 }}>
-                  {itemFiles[Math.min(itemFilesIdx, itemFiles.length - 1)].name} · {(itemFiles[Math.min(itemFilesIdx, itemFiles.length - 1)].size / 1024 / 1024).toFixed(2)} MB
-                </p>
-                {itemFiles.length > 1 && <p style={{ fontSize: 12, color: '#2980b9', margin: 0, fontWeight: 600 }}>{itemFiles.length} фото → каждое в свою карточку Tools</p>}
-                <button onClick={() => { setItemFiles([]); setItemFilesIdx(0); }} style={{ fontSize: 12, border: '1px solid #ccc', background: '#fff', borderRadius: 6, padding: '4px 12px', cursor: 'pointer' }}>✕ Очистить</button>
-              </div>
-            ) : (
-              <div className="drop-text" onClick={() => { const el = document.getElementById('item-file-input'); if (el) el.click(); }} style={{ cursor: 'pointer' }}>
-                <p>Перетащите фото предмета сюда</p>
-                <p>или нажмите для выбора файлов</p>
-                <p className="hint">Можно выбрать несколько файлов — AI определит название (с % схожести), производителя и номер производителя</p>
-              </div>
-            )}
-            <input id="item-file-input" type="file" accept="image/*" multiple style={{ display: 'none' }}
-              onChange={e => { addItemFiles(e.target.files); e.target.value = ''; }} />
-          </div>
-
-          {itemError && <div style={{ marginTop: 10, background: '#fdecea', border: '1px solid #e74c3c', borderRadius: 10, padding: '8px 14px', fontSize: 13, color: '#c0392b' }}>Ошибка: {itemError}</div>}
-          {itemsMissing && (
-            <div style={{ marginTop: 10, background: '#fdecea', border: '1px solid #e74c3c', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#c0392b' }}>
-              ⚠️ Таблица <b>home_items</b> ещё не создана. Выполните один раз в Supabase → SQL Editor файл <b>supabase-migration-v178-home-items.sql</b>.
-            </div>
-          )}
-          <div style={{ fontSize: 12, color: '#95a5a6', marginTop: 8 }}>Карточки сохраняются во вкладке 🔧 Tools.</div>
         </div>
       )}
 
@@ -11352,67 +11103,7 @@ ${bodyHtml}
             <button onClick={() => loadItems(itemsQuery)} style={{ padding: '7px 12px', fontSize: 13 }}>Найти</button>
             <button onClick={() => { setItemsQuery(''); loadItems(''); }} style={{ padding: '7px 12px', fontSize: 13 }}>🔄</button>
             <span style={{ fontSize: 12, color: '#6e6e73' }}>Всего: {itemsList.length}</span>
-            <select value={itemSort} onChange={e => { setItemSort(e.target.value); setItemPage(1); }} title="Сортировка"
-              style={{ padding: '6px 8px', fontSize: 12, borderRadius: 6, border: '1px solid #ccc' }}>
-              <option value="created_desc">По дате распознавания ↓</option>
-              <option value="created_asc">По дате распознавания ↑</option>
-              <option value="name">По названию</option>
-              <option value="brand">По бренду</option>
-              <option value="confidence">По % распознавания</option>
-            </select>
-            <select value={itemPerPage} onChange={e => { setItemPerPage(Number(e.target.value)); setItemPage(1); }} title="Карточек на странице"
-              style={{ padding: '6px 8px', fontSize: 12, borderRadius: 6, border: '1px solid #ccc' }}>
-              <option value={12}>12 на стр.</option>
-              <option value={24}>24 на стр.</option>
-              <option value={48}>48 на стр.</option>
-              <option value={96}>96 на стр.</option>
-              <option value={100000}>Все</option>
-            </select>
-            {itemMonthFilter && (
-              <button onClick={() => { setItemMonthFilter(null); setItemPage(1); }} title="Сбросить фильтр тайм-шкалы"
-                style={{ padding: '6px 10px', fontSize: 12, borderRadius: 6, border: '1px solid #0a84ff', background: '#e8f2ff', color: '#0a84ff', cursor: 'pointer', fontWeight: 700 }}>
-                📅 {itemMonthFilter} ✕
-              </button>
-            )}
           </div>
-
-          {/* v186: панель выбора — галки + пакетные действия */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12, background: '#fff', border: '1px solid #e0e0e5', borderRadius: 10, padding: '8px 14px' }}>
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13, cursor: 'pointer', userSelect: 'none' }}>
-              <input type="checkbox" style={{ width: 16, height: 16, cursor: 'pointer' }}
-                checked={itemsVisible.length > 0 && itemsVisible.every(it => itemSel[it.id])}
-                onChange={itemsSelectVisible} />
-              Выбрать все на странице
-            </label>
-            <span style={{ fontSize: 12, color: '#6e6e73' }}>Выбрано: <b>{itemsSelList.length}</b></span>
-            <button onClick={itemsBulkDelete} disabled={!itemsSelList.length || itemBulkBusy}
-              style={{ border: '1px solid #e74c3c', background: itemsSelList.length ? '#fff' : '#f5f5f7', color: '#c0392b', borderRadius: 7, padding: '6px 12px', fontSize: 12, fontWeight: 700, cursor: itemsSelList.length ? 'pointer' : 'default' }}>
-              🗑 Удалить
-            </button>
-            <button onClick={itemsBulkRerecognize} disabled={!itemsSelList.length || itemBulkBusy}
-              title="Заново распознать выбранные предметы выбранной в шапке моделью"
-              style={{ border: 'none', background: itemsSelList.length ? '#0a84ff' : '#b9c8d5', color: '#fff', borderRadius: 7, padding: '6px 12px', fontSize: 12, fontWeight: 700, cursor: itemsSelList.length ? 'pointer' : 'default' }}>
-              🔄 Перераспознать
-            </button>
-            <button onClick={exportSelectedItems} disabled={!itemsSelList.length || itemBulkBusy}
-              title="Сохранить фото + items.json выбранных предметов в папку на диске (браузер спросит папку)"
-              style={{ border: 'none', background: itemsSelList.length ? '#1e8449' : '#b9c8bd', color: '#fff', borderRadius: 7, padding: '6px 12px', fontSize: 12, fontWeight: 700, cursor: itemsSelList.length ? 'pointer' : 'default' }}>
-              💾 Выгрузить в папку
-            </button>
-            {itemBulkBusy && <span style={{ fontSize: 12, color: '#6e6e73' }}>⏳ выполняю…</span>}
-            {itemPages > 1 && (
-              <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-                <button onClick={() => setItemPage(p => Math.max(1, p - 1))} disabled={itemPageSafe <= 1} style={{ padding: '4px 10px', fontSize: 12 }}>◀</button>
-                <span style={{ color: '#6e6e73' }}>{itemPageSafe} / {itemPages}</span>
-                <button onClick={() => setItemPage(p => Math.min(itemPages, p + 1))} disabled={itemPageSafe >= itemPages} style={{ padding: '4px 10px', fontSize: 12 }}>▶</button>
-              </span>
-            )}
-          </div>
-
-          {/* v187: подсказки мест хранения — выбрать из существующих или ввести вручную */}
-          <datalist id="dl-item-place">{itemStorageHints.place.map(v => <option key={v} value={v} />)}</datalist>
-          <datalist id="dl-item-rack">{itemStorageHints.rack.map(v => <option key={v} value={v} />)}</datalist>
-          <datalist id="dl-item-shelf">{itemStorageHints.shelf.map(v => <option key={v} value={v} />)}</datalist>
 
           {itemsMissing && (
             <div style={{ background: '#fdecea', border: '1px solid #e74c3c', borderRadius: 10, padding: '10px 14px', marginBottom: 12, fontSize: 13, color: '#c0392b' }}>
@@ -11429,13 +11120,10 @@ ${bodyHtml}
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12, flex: 1, minWidth: 0 }}>
-            {itemsVisible.map(it => (
-              <div key={it.id} style={{ background: '#fff', border: itemSel[it.id] ? '2px solid #0071e3' : '1px solid #e0e0e5', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
+            {itemsList.map(it => (
+              <div key={it.id} style={{ background: '#fff', border: '1px solid #e0e0e5', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ display: 'flex', gap: 10 }}>
-                  <input type="checkbox" checked={!!itemSel[it.id]} onChange={() => toggleItemSel(it.id)} title="Выбрать"
-                    style={{ width: 18, height: 18, cursor: 'pointer', flexShrink: 0, marginTop: 2 }} />
                   {it.photo_url
                     ? <img src={it.photo_url} alt="" style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 8, border: '1px solid #eee', flexShrink: 0, cursor: 'pointer' }} onClick={() => window.open(it.photo_url, '_blank')} />
                     : <div style={{ width: 72, height: 72, borderRadius: 8, background: '#f2f2f5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, flexShrink: 0 }}>📦</div>}
@@ -11444,10 +11132,8 @@ ${bodyHtml}
                       <span style={{ fontWeight: 700, fontSize: 14 }}>{it.name_ru || '—'}</span>
                       {itemConfBadge(it.confidence)}
                       {it.edited && <span title="Исправлено вручную" style={{ fontSize: 11, color: '#8e44ad' }}>✏️</span>}
-                      {it.dup && <span title="Дубликат: есть ещё карточка с таким же MPN или парой «бренд + название»" style={{ fontSize: 11, fontWeight: 700, color: '#c0392b', background: '#fdecea', borderRadius: 6, padding: '1px 7px', whiteSpace: 'nowrap' }}>🔁 Дубликат</span>}
                     </div>
                     {it.name_original && <div style={{ fontSize: 12, color: '#6e6e73' }}>{it.name_original}</div>}
-                    {it.name_es && <div style={{ fontSize: 12, color: '#6e6e73' }}>🇪🇸 {it.name_es}</div>}
                     {it.category && <div style={{ fontSize: 11, color: '#95a5a6' }}>🏷 {it.category}</div>}
                   </div>
                 </div>
@@ -11463,53 +11149,10 @@ ${bodyHtml}
                   {new Date(it.created_at).toLocaleString('ru-RU')}{it.ai_model ? ` · ${it.ai_model}` : ''}
                 </div>
 
-                {/* v186: место хранения + фото/видео места */}
-                <div style={{ background: '#f8f8fb', borderRadius: 8, padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 5 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: 12 }}>
-                    <span style={{ color: '#3a3a3c' }}>
-                      📍 {it.location_city ? <b>{it.location_city === 'Дубай' ? '🇦🇪 Дубай' : it.location_city === 'Тенерифе' ? '🇮🇨 Тенерифе' : it.location_city}</b> : <span style={{ color: '#b0b0b5' }}>где находится — не указано</span>}
-                      {it.storage_place ? ` · ${it.storage_place}` : ''}
-                      {it.storage_rack ? ` · стеллаж ${it.storage_rack}` : ''}
-                      {it.storage_shelf ? ` · полка ${it.storage_shelf}` : ''}
-                    </span>
-                    <label title="Добавить фото или видео места хранения" style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: '#0a84ff', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                      📷 место хранения
-                      <input type="file" accept="image/*,video/*" style={{ display: 'none' }}
-                        onChange={e => { const f = e.target.files && e.target.files[0]; if (f) uploadItemStorageMedia(it.id, f); e.target.value = ''; }} />
-                    </label>
-                  </div>
-                  {Array.isArray(it.storage_media) && it.storage_media.length > 0 && (
-                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      {it.storage_media.map((m, mi) => (
-                        <span key={mi} style={{ position: 'relative', display: 'inline-block' }}>
-                          {m.kind === 'video'
-                            ? <video src={m.url} controls style={{ width: 88, height: 66, objectFit: 'cover', borderRadius: 6, border: '1px solid #eee', background: '#000' }} />
-                            : <img src={m.url} alt="" onClick={() => window.open(m.url, '_blank')} style={{ width: 88, height: 66, objectFit: 'cover', borderRadius: 6, border: '1px solid #eee', cursor: 'pointer' }} />}
-                          <span onClick={() => deleteItemStorageMedia(it.id, m.url)} title="Удалить"
-                            style={{ position: 'absolute', top: -6, right: -6, width: 17, height: 17, borderRadius: '50%', background: '#e74c3c', color: '#fff', fontSize: 11, lineHeight: '17px', textAlign: 'center', cursor: 'pointer', fontWeight: 700 }}>✕</span>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
                 {itemEditId === it.id ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6, background: '#f8f8fb', borderRadius: 8, padding: 8 }}>
-                    {[['name_ru', 'Название (рус)'], ['name_original', 'Название (ориг.)'], ['name_es', 'Название (исп.)'], ['brand', 'Производитель'], ['mpn', 'Номер производителя'], ['category', 'Категория'], ['notes', 'Заметки']].map(([k, lbl]) => (
+                    {[['name_ru', 'Название (рус)'], ['name_original', 'Название (ориг.)'], ['brand', 'Производитель'], ['mpn', 'Номер производителя'], ['category', 'Категория'], ['notes', 'Заметки']].map(([k, lbl]) => (
                       <input key={k} type="text" placeholder={lbl} value={itemEditForm[k] ?? (it[k] || '')}
-                        onChange={e => setItemEditForm(prev => ({ ...prev, [k]: e.target.value }))}
-                        style={{ padding: '5px 8px', fontSize: 12, borderRadius: 5, border: '1px solid #ccc' }} />
-                    ))}
-                    {/* v186: место хранения */}
-                    <select value={itemEditForm.location_city ?? (it.location_city || '')}
-                      onChange={e => setItemEditForm(prev => ({ ...prev, location_city: e.target.value }))}
-                      style={{ padding: '5px 8px', fontSize: 12, borderRadius: 5, border: '1px solid #ccc', background: '#fff' }}>
-                      <option value="">📍 Где находится…</option>
-                      <option value="Дубай">🇦🇪 Дубай</option>
-                      <option value="Тенерифе">🇮🇨 Тенерифе</option>
-                    </select>
-                    {[['storage_place', 'Место (гараж, кладовая…) ▾', 'dl-item-place'], ['storage_rack', 'Стеллаж ▾', 'dl-item-rack'], ['storage_shelf', 'Полка ▾', 'dl-item-shelf']].map(([k, lbl, dl]) => (
-                      <input key={k} type="text" list={dl} placeholder={lbl} value={itemEditForm[k] ?? (it[k] || '')}
                         onChange={e => setItemEditForm(prev => ({ ...prev, [k]: e.target.value }))}
                         style={{ padding: '5px 8px', fontSize: 12, borderRadius: 5, border: '1px solid #ccc' }} />
                     ))}
@@ -11520,132 +11163,36 @@ ${bodyHtml}
                   </div>
                 ) : (
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    <button onClick={() => { setItemEditId(it.id); setItemEditForm({ name_ru: it.name_ru || '', name_original: it.name_original || '', name_es: it.name_es || '', brand: it.brand || '', mpn: it.mpn || '', category: it.category || '', notes: it.notes || '', location_city: it.location_city || '', storage_place: it.storage_place || '', storage_rack: it.storage_rack || '', storage_shelf: it.storage_shelf || '' }); }}
+                    <button onClick={() => { setItemEditId(it.id); setItemEditForm({ name_ru: it.name_ru || '', name_original: it.name_original || '', brand: it.brand || '', mpn: it.mpn || '', category: it.category || '', notes: it.notes || '' }); }}
                       style={{ border: '1px solid #ccc', background: '#fff', borderRadius: 6, padding: '5px 10px', fontSize: 12, cursor: 'pointer' }}>✏️ Правка</button>
-                    <span style={{ position: 'relative', display: 'inline-block' }}>
-                      <button onClick={() => setItemShopMenu(itemShopMenu === it.id ? null : it.id)}
-                        style={{ border: 'none', background: '#8e44ad', color: '#fff', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
-                        🛒 Найти в магазинах ▾
-                      </button>
-                      {itemShopMenu === it.id && (
-                        <div style={{ position: 'absolute', zIndex: 60, top: '100%', left: 0, marginTop: 4, background: '#fff', border: '1px solid #d0d0d5', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,.18)', minWidth: 210, overflow: 'hidden' }}>
-                          <div style={{ padding: '7px 12px 3px', fontSize: 10.5, color: '#8e8e93', fontWeight: 700 }}>ГДЕ ИСКАТЬ — ни одной галки = 🌐 все:</div>
-                          {ITEM_STORES.filter(x => x[0]).map(([sv, lbl]) => (
-                            <label key={sv} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px', fontSize: 13, cursor: 'pointer' }}>
-                              <input type="checkbox" style={{ width: 15, height: 15, cursor: 'pointer', margin: 0 }}
-                                checked={itemShopSel.includes(sv)}
-                                onChange={() => setItemShopSel(prev => prev.includes(sv) ? prev.filter(x => x !== sv) : [...prev, sv])} />
-                              {lbl}
-                            </label>
-                          ))}
-                          <button onClick={() => { setItemShopMenu(null); loadItemSimilar(it.id, itemShopSel); }}
-                            style={{ margin: 8, width: 'calc(100% - 16px)', border: 'none', background: '#8e44ad', color: '#fff', borderRadius: 7, padding: '7px 0', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
-                            🔍 Найти{itemShopSel.length ? ` (${itemShopSel.length})` : ' везде'}
-                          </button>
-                        </div>
-                      )}
-                    </span>
-                    <button onClick={() => loadItemVisual(it.id)} disabled={itemVisual[it.id]?.loading}
-                      title="Визуальный поиск: AI сравнивает фото предмета с фото товаров из каталогов"
-                      style={{ border: 'none', background: '#0a84ff', color: '#fff', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
-                      {itemVisual[it.id]?.loading ? '⏳ Сравниваю…' : '🖼 По фото'}
+                    <button onClick={() => loadItemSimilar(it.id)} disabled={itemSimilar[it.id]?.loading}
+                      style={{ border: 'none', background: '#8e44ad', color: '#fff', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                      {itemSimilar[it.id]?.loading ? '⏳ Ищу…' : '🛒 Найти в магазинах'}
                     </button>
                     <button onClick={() => deleteItem(it.id)}
                       style={{ marginLeft: 'auto', border: '1px solid #e74c3c', background: '#fff', color: '#c0392b', borderRadius: 6, padding: '5px 10px', fontSize: 12, cursor: 'pointer' }}>🗑</button>
                   </div>
                 )}
 
-                {itemVisual[it.id]?.error && <div style={{ fontSize: 12, color: '#c0392b' }}>Ошибка визуального поиска: {itemVisual[it.id].error}</div>}
-                {itemVisual[it.id]?.results && (
+                {itemSimilar[it.id]?.error && <div style={{ fontSize: 12, color: '#c0392b' }}>Ошибка поиска: {itemSimilar[it.id].error}</div>}
+                {itemSimilar[it.id]?.results && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    <div style={{ fontSize: 11, color: '#0a84ff', fontWeight: 700 }}>
-                      🖼 Визуальный поиск: сравнено фото — {itemVisual[it.id].candidates ?? '?'} кандидатов{itemVisual[it.id].model ? ` · ${itemVisual[it.id].model}` : ''}
-                    </div>
-                    {!itemVisual[it.id].results.length && <div style={{ fontSize: 12, color: '#6e6e73' }}>{itemVisual[it.id].message || 'Визуально похожих товаров не найдено.'}</div>}
-                    {itemVisual[it.id].results.map((r, i) => (
-                      <a key={i} href={r.url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none', color: 'inherit', background: '#f0f7ff', borderRadius: 8, padding: '5px 8px', fontSize: 12 }}>
+                    {!itemSimilar[it.id].results.length && <div style={{ fontSize: 12, color: '#6e6e73' }}>Похожих товаров в базах магазинов не найдено.</div>}
+                    {itemSimilar[it.id].results.map((r, i) => (
+                      <a key={i} href={r.url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none', color: 'inherit', background: '#f8f8fb', borderRadius: 8, padding: '5px 8px', fontSize: 12 }}>
                         {r.image && <img src={r.image} alt="" style={{ width: 34, height: 34, objectFit: 'contain', borderRadius: 5, background: '#fff', flexShrink: 0 }} />}
                         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.name}>{r.name}</span>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: r.visual_score >= 0.85 ? '#1e8449' : (r.visual_score >= 0.65 ? '#b26a00' : '#6e6e73'), background: '#fff', borderRadius: 6, padding: '1px 6px', flexShrink: 0 }}>🖼 {Math.round(r.visual_score * 100)}%{r.visual_verified !== false ? ' ✓×2' : ''}</span>
-                        {r.attr_checked && <span title={r.attr_notes || 'Атрибутная проверка пройдена'} style={{ fontSize: 11, flexShrink: 0, cursor: 'help' }}>🧬</span>}
-                        <span style={{ fontSize: 10, color: '#95a5a6', flexShrink: 0 }}>{String(r.site || '').replace('www.', '')}</span>
+                        <span style={{ fontSize: 10, color: '#95a5a6', flexShrink: 0 }}>{({ mpn: '🔢MPN', 'brand+name': '🏭+назв.', name: 'назв.', name_ru: 'назв.RU' })[r.match_by] || r.match_by} · {String(r.site || '').replace('www.', '')}</span>
                         <span style={{ fontWeight: 700, color: '#c0392b', flexShrink: 0 }}>{r.price != null ? `${r.price} €` : '—'}</span>
+                        {r.price_original != null && r.price_original > (r.price || 0) && <span style={{ textDecoration: 'line-through', color: '#95a5a6', flexShrink: 0 }}>{r.price_original} €</span>}
+                        {r.discount_pct != null && <span style={{ fontSize: 10, fontWeight: 700, color: '#1e8449', flexShrink: 0 }}>−{Math.round(r.discount_pct)}%</span>}
                       </a>
                     ))}
                   </div>
                 )}
-
               </div>
             ))}
           </div>
-          {/* v186: логарифмическая тайм-шкала справа — клик по месяцу фильтрует карточки */}
-          {itemMonths.length > 1 && (
-            <div style={{ width: 118, flexShrink: 0, position: 'sticky', top: 70, background: '#fff', border: '1px solid #e0e0e5', borderRadius: 10, padding: '8px 8px', maxHeight: '70vh', overflowY: 'auto' }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: '#8e8e93', marginBottom: 5, textAlign: 'center' }}>ШКАЛА</div>
-              {itemMonths.map(m => (
-                <div key={m.k} onClick={() => { setItemMonthFilter(itemMonthFilter === m.k ? null : m.k); setItemPage(1); }}
-                  title={`${m.k}: ${m.c} шт.`}
-                  style={{ cursor: 'pointer', marginBottom: 4, padding: '2px 4px', borderRadius: 6, background: itemMonthFilter === m.k ? '#e8f2ff' : 'transparent', border: itemMonthFilter === m.k ? '1px solid #0a84ff' : '1px solid transparent' }}>
-                  <div style={{ fontSize: 10, color: itemMonthFilter === m.k ? '#0a84ff' : '#3a3a3c', fontWeight: 700, whiteSpace: 'nowrap' }}>{m.k.slice(2)} <span style={{ color: '#8e8e93', fontWeight: 400 }}>{m.c}</span></div>
-                  <div style={{ height: 5, borderRadius: 3, background: '#f0f0f3', marginTop: 2 }}>
-                    <div style={{ height: 5, borderRadius: 3, width: m.w + '%', background: itemMonthFilter === m.k ? '#0a84ff' : '#7c3aed', transition: 'width .2s' }}></div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-          </div>
-
-          {/* v187: результаты поиска по магазинам — во всплывающем окне, а не в карточке */}
-          {itemSearchModal && (
-            <div onClick={() => setItemSearchModal(null)}
-              style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-              <div onClick={e => e.stopPropagation()}
-                style={{ background: '#fff', borderRadius: 14, width: '100%', maxWidth: 640, maxHeight: '85vh', display: 'flex', flexDirection: 'column', boxShadow: '0 18px 60px rgba(0,0,0,.3)', overflow: 'hidden' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid #eee' }}>
-                  {itemSearchModal.item.photo_url && <img src={itemSearchModal.item.photo_url} alt="" style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 8, border: '1px solid #eee', flexShrink: 0 }} />}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{itemSearchModal.item.name_ru || 'Предмет'}</div>
-                    <div style={{ fontSize: 11.5, color: '#8e44ad', fontWeight: 700 }}>
-                      🛒 {itemSearchModal.sites && itemSearchModal.sites.length
-                        ? itemSearchModal.sites.map(sv => (ITEM_STORES.find(x => x[0] === sv) || [sv, sv])[1]).join(' · ')
-                        : '🌐 Все магазины'}
-                    </div>
-                  </div>
-                  <button onClick={() => setItemSearchModal(null)} title="Закрыть"
-                    style={{ border: 'none', background: '#f2f2f5', borderRadius: 8, width: 32, height: 32, fontSize: 15, cursor: 'pointer', flexShrink: 0 }}>✕</button>
-                </div>
-                <div style={{ padding: '12px 16px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 5 }}>
-                  {itemSearchModal.loading && <div style={{ fontSize: 13, color: '#6e6e73', padding: 18, textAlign: 'center' }}>⏳ Ищу по базам магазинов…</div>}
-                  {itemSearchModal.error && <div style={{ fontSize: 13, color: '#c0392b' }}>Ошибка поиска: {itemSearchModal.error}</div>}
-                  {itemSearchModal.results && !itemSearchModal.results.length && (
-                    <div style={{ fontSize: 13, color: '#6e6e73', padding: 18, textAlign: 'center' }}>Похожих товаров не найдено{itemSearchModal.sites && itemSearchModal.sites.length ? ' в выбранных магазинах' : ''}.</div>
-                  )}
-                  {(itemSearchModal.results || []).map((r, i) => (
-                    <a key={i} href={r.url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', color: 'inherit', background: '#f8f8fb', borderRadius: 9, padding: '7px 10px', fontSize: 13 }}>
-                      {r.image && <img src={r.image} alt="" style={{ width: 42, height: 42, objectFit: 'contain', borderRadius: 6, background: '#fff', flexShrink: 0 }} />}
-                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.name}>{r.name}</span>
-                      <span style={{ fontSize: 10.5, color: '#95a5a6', flexShrink: 0 }}>{({ mpn: '🔢MPN', name_es: '🇪🇸назв.', 'brand+name': '🏭+назв.', name: 'назв.', name_ru: 'назв.RU', embed: '🧠семант.' })[r.match_by] || r.match_by} · {String(r.site || '').replace('www.', '')}</span>
-                      <span style={{ fontWeight: 700, color: '#c0392b', flexShrink: 0 }}>{r.price != null ? `${r.price} €` : '—'}</span>
-                      {r.price_original != null && r.price_original > (r.price || 0) && <span style={{ textDecoration: 'line-through', color: '#95a5a6', flexShrink: 0 }}>{r.price_original} €</span>}
-                      {r.discount_pct != null && <span style={{ fontSize: 11, fontWeight: 700, color: '#1e8449', flexShrink: 0 }}>−{Math.round(r.discount_pct)}%</span>}
-                      <span onClick={async (e) => { // v188 ход 6: «не тот товар» — запомнить и больше не показывать
-                          e.preventDefault(); e.stopPropagation();
-                          try {
-                            await fetch(`${API_URL}/api/items/${itemSearchModal.item.id}/feedback?token=${token}`, {
-                              method: 'POST', headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ product_url: r.url, verdict: 'bad' })
-                            });
-                            setItemSearchModal(prev => prev ? { ...prev, results: (prev.results || []).filter(x => x.url !== r.url) } : prev);
-                          } catch (err) { setItemError(err.message); }
-                        }} title="Не тот товар — запомню и уберу из выдачи"
-                        style={{ color: '#c0392b', fontSize: 13, fontWeight: 700, padding: '2px 5px', flexShrink: 0, cursor: 'pointer' }}>✕</span>
-                    </a>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       )}
 
