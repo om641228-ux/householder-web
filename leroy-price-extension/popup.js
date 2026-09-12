@@ -1,11 +1,12 @@
 const $ = (id) => document.getElementById(id);
-chrome.storage.local.get(['api', 'token', 'batch', 'mode', 'staleDays', 'schedHours', 'site'], (v) => {
+chrome.storage.local.get(['api', 'token', 'batch', 'mode', 'staleDays', 'schedHours', 'site', 'sites'], (v) => {
   if (v.api) $('api').value = v.api;
   if (v.token) $('token').value = v.token;
   if (v.batch) $('batch').value = v.batch;
   if (v.mode) $('mode').value = v.mode;
   if (v.staleDays) $('days').value = v.staleDays;
-  if (v.site) $('site').value = v.site;
+  const savedSites = Array.isArray(v.sites) ? v.sites : (v.site ? [v.site] : []);
+  document.querySelectorAll('.sitecb').forEach(cb => { cb.checked = savedSites.indexOf(cb.value) >= 0; });
   $('sched').value = String(v.schedHours || 0);
   // v1.17.1: показать последний статус фонового сбора (popup мог быть закрыт)
   chrome.storage.local.get(['lastProgress', 'progressAt'], (pv) => {
@@ -25,10 +26,13 @@ async function start(continuous) {
   const batch = Math.min(100, Math.max(1, parseInt($('batch').value, 10) || 20));
   const mode = $('mode').value;
   const staleDays = Math.min(90, Math.max(1, parseInt($('days').value, 10) || 7));
-  const site = $('site').value;
-  chrome.storage.local.set({ batch, mode, staleDays, site });
-  chrome.runtime.sendMessage({ type: 'start', api, token, batch, mode, staleDays, continuous, site });
-  $('st').textContent = continuous ? '⏳ Непрерывный сбор запущен…' : '⏳ Сбор пачки запущен…';
+  // v1.27.6: мультивыбор магазинов галками — каждый магазин = своя параллельная очередь; ни одной = все
+  const sites = [...document.querySelectorAll('.sitecb')].filter(cb => cb.checked).map(cb => cb.value);
+  chrome.storage.local.set({ batch, mode, staleDays, sites, site: sites.length === 1 ? sites[0] : '' });
+  const launch = sites.length ? sites : [''];
+  for (const site of launch) chrome.runtime.sendMessage({ type: 'start', api, token, batch, mode, staleDays, continuous, site });
+  const names = sites.length ? String(sites.length) + ' магазина(ов)' : 'ВСЕ магазины';
+  $('st').textContent = (continuous ? '⏳ Непрерывный сбор запущен: ' : '⏳ Сбор пачки запущен: ') + names + '…';
 }
 $('go').onclick = () => start(false);
 $('goall').onclick = () => start(true);

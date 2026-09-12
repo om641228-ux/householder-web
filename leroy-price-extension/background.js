@@ -1171,9 +1171,11 @@ chrome.runtime.onMessage.addListener((m) => {
 // v124: автозапуск по расписанию (работает, пока открыт Chrome)
 chrome.alarms.onAlarm.addListener(async (a) => {
   if (a.name !== 'lm-collect' || running) return;
-  const v = await chrome.storage.local.get(['api', 'token', 'batch', 'mode', 'staleDays', 'schedHours', 'site']);
+  const v = await chrome.storage.local.get(['api', 'token', 'batch', 'mode', 'staleDays', 'schedHours', 'site', 'sites']);
   if (!v.api || !v.token || !v.schedHours) return;
-  run(v.api, v.token, v.batch || 20, v.mode || 'pending', v.staleDays || 7, false, v.site || '');
+  // v1.27.6: расписание повторяет мультивыбор панели — каждая отмеченная галка = своя очередь
+  const sites = Array.isArray(v.sites) && v.sites.length ? v.sites : (v.site ? [v.site] : ['']);
+  for (const site of sites) run(v.api, v.token, v.batch || 20, v.mode || 'pending', v.staleDays || 7, false, site);
 });
 
 // при старте браузера — восстановить будильник, если был включён

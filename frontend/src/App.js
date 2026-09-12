@@ -5821,6 +5821,15 @@ function App() {
   const [itemFilesIdx, setItemFilesIdx] = useState(0);
   const [itemVisual, setItemVisual] = useState({});      // v181: id → {loading, results, error, model, candidates} — поиск «картинка по картинке»
   const [itemProgress, setItemProgress] = useState({ done: 0, total: 0, name: '' }); // v182: прогресс пакетного распознавания
+  // v186: сортировка/пагинация/выбор/пакетные действия/магазины/место хранения
+  const [itemSort, setItemSort] = useState('created_desc');
+  const [itemPerPage, setItemPerPage] = useState(24);
+  const [itemPage, setItemPage] = useState(1);
+  const [itemSel, setItemSel] = useState({});            // id → true
+  const [itemBulkBusy, setItemBulkBusy] = useState(false);
+  const [itemShopMenu, setItemShopMenu] = useState(null); // id карточки с открытым меню магазинов
+  const [itemMonthFilter, setItemMonthFilter] = useState(null); // 'YYYY-MM' из тайм-шкалы справа
+  const ITEM_STORES = [['', '🌐 Все магазины'], ['www.leroymerlin.es', '🗂 Leroy Merlin'], ['canarias.worten.es', '🛒 Worten'], ['canarias.mediamarkt.es', '🛒 MediaMarkt'], ['www.tutrebol.es', '🍀 TuTrebol'], ['tienda.mercadona.es', '🛒 Mercadona'], ['chafiras.com', '🔩 Chafiras']];
   const [chatUnread, setChatUnread] = useState({}); // v83: непрочитанные по каналам
   const [cashQ, setCashQ] = useState('');           // v85: поиск по движениям (Cash)
   const [cashVals, setCashVals] = useState({});     // v85: редактируемые значения строк {id: {counterparty, operation_date, amount}}
@@ -6235,13 +6244,13 @@ function App() {
   };
 
   // v178: похожие товары в базах магазинов
-  const loadItemSimilar = async (id) => {
+  const loadItemSimilar = async (id, site) => { // v186: site — искать в конкретном магазине
     setItemSimilar(prev => ({ ...prev, [id]: { loading: true } }));
     try {
-      const r = await fetch(`${API_URL}/api/items/${id}/similar?token=${token}&model=${encodeURIComponent(selectedModel)}`); // v183
+      const r = await fetch(`${API_URL}/api/items/${id}/similar?token=${token}&model=${encodeURIComponent(selectedModel)}${site ? '&site=' + encodeURIComponent(site) : ''}`); // v183+v186
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
-      setItemSimilar(prev => ({ ...prev, [id]: { loading: false, results: d.results || [] } }));
+      setItemSimilar(prev => ({ ...prev, [id]: { loading: false, results: d.results || [], site: site || '' } }));
     } catch (e) {
       setItemSimilar(prev => ({ ...prev, [id]: { loading: false, error: e.message } }));
     }
@@ -6266,6 +6275,135 @@ function App() {
     } catch (e) {
       setItemVisual(prev => ({ ...prev, [id]: { loading: false, error: e.message } }));
     }
+  };
+
+  // ===== v186: Tools — сортировка, выбор галками, пакетные действия, выгрузка в папку, место хранения =====
+  const itemsSorted = (() => {
+    const arr = itemsList.slice();
+    if (itemMonthFilter) arr.splice(0, arr.length, ...arr.filter(it => String(it.created_at || '').slice(0, 7) === itemMonthFilter));
+    switch (itemSort) {
+      case 'created_asc': arr.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))); break;
+      case 'name': arr.sort((a, b) => String(a.name_ru || '').localeCompare(String(b.name_ru || ''), 'ru')); break;
+      case 'brand': arr.sort((a, b) => String(a.brand || 'яя').localeCompare(String(b.brand || 'яя'), 'ru')); break;
+      case 'confidence': arr.sort((a, b) => (b.confidence ?? -1) - (a.confidence ?? -1)); break;
+      default: arr.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))); // created_desc = дата загрузки/распознавания
+    }
+    return arr;
+  })();
+  const itemPages = itemPerPage >= 100000 ? 1 : Math.max(1, Math.ceil(itemsSorted.length / itemPerPage));
+  const itemPageSafe = Math.min(itemPage, itemPages);
+  const itemsVisible = itemPerPage >= 100000 ? itemsSorted : itemsSorted.slice((itemPageSafe - 1) * itemPerPage, itemPageSafe * itemPerPage);
+  const itemsSelList = itemsSorted.filter(it => itemSel[it.id]);
+  const itemMonths = (() => { // тайм-шкала справа: месяцы + логарифмические бары
+    const m = new Map();
+    for (const it of itemsList) { const k = String(it.created_at || '').slice(0, 7); if (k.length === 7) m.set(k, (m.get(k) || 0) + 1); }
+    const rows = [...m.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+    const max = Math.max(1, ...rows.map(r => r[1]));
+    return rows.map(([k, c]) => ({ k, c, w: Math.round(Math.log(1 + c) / Math.log(1 + max) * 100) }));
+  })();
+
+  const toggleItemSel = (id) => setItemSel(prev => { const c = { ...prev }; if (c[id]) delete c[id]; else c[id] = true; return c; });
+  const itemsSelectVisible = () => {
+    const all = itemsVisible.every(it => itemSel[it.id]) && itemsVisible.length > 0;
+    setItemSel(prev => { const c = { ...prev }; for (const it of itemsVisible) { if (all) delete c[it.id]; else c[it.id] = true; } return c; });
+  };
+
+  const itemsBulkDelete = async () => {
+    if (!itemsSelList.length) return;
+    if (!window.confirm(`Удалить выбранные предметы (${itemsSelList.length} шт.)?`)) return;
+    setItemBulkBusy(true); setItemError('');
+    const errs = [];
+    for (const it of itemsSelList) {
+      try {
+        const r = await fetch(`${API_URL}/api/items/${it.id}?token=${token}`, { method: 'DELETE' });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
+        setItemsList(prev => prev.filter(x => x.id !== it.id));
+      } catch (e) { errs.push(`${it.name_ru || it.id}: ${e.message}`); }
+    }
+    if (errs.length) setItemError(errs.join(' · '));
+    setItemSel({}); setItemBulkBusy(false);
+  };
+
+  const itemsBulkRerecognize = async () => {
+    if (!itemsSelList.length || itemBulkBusy) return;
+    setItemBulkBusy(true); setItemError('');
+    setItemProgress({ done: 0, total: itemsSelList.length, name: '' });
+    const errs = [];
+    for (let i = 0; i < itemsSelList.length; i++) {
+      const it = itemsSelList[i];
+      setItemProgress({ done: i, total: itemsSelList.length, name: it.name_ru || '' });
+      try {
+        const r = await fetch(`${API_URL}/api/items/${it.id}/rerecognize?token=${token}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: selectedModel })
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
+        setItemsList(prev => prev.map(x => x.id === it.id ? d.item : x));
+      } catch (e) { errs.push(`${it.name_ru || it.id}: ${e.message}`); }
+    }
+    if (errs.length) setItemError(errs.join(' · '));
+    setItemProgress({ done: 0, total: 0, name: '' });
+    setItemBulkBusy(false);
+  };
+
+  // выгрузка выбранных в ВЫБРАННУЮ папку (File System Access API); fallback — скачивание файлов
+  const exportSelectedItems = async () => {
+    if (!itemsSelList.length || itemBulkBusy) return;
+    setItemBulkBusy(true); setItemError('');
+    try {
+      const safe = (t) => String(t || 'item').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 60);
+      const files = [];
+      for (const it of itemsSelList) {
+        const base = `${safe(it.name_ru)}_${String(it.id).slice(0, 8)}`;
+        if (it.photo_url) {
+          try {
+            const b = await (await fetch(it.photo_url)).blob();
+            files.push({ name: base + '.jpg', blob: b });
+          } catch (e) {}
+        }
+      }
+      const jsonBlob = new Blob([JSON.stringify(itemsSelList, null, 2)], { type: 'application/json' });
+      files.push({ name: 'items.json', blob: jsonBlob });
+      if (window.showDirectoryPicker) {
+        const dir = await window.showDirectoryPicker({ mode: 'readwrite' });
+        for (const f of files) {
+          const h = await dir.getFileHandle(f.name, { create: true });
+          const w = await h.createWritable();
+          await w.write(f.blob); await w.close();
+        }
+      } else {
+        for (const f of files) { // старый браузер — просто скачиваем всё
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(f.blob); a.download = f.name; a.click();
+          await new Promise(r => setTimeout(r, 250));
+        }
+      }
+    } catch (e) { if (e && e.name !== 'AbortError') setItemError(e.message); }
+    setItemBulkBusy(false);
+  };
+
+  const uploadItemStorageMedia = async (id, file) => {
+    if (!file) return;
+    setItemError('');
+    try {
+      const fd = new FormData();
+      fd.append('media', file);
+      const r = await fetch(`${API_URL}/api/items/${id}/storage-media?token=${token}`, { method: 'POST', body: fd });
+      const d = await r.json();
+      if (!r.ok) { if (d.missing) setItemsMissing(true); throw new Error(d.error || `Ошибка ${r.status}`); }
+      setItemsList(prev => prev.map(x => x.id === id ? d.item : x));
+    } catch (e) { setItemError(e.message); }
+  };
+  const deleteItemStorageMedia = async (id, url) => {
+    try {
+      const r = await fetch(`${API_URL}/api/items/${id}/storage-media?token=${token}`, {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url })
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
+      setItemsList(prev => prev.map(x => x.id === id ? d.item : x));
+    } catch (e) { setItemError(e.message); }
   };
 
   const gotoTab = (t) => {
@@ -11206,6 +11344,61 @@ ${bodyHtml}
             <button onClick={() => loadItems(itemsQuery)} style={{ padding: '7px 12px', fontSize: 13 }}>Найти</button>
             <button onClick={() => { setItemsQuery(''); loadItems(''); }} style={{ padding: '7px 12px', fontSize: 13 }}>🔄</button>
             <span style={{ fontSize: 12, color: '#6e6e73' }}>Всего: {itemsList.length}</span>
+            <select value={itemSort} onChange={e => { setItemSort(e.target.value); setItemPage(1); }} title="Сортировка"
+              style={{ padding: '6px 8px', fontSize: 12, borderRadius: 6, border: '1px solid #ccc' }}>
+              <option value="created_desc">По дате распознавания ↓</option>
+              <option value="created_asc">По дате распознавания ↑</option>
+              <option value="name">По названию</option>
+              <option value="brand">По бренду</option>
+              <option value="confidence">По % распознавания</option>
+            </select>
+            <select value={itemPerPage} onChange={e => { setItemPerPage(Number(e.target.value)); setItemPage(1); }} title="Карточек на странице"
+              style={{ padding: '6px 8px', fontSize: 12, borderRadius: 6, border: '1px solid #ccc' }}>
+              <option value={12}>12 на стр.</option>
+              <option value={24}>24 на стр.</option>
+              <option value={48}>48 на стр.</option>
+              <option value={96}>96 на стр.</option>
+              <option value={100000}>Все</option>
+            </select>
+            {itemMonthFilter && (
+              <button onClick={() => { setItemMonthFilter(null); setItemPage(1); }} title="Сбросить фильтр тайм-шкалы"
+                style={{ padding: '6px 10px', fontSize: 12, borderRadius: 6, border: '1px solid #0a84ff', background: '#e8f2ff', color: '#0a84ff', cursor: 'pointer', fontWeight: 700 }}>
+                📅 {itemMonthFilter} ✕
+              </button>
+            )}
+          </div>
+
+          {/* v186: панель выбора — галки + пакетные действия */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12, background: '#fff', border: '1px solid #e0e0e5', borderRadius: 10, padding: '8px 14px' }}>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13, cursor: 'pointer', userSelect: 'none' }}>
+              <input type="checkbox" style={{ width: 16, height: 16, cursor: 'pointer' }}
+                checked={itemsVisible.length > 0 && itemsVisible.every(it => itemSel[it.id])}
+                onChange={itemsSelectVisible} />
+              Выбрать все на странице
+            </label>
+            <span style={{ fontSize: 12, color: '#6e6e73' }}>Выбрано: <b>{itemsSelList.length}</b></span>
+            <button onClick={itemsBulkDelete} disabled={!itemsSelList.length || itemBulkBusy}
+              style={{ border: '1px solid #e74c3c', background: itemsSelList.length ? '#fff' : '#f5f5f7', color: '#c0392b', borderRadius: 7, padding: '6px 12px', fontSize: 12, fontWeight: 700, cursor: itemsSelList.length ? 'pointer' : 'default' }}>
+              🗑 Удалить
+            </button>
+            <button onClick={itemsBulkRerecognize} disabled={!itemsSelList.length || itemBulkBusy}
+              title="Заново распознать выбранные предметы выбранной в шапке моделью"
+              style={{ border: 'none', background: itemsSelList.length ? '#0a84ff' : '#b9c8d5', color: '#fff', borderRadius: 7, padding: '6px 12px', fontSize: 12, fontWeight: 700, cursor: itemsSelList.length ? 'pointer' : 'default' }}>
+              🔄 Перераспознать
+            </button>
+            <button onClick={exportSelectedItems} disabled={!itemsSelList.length || itemBulkBusy}
+              title="Сохранить фото + items.json выбранных предметов в папку на диске (браузер спросит папку)"
+              style={{ border: 'none', background: itemsSelList.length ? '#1e8449' : '#b9c8bd', color: '#fff', borderRadius: 7, padding: '6px 12px', fontSize: 12, fontWeight: 700, cursor: itemsSelList.length ? 'pointer' : 'default' }}>
+              💾 Выгрузить в папку
+            </button>
+            {itemBulkBusy && <span style={{ fontSize: 12, color: '#6e6e73' }}>⏳ выполняю…</span>}
+            {itemPages > 1 && (
+              <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                <button onClick={() => setItemPage(p => Math.max(1, p - 1))} disabled={itemPageSafe <= 1} style={{ padding: '4px 10px', fontSize: 12 }}>◀</button>
+                <span style={{ color: '#6e6e73' }}>{itemPageSafe} / {itemPages}</span>
+                <button onClick={() => setItemPage(p => Math.min(itemPages, p + 1))} disabled={itemPageSafe >= itemPages} style={{ padding: '4px 10px', fontSize: 12 }}>▶</button>
+              </span>
+            )}
           </div>
 
           {itemsMissing && (
@@ -11223,10 +11416,13 @@ ${bodyHtml}
             </div>
           )}
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
-            {itemsList.map(it => (
-              <div key={it.id} style={{ background: '#fff', border: '1px solid #e0e0e5', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12, flex: 1, minWidth: 0 }}>
+            {itemsVisible.map(it => (
+              <div key={it.id} style={{ background: '#fff', border: itemSel[it.id] ? '2px solid #0071e3' : '1px solid #e0e0e5', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <div style={{ display: 'flex', gap: 10 }}>
+                  <input type="checkbox" checked={!!itemSel[it.id]} onChange={() => toggleItemSel(it.id)} title="Выбрать"
+                    style={{ width: 18, height: 18, cursor: 'pointer', flexShrink: 0, marginTop: 2 }} />
                   {it.photo_url
                     ? <img src={it.photo_url} alt="" style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 8, border: '1px solid #eee', flexShrink: 0, cursor: 'pointer' }} onClick={() => window.open(it.photo_url, '_blank')} />
                     : <div style={{ width: 72, height: 72, borderRadius: 8, background: '#f2f2f5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, flexShrink: 0 }}>📦</div>}
@@ -11254,9 +11450,52 @@ ${bodyHtml}
                   {new Date(it.created_at).toLocaleString('ru-RU')}{it.ai_model ? ` · ${it.ai_model}` : ''}
                 </div>
 
+                {/* v186: место хранения + фото/видео места */}
+                <div style={{ background: '#f8f8fb', borderRadius: 8, padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: 12 }}>
+                    <span style={{ color: '#3a3a3c' }}>
+                      📍 {it.location_city ? <b>{it.location_city === 'Дубай' ? '🇦🇪 Дубай' : it.location_city === 'Тенерифе' ? '🇮🇨 Тенерифе' : it.location_city}</b> : <span style={{ color: '#b0b0b5' }}>где находится — не указано</span>}
+                      {it.storage_place ? ` · ${it.storage_place}` : ''}
+                      {it.storage_rack ? ` · стеллаж ${it.storage_rack}` : ''}
+                      {it.storage_shelf ? ` · полка ${it.storage_shelf}` : ''}
+                    </span>
+                    <label title="Добавить фото или видео места хранения" style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: '#0a84ff', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                      📷 место хранения
+                      <input type="file" accept="image/*,video/*" style={{ display: 'none' }}
+                        onChange={e => { const f = e.target.files && e.target.files[0]; if (f) uploadItemStorageMedia(it.id, f); e.target.value = ''; }} />
+                    </label>
+                  </div>
+                  {Array.isArray(it.storage_media) && it.storage_media.length > 0 && (
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {it.storage_media.map((m, mi) => (
+                        <span key={mi} style={{ position: 'relative', display: 'inline-block' }}>
+                          {m.kind === 'video'
+                            ? <video src={m.url} controls style={{ width: 88, height: 66, objectFit: 'cover', borderRadius: 6, border: '1px solid #eee', background: '#000' }} />
+                            : <img src={m.url} alt="" onClick={() => window.open(m.url, '_blank')} style={{ width: 88, height: 66, objectFit: 'cover', borderRadius: 6, border: '1px solid #eee', cursor: 'pointer' }} />}
+                          <span onClick={() => deleteItemStorageMedia(it.id, m.url)} title="Удалить"
+                            style={{ position: 'absolute', top: -6, right: -6, width: 17, height: 17, borderRadius: '50%', background: '#e74c3c', color: '#fff', fontSize: 11, lineHeight: '17px', textAlign: 'center', cursor: 'pointer', fontWeight: 700 }}>✕</span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 {itemEditId === it.id ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6, background: '#f8f8fb', borderRadius: 8, padding: 8 }}>
                     {[['name_ru', 'Название (рус)'], ['name_original', 'Название (ориг.)'], ['name_es', 'Название (исп.)'], ['brand', 'Производитель'], ['mpn', 'Номер производителя'], ['category', 'Категория'], ['notes', 'Заметки']].map(([k, lbl]) => (
+                      <input key={k} type="text" placeholder={lbl} value={itemEditForm[k] ?? (it[k] || '')}
+                        onChange={e => setItemEditForm(prev => ({ ...prev, [k]: e.target.value }))}
+                        style={{ padding: '5px 8px', fontSize: 12, borderRadius: 5, border: '1px solid #ccc' }} />
+                    ))}
+                    {/* v186: место хранения */}
+                    <select value={itemEditForm.location_city ?? (it.location_city || '')}
+                      onChange={e => setItemEditForm(prev => ({ ...prev, location_city: e.target.value }))}
+                      style={{ padding: '5px 8px', fontSize: 12, borderRadius: 5, border: '1px solid #ccc', background: '#fff' }}>
+                      <option value="">📍 Где находится…</option>
+                      <option value="Дубай">🇦🇪 Дубай</option>
+                      <option value="Тенерифе">🇮🇨 Тенерифе</option>
+                    </select>
+                    {[['storage_place', 'Место (гараж, кладовая…)'], ['storage_rack', 'Стеллаж'], ['storage_shelf', 'Полка']].map(([k, lbl]) => (
                       <input key={k} type="text" placeholder={lbl} value={itemEditForm[k] ?? (it[k] || '')}
                         onChange={e => setItemEditForm(prev => ({ ...prev, [k]: e.target.value }))}
                         style={{ padding: '5px 8px', fontSize: 12, borderRadius: 5, border: '1px solid #ccc' }} />
@@ -11268,12 +11507,26 @@ ${bodyHtml}
                   </div>
                 ) : (
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    <button onClick={() => { setItemEditId(it.id); setItemEditForm({ name_ru: it.name_ru || '', name_original: it.name_original || '', name_es: it.name_es || '', brand: it.brand || '', mpn: it.mpn || '', category: it.category || '', notes: it.notes || '' }); }}
+                    <button onClick={() => { setItemEditId(it.id); setItemEditForm({ name_ru: it.name_ru || '', name_original: it.name_original || '', name_es: it.name_es || '', brand: it.brand || '', mpn: it.mpn || '', category: it.category || '', notes: it.notes || '', location_city: it.location_city || '', storage_place: it.storage_place || '', storage_rack: it.storage_rack || '', storage_shelf: it.storage_shelf || '' }); }}
                       style={{ border: '1px solid #ccc', background: '#fff', borderRadius: 6, padding: '5px 10px', fontSize: 12, cursor: 'pointer' }}>✏️ Правка</button>
-                    <button onClick={() => loadItemSimilar(it.id)} disabled={itemSimilar[it.id]?.loading}
-                      style={{ border: 'none', background: '#8e44ad', color: '#fff', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
-                      {itemSimilar[it.id]?.loading ? '⏳ Ищу…' : '🛒 Найти в магазинах'}
-                    </button>
+                    <span style={{ position: 'relative', display: 'inline-block' }}>
+                      <button onClick={() => setItemShopMenu(itemShopMenu === it.id ? null : it.id)} disabled={itemSimilar[it.id]?.loading}
+                        style={{ border: 'none', background: '#8e44ad', color: '#fff', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                        {itemSimilar[it.id]?.loading ? '⏳ Ищу…' : '🛒 Найти в магазинах ▾'}
+                      </button>
+                      {itemShopMenu === it.id && (
+                        <div style={{ position: 'absolute', zIndex: 60, top: '100%', left: 0, marginTop: 4, background: '#fff', border: '1px solid #d0d0d5', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,.18)', minWidth: 190, overflow: 'hidden' }}>
+                          {ITEM_STORES.map(([sv, lbl]) => (
+                            <div key={sv || 'all'} onClick={() => { setItemShopMenu(null); loadItemSimilar(it.id, sv || undefined); }}
+                              style={{ padding: '8px 12px', fontSize: 13, cursor: 'pointer', borderBottom: '1px solid #f0f0f3' }}
+                              onMouseEnter={e => e.currentTarget.style.background = '#f4ecfb'}
+                              onMouseLeave={e => e.currentTarget.style.background = '#fff'}>
+                              {lbl}{itemSimilar[it.id]?.site === sv && itemSimilar[it.id]?.results ? ' ✓' : ''}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </span>
                     <button onClick={() => loadItemVisual(it.id)} disabled={itemVisual[it.id]?.loading}
                       title="Визуальный поиск: AI сравнивает фото предмета с фото товаров из каталогов"
                       style={{ border: 'none', background: '#0a84ff', color: '#fff', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
@@ -11306,7 +11559,10 @@ ${bodyHtml}
                 {itemSimilar[it.id]?.error && <div style={{ fontSize: 12, color: '#c0392b' }}>Ошибка поиска: {itemSimilar[it.id].error}</div>}
                 {itemSimilar[it.id]?.results && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    {!itemSimilar[it.id].results.length && <div style={{ fontSize: 12, color: '#6e6e73' }}>Похожих товаров в базах магазинов не найдено.</div>}
+                    <div style={{ fontSize: 11, color: '#8e44ad', fontWeight: 700 }}>
+                      🛒 Поиск: {(ITEM_STORES.find(x => x[0] === (itemSimilar[it.id].site || '')) || ITEM_STORES[0])[1]}
+                    </div>
+                    {!itemSimilar[it.id].results.length && <div style={{ fontSize: 12, color: '#6e6e73' }}>Похожих товаров в этом магазине не найдено.</div>}
                     {itemSimilar[it.id].results.map((r, i) => (
                       <a key={i} href={r.url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none', color: 'inherit', background: '#f8f8fb', borderRadius: 8, padding: '5px 8px', fontSize: 12 }}>
                         {r.image && <img src={r.image} alt="" style={{ width: 34, height: 34, objectFit: 'contain', borderRadius: 5, background: '#fff', flexShrink: 0 }} />}
@@ -11322,6 +11578,23 @@ ${bodyHtml}
 
               </div>
             ))}
+          </div>
+          {/* v186: логарифмическая тайм-шкала справа — клик по месяцу фильтрует карточки */}
+          {itemMonths.length > 1 && (
+            <div style={{ width: 118, flexShrink: 0, position: 'sticky', top: 70, background: '#fff', border: '1px solid #e0e0e5', borderRadius: 10, padding: '8px 8px', maxHeight: '70vh', overflowY: 'auto' }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#8e8e93', marginBottom: 5, textAlign: 'center' }}>ШКАЛА</div>
+              {itemMonths.map(m => (
+                <div key={m.k} onClick={() => { setItemMonthFilter(itemMonthFilter === m.k ? null : m.k); setItemPage(1); }}
+                  title={`${m.k}: ${m.c} шт.`}
+                  style={{ cursor: 'pointer', marginBottom: 4, padding: '2px 4px', borderRadius: 6, background: itemMonthFilter === m.k ? '#e8f2ff' : 'transparent', border: itemMonthFilter === m.k ? '1px solid #0a84ff' : '1px solid transparent' }}>
+                  <div style={{ fontSize: 10, color: itemMonthFilter === m.k ? '#0a84ff' : '#3a3a3c', fontWeight: 700, whiteSpace: 'nowrap' }}>{m.k.slice(2)} <span style={{ color: '#8e8e93', fontWeight: 400 }}>{m.c}</span></div>
+                  <div style={{ height: 5, borderRadius: 3, background: '#f0f0f3', marginTop: 2 }}>
+                    <div style={{ height: 5, borderRadius: 3, width: m.w + '%', background: itemMonthFilter === m.k ? '#0a84ff' : '#7c3aed', transition: 'width .2s' }}></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
           </div>
         </div>
       )}

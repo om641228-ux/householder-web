@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v184-2026-09-11', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v186-2026-09-12', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -6946,7 +6946,7 @@ app.put('/api/items/:id', requireAuth, async (req, res) => {
   try {
     const b = req.body || {};
     const patch = {};
-    for (const k of ['name_ru', 'name_original', 'name_es', 'category', 'brand', 'mpn', 'notes', 'receipt_id']) {
+    for (const k of ['name_ru', 'name_original', 'name_es', 'category', 'brand', 'mpn', 'notes', 'receipt_id', 'location_city', 'storage_place', 'storage_rack', 'storage_shelf']) { // v186: +место хранения
       if (k in b) patch[k] = b[k] === '' ? null : b[k];
     }
     for (const k of ['confidence', 'brand_confidence', 'mpn_confidence']) {
@@ -6976,6 +6976,83 @@ app.delete('/api/items/:id', requireAuth, requireRole('admin', 'manager'), async
   }
 });
 
+// v186: перераспознать предмет по сохранённому фото (для массового «Перераспознать»)
+app.post('/api/items/:id/rerecognize', requireAuth, async (req, res) => {
+  try {
+    const { data: item, error: e1 } = await supabaseAdmin.from('home_items').select('*').eq('id', req.params.id).maybeSingle();
+    if (e1) throw e1;
+    if (!item) return res.status(404).json({ error: 'Предмет не найден' });
+    if (!item.photo_url) return res.status(400).json({ error: 'У предмета нет фото — нечего распознавать' });
+    const { buffer, mime } = await downloadImageBuffer(item.photo_url);
+    const wantModel = String((req.body && req.body.model) || 'auto');
+    let rec;
+    if (wantModel && wantModel !== 'auto' && wantModel !== 'local-mac-ocr') {
+      try { rec = await recognizeItemPreferred(buffer, mime, wantModel); }
+      catch (e) { console.warn(`items rerecognize: ${wantModel} failed: ${e.message} — fallback`); rec = await recognizeItemWithFallback(buffer, mime); }
+    } else {
+      rec = await recognizeItemWithFallback(buffer, mime);
+    }
+    const patch = {
+      name_ru: rec.data.name_ru, name_original: rec.data.name_original, name_es: rec.data.name_es,
+      category: rec.data.category, confidence: rec.data.confidence,
+      brand: rec.data.brand, brand_confidence: rec.data.brand_confidence,
+      mpn: rec.data.mpn, mpn_confidence: rec.data.mpn_confidence,
+      ai_model: rec.model, ai_raw: rec.data, edited: false
+    };
+    let { data, error } = await supabaseAdmin.from('home_items').update(patch).eq('id', req.params.id).select('*').single();
+    if (error && /name_es/i.test(error.message || '')) { delete patch.name_es; ({ data, error } = await supabaseAdmin.from('home_items').update(patch).eq('id', req.params.id).select('*').single()); }
+    if (error) throw error;
+    logActivity(req.user, 'Предметы', 'перераспознан предмет', `${data.name_ru || '?'}`, req);
+    res.json({ item: data });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// v186: фото/видео МЕСТА ХРАНЕНИЯ предмета (storage_media jsonb: [{url, kind, at}])
+app.post('/api/items/:id/storage-media', requireAuth, upload.single('media'), async (req, res) => {
+  try {
+    if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'Нет файла (поле media)' });
+    const mime = req.file.mimetype || 'image/jpeg';
+    const kind = /^video\//.test(mime) ? 'video' : 'photo';
+    const { data: item, error: e1 } = await supabaseAdmin.from('home_items').select('id,storage_media').eq('id', req.params.id).maybeSingle();
+    if (e1) {
+      if (/storage_media/i.test(e1.message || '')) return res.status(500).json({ error: 'Нужна миграция: выполните supabase-migration-v186-home-items-storage.sql', missing: true });
+      throw e1;
+    }
+    if (!item) return res.status(404).json({ error: 'Предмет не найден' });
+    const ext = kind === 'video' ? (mime.split('/')[1] || 'mp4') : 'jpg';
+    const url = await uploadToStorage(req.file.buffer, `storage_${Date.now()}.${ext}`, 'items/' + (req.user.id || 'anon'), mime);
+    const arr = Array.isArray(item.storage_media) ? item.storage_media.slice() : [];
+    arr.push({ url, kind, at: new Date().toISOString() });
+    const { data, error } = await supabaseAdmin.from('home_items').update({ storage_media: arr }).eq('id', req.params.id).select('*').single();
+    if (error) {
+      if (/storage_media/i.test(error.message || '')) return res.status(500).json({ error: 'Нужна миграция: выполните supabase-migration-v186-home-items-storage.sql', missing: true });
+      throw error;
+    }
+    logActivity(req.user, 'Предметы', 'фото/видео места хранения', req.params.id, req);
+    res.json({ item: data });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/items/:id/storage-media', requireAuth, async (req, res) => {
+  try {
+    const url = String((req.body && req.body.url) || req.query.url || '');
+    if (!url) return res.status(400).json({ error: 'Нет url' });
+    const { data: item, error: e1 } = await supabaseAdmin.from('home_items').select('id,storage_media').eq('id', req.params.id).maybeSingle();
+    if (e1) throw e1;
+    if (!item) return res.status(404).json({ error: 'Предмет не найден' });
+    const arr = (Array.isArray(item.storage_media) ? item.storage_media : []).filter(m => m && m.url !== url);
+    const { data, error } = await supabaseAdmin.from('home_items').update({ storage_media: arr }).eq('id', req.params.id).select('*').single();
+    if (error) throw error;
+    res.json({ item: data });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/items/:id/similar — похожие товары в базах магазинов (parse_products):
 // 1) точное совпадение MPN; 2) v180: слова ИСПАНСКОГО названия name_es (+бренд, скоринг); 3) слова русского названия
 app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
@@ -6984,6 +7061,8 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
     if (e1) throw e1;
     if (!item) return res.status(404).json({ error: 'Предмет не найден' });
     const COLS = 'site,url,name,image,article,brand,mpn,price,price_original,discount_pct,last_seen';
+    const SITE = String(req.query.site || '').trim(); // v186: искать только в выбранном магазине
+    const bySite = (q) => SITE ? q.eq('site', SITE) : q;
     const seen = new Set();
     const out = [];
     const push = (rows, matchBy) => {
@@ -6997,7 +7076,7 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
     // 1) MPN — самый точный матч (v183: только осмысленный номер — ≥4 символов, есть буква, уверенность ≥ 0.7; «350» и т.п. пропускаем)
     const mpnOk = item.mpn && String(item.mpn).length >= 4 && /[a-z]/i.test(String(item.mpn)) && (item.mpn_confidence == null || Number(item.mpn_confidence) >= 0.7);
     if (mpnOk) {
-      const { data } = await supabaseAdmin.from('parse_products').select(COLS)
+      const { data } = await bySite(supabaseAdmin.from('parse_products').select(COLS))
         .ilike('mpn', item.mpn.replace(/[%_]/g, ' ')).order('price', { ascending: true, nullsFirst: false }).limit(30);
       push(data, 'mpn');
     }
@@ -7013,7 +7092,7 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
     const searchWords = [...new Set([...esWords, ...latWords])];
     if (searchWords.length) {
       const orExpr = searchWords.map(w => `name.ilike.%${w.replace(/[%_]/g, ' ')}%`).join(',');
-      const { data: cand } = await supabaseAdmin.from('parse_products').select(COLS)
+      const { data: cand } = await bySite(supabaseAdmin.from('parse_products').select(COLS))
         .or(orExpr).limit(120);
       const brandLc = String(item.brand || '').toLowerCase();
       const scored = (cand || []).map(r => {
@@ -7038,7 +7117,7 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
     if (out.length < 10 && item.name_ru) {
       const ruWords = item.name_ru.toLowerCase().split(/\s+/).filter(w => w.length >= 4).slice(0, 2);
       if (ruWords.length) {
-        let q = supabaseAdmin.from('parse_products').select(COLS);
+        let q = bySite(supabaseAdmin.from('parse_products').select(COLS));
         for (const w of ruWords) q = q.ilike('name', '%' + w.replace(/[%_]/g, ' ') + '%');
         const { data } = await q.order('price', { ascending: true, nullsFirst: false }).limit(20);
         push(data, 'name_ru');

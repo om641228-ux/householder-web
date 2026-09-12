@@ -15,15 +15,15 @@
   <button id="save">💾 Сохранить</button>
   <hr>
   <b>💶 Сбор цен</b>
-  <select id="site">
-    <option value="">🌐 Все магазины</option>
-    <option value="www.leroymerlin.es">🗂 Leroy Merlin</option>
-    <option value="canarias.worten.es">🛒 Worten Canarias</option>
-    <option value="canarias.mediamarkt.es">🛒 MediaMarkt Canarias</option>
-    <option value="www.tutrebol.es">🍀 TuTrebol</option>
-    <option value="tienda.mercadona.es">🛒 Mercadona</option>
-    <option value="chafiras.com">🔩 Chafiras</option>
-  </select>
+  <div id="sites" style="border:1px solid #d0d0d5;border-radius:7px;padding:6px 8px;margin:3px 0 4px;">
+    <label style="display:flex;align-items:center;gap:7px;padding:2px 0;cursor:pointer"><input type="checkbox" class="sitecb" value="www.leroymerlin.es" style="width:auto;margin:0"> 🗂 Leroy Merlin</label>
+    <label style="display:flex;align-items:center;gap:7px;padding:2px 0;cursor:pointer"><input type="checkbox" class="sitecb" value="canarias.worten.es" style="width:auto;margin:0"> 🛒 Worten Canarias</label>
+    <label style="display:flex;align-items:center;gap:7px;padding:2px 0;cursor:pointer"><input type="checkbox" class="sitecb" value="canarias.mediamarkt.es" style="width:auto;margin:0"> 🛒 MediaMarkt Canarias</label>
+    <label style="display:flex;align-items:center;gap:7px;padding:2px 0;cursor:pointer"><input type="checkbox" class="sitecb" value="www.tutrebol.es" style="width:auto;margin:0"> 🍀 TuTrebol</label>
+    <label style="display:flex;align-items:center;gap:7px;padding:2px 0;cursor:pointer"><input type="checkbox" class="sitecb" value="tienda.mercadona.es" style="width:auto;margin:0"> 🛒 Mercadona</label>
+    <label style="display:flex;align-items:center;gap:7px;padding:2px 0;cursor:pointer"><input type="checkbox" class="sitecb" value="chafiras.com" style="width:auto;margin:0"> 🔩 Chafiras</label>
+  </div>
+  <div style="font-size:10.5px;color:#8e8e93;margin:0 0 6px;">галки — как в Excel: отметьте 1, 2, любые; ни одной = 🌐 все магазины</div>
   <select id="mode">
     <option value="pending">🆕 Товары без цены</option>
     <option value="stale">🔄 Обновить старые цены</option>
