@@ -2245,7 +2245,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v194 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v195 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -6454,7 +6454,9 @@ function App() {
   });
   const runEmbedCatalog = async (loop) => {
     if (embedRun && embedRun.running) return;
-    setEmbedRun({ running: true, log: [] });
+    const base = (itemLab && typeof itemLab.catalog_embedded === 'number') ? itemLab.catalog_embedded : 0; // v195: прогресс/ETA
+    const totalCat = (itemLab && typeof itemLab.catalog_total === 'number') ? itemLab.catalog_total : 0;
+    setEmbedRun({ running: true, log: [], base, total: totalCat, done: 0, t0: Date.now() });
     let total = 0;
     try {
       for (let i = 0; i < (loop ? 25 : 1); i++) {
@@ -6464,7 +6466,7 @@ function App() {
         const d = await r.json();
         if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
         total += d.done || 0;
-        setEmbedRun(prev => ({ running: loop && d.left && d.left !== 'каталог покрыт' && (d.failed || 0) < 10, log: [...(prev ? prev.log : []), `порция ${i + 1}: +${d.done} (ошибок ${d.failed}) [${d.engine || '?'}] — ${d.left}`] }));
+        setEmbedRun(prev => ({ ...(prev||{}), running: loop && d.left && d.left !== 'каталог покрыт' && (d.failed || 0) < 10, done: total, log: [...(prev ? prev.log : []), `порция ${i + 1}: +${d.done} (ошибок ${d.failed}) [${d.engine || '?'}] — ${d.left}`] }));
         if ((d.failed || 0) >= 10 && !(d.done || 0)) { // все упали — дальше смысла нет
           setEmbedRun(prev => ({ running: false, log: [...(prev ? prev.log : []), '⛔ все порции падают — проверьте адрес локального AI / режим движка'] }));
           break;
@@ -9963,7 +9965,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-12 · v194 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-12 · v195 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9976,7 +9978,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-12 · v194</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-12 · v195</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
@@ -11679,6 +11681,34 @@ ${bodyHtml}
                     ▶▶ До покрытия каталога
                   </button>
                 </div>
+                {embedRun && embedRun.total > 0 && (() => { // v195: прогресс-бар с процентами, скоростью и ETA
+                  const doneAll = (embedRun.base || 0) + (embedRun.done || 0);
+                  const pct = embedRun.total ? Math.min(100, doneAll / embedRun.total * 100) : 0;
+                  const elapsed = (Date.now() - (embedRun.t0 || Date.now())) / 1000;
+                  const speed = elapsed > 3 && embedRun.done ? embedRun.done / elapsed : 0; // тов/сек
+                  const left = embedRun.total - doneAll;
+                  const etaSec = speed > 0 ? left / speed : 0;
+                  const fmtDur = (sec) => {
+                    if (!isFinite(sec) || sec <= 0) return '…';
+                    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), sc = Math.round(sec % 60);
+                    return h ? `${h} ч ${m} мин` : m ? `${m} мин ${sc} с` : `${sc} с`;
+                  };
+                  return (
+                    <div style={{ marginTop: 8, background: '#f8f6fc', border: '1px solid #e0d4f5', borderRadius: 8, padding: '8px 12px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#3a3a3c', marginBottom: 4, flexWrap: 'wrap', gap: 6 }}>
+                        <span><b>{doneAll.toLocaleString('ru-RU')}</b> из <b>{embedRun.total.toLocaleString('ru-RU')}</b> — <b>{pct.toFixed(1)}%</b>{embedRun.running ? ' ⏳' : ''}</span>
+                        <span style={{ color: '#8e8e93' }}>
+                          {speed > 0 && <>скорость: <b>{speed.toFixed(1)}</b> тов/с · </>}
+                          осталось: <b>{embedRun.running ? fmtDur(etaSec) : fmtDur(left / (speed || 1))}</b>
+                        </span>
+                      </div>
+                      <div style={{ height: 10, borderRadius: 5, background: '#eeeef2', overflow: 'hidden' }}>
+                        <div style={{ height: 10, borderRadius: 5, width: pct + '%', background: embedRun.running ? 'linear-gradient(90deg,#7c3aed,#a855f7)' : '#1e8449', transition: 'width .5s' }}></div>
+                      </div>
+                      {embedRun.running && <div style={{ fontSize: 11, color: '#8e8e93', marginTop: 3 }}>Прогон идёт порциями по 200 — не закрывайте вкладку. Кнопку «▶▶» можно нажимать повторно для следующих 25 порций.</div>}
+                    </div>
+                  );
+                })()}
                 {embedRun && embedRun.log && embedRun.log.length > 0 && (
                   <div style={{ fontSize: 11.5, fontFamily: 'monospace', background: '#1d1d1f', color: '#a5f3a5', borderRadius: 8, padding: '8px 10px', marginTop: 8, maxHeight: 130, overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
                     {embedRun.log.join('\n')}
