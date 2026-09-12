@@ -1,4 +1,4 @@
-// redeploy-trigger: 2026-09-09-v171-browser-sitemap
+// redeploy-trigger: 2026-09-10-v175-ext-watchdog
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import './App.css';
 import './apple-theme.css'; // Apple-стиль (apple.com): пилюльные кнопки, мягкие карточки, #0071e3 — v31
@@ -443,10 +443,10 @@ const FALLBACK_MODELS = [
   { name: 'ocrspace-engine1', displayName: 'OCR.space Engine 1 (Basic)', provider: 'OCR.space' },
   { name: 'ocrspace-engine2', displayName: 'OCR.space Engine 2 (Advanced)', provider: 'OCR.space' },
   { name: 'ocrspace-engine3', displayName: 'OCR.space Engine 3 (Handwriting)', provider: 'OCR.space' },
+  { name: 'gemini-3.5-flash', displayName: 'Gemini 3.5 Flash', provider: 'Gemini' },
+  { name: 'gemini-3.1-pro-preview', displayName: 'Gemini 3.1 Pro Preview ★ vision', provider: 'Gemini' },
   { name: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash', provider: 'Gemini' },
   { name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro', provider: 'Gemini' },
-  { name: 'gemini-3.5-flash', displayName: 'Gemini 3.5 Flash', provider: 'Gemini' },
-  { name: 'gemini-3.1-pro-preview', displayName: 'Gemini 3.1 Pro Preview', provider: 'Gemini' },
   { name: 'gemini-3.1-flash-lite', displayName: 'Gemini 3.1 Flash Lite', provider: 'Gemini' },
   { name: 'gemini-3-flash-preview', displayName: 'Gemini 3 Flash Preview', provider: 'Gemini' },
   { name: 'gemini-3-pro-image', displayName: 'Gemini 3 Pro Image', provider: 'Gemini' },
@@ -473,13 +473,10 @@ const FALLBACK_MODELS = [
   { name: 'openrouter-google/gemma-4-26b-a4b-it:free', displayName: 'Gemma 4 26B (Free)', provider: 'OpenRouter' },
   { name: 'openrouter-google/gemma-4-31b-it:free', displayName: 'Gemma 4 31B (Free)', provider: 'OpenRouter' },
   { name: 'openrouter-nvidia/nemotron-nano-12b-v2-vl:free', displayName: 'Nemotron Nano 12B v2 VL — документы/OCR (Free)', provider: 'OpenRouter' },
-  { name: 'openrouter-qwen/qwen2.5-vl-32b-instruct:free', displayName: 'Qwen 2.5 VL 32B (Free)', provider: 'OpenRouter' },
-  { name: 'openrouter-qwen/qwen2.5-vl-72b-instruct:free', displayName: 'Qwen 2.5 VL 72B (Free)', provider: 'OpenRouter' },
-  { name: 'github-openai/gpt-4o-mini', displayName: 'GPT-4o mini (GitHub)', provider: 'GitHub' },
-  { name: 'github-openai/gpt-4o', displayName: 'GPT-4o (GitHub)', provider: 'GitHub' },
-  { name: 'github-meta/Llama-4-Scout-17B-16E-Instruct', displayName: 'Llama 4 Scout (GitHub)', provider: 'GitHub' },
+  { name: 'openrouter-nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', displayName: 'Nemotron 3 Nano Omni VL (Free)', provider: 'OpenRouter' },
+  { name: 'openrouter-openrouter/free', displayName: 'OpenRouter Free (автовыбор)', provider: 'OpenRouter' },
   { name: 'mistral-mistral-small-latest', displayName: 'Mistral Small Latest', provider: 'Mistral' },
-  { name: 'mistral-pixtral-12b-2409', displayName: 'Pixtral 12B (legacy)', provider: 'Mistral' },
+  { name: 'mistral-pixtral-large-latest', displayName: 'Pixtral Large (124B)', provider: 'Mistral' },
   { name: 'kimi-kimi-k3', displayName: 'Kimi K3', provider: 'Kimi' },
   { name: 'kimi-kimi-k2.6', displayName: 'Kimi K2.6', provider: 'Kimi' },
   { name: 'kimi-moonshot-v1-8k-vision-preview', displayName: 'Kimi Vision 8K (legacy)', provider: 'Kimi' },
@@ -935,7 +932,7 @@ const fmtDocDate = (iso) => iso ? iso.split('-').reverse().join('.') : '';
 // v74: вкладка «👥 Пользователи» (только admin) — управление доступом: роли, разделы документов, объекты
 function UsersTab({ token, objectsList }) {
   const SEC_LABELS = { home: '🏠 Дома', auto: '🚗 Авто', personal: '👤 Личное' };
-  const TAB_LABELS = { upload: '📤 Загрузка', list: '🧾 Чеки/документы', links: '🔗 Связи', parse: '🌐 Парсинг', analysis: '📊 Анализ', taxes: '🧾 Налоги', cash: '💵 Cash', crm: '🤝 CRM', docs: '📁 Документы', compare: '⚖️ Цены', chat: '💬 Чат', log: '📋 Журнал' };
+  const TAB_LABELS = { upload: '📤 Загрузка', list: '🧾 Чеки/документы', tools: '🔧 Tools', links: '🔗 Связи', parse: '🌐 Парсинг', analysis: '📊 Анализ', taxes: '🧾 Налоги', cash: '💵 Cash', crm: '🤝 CRM', docs: '📁 Документы', compare: '⚖️ Цены', chat: '💬 Чат', log: '📋 Журнал' };
   const [list, setList] = useState([]);
   const [err, setErr] = useState('');
   const [edit, setEdit] = useState(null); // {id,name,password,role,sections[],objects[],disabled,isNew}
@@ -2248,7 +2245,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v171 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v193 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2719,6 +2716,7 @@ function ParseTab({ token, isMobileView, canRun }) {
   const CAT_STORES = {
     lm:         { title: 'Leroy Merlin',        emoji: '🗂', host: 'www.leroymerlin.es',    sitemaps: [1, 2, 3, 4].map(n => `https://www.leroymerlin.es/sitemap-productos${n}.xml`) },
     mediamarkt: { title: 'MediaMarkt Canarias', emoji: '🛒', host: 'canarias.mediamarkt.es', sitemaps: ['https://canarias.mediamarkt.es/sitemap.xml'] },
+    chafiras: { title: 'Chafiras', emoji: '🔩', host: 'chafiras.com', sitemaps: ['https://chafiras.com/1_es_0_sitemap.xml'] },
     worten:     { title: 'Worten Canarias',     emoji: '🛒', host: 'canarias.worten.es',     sitemaps: ['https://www.worten.pt/_/sitemap/sitemap_index_wortenic.xml'] }, // v165: /sitemap.xml отдаёт 403; рабочий индекс из robots.txt
     mercadona:  { title: 'Mercadona',           emoji: '🛒', host: 'tienda.mercadona.es',    sitemaps: [] }, // у Mercadona нет sitemap — каталог через их API
     tutrebol:   { title: 'TuTrebol',            emoji: '🍀', host: 'www.tutrebol.es',        sitemaps: ['https://www.tutrebol.es/sitemap_index_shop_1.xml'] }, // v170: PrestaShop, sitemap в .xml.gz — backend распакует
@@ -2890,6 +2888,18 @@ function ParseTab({ token, isMobileView, canRun }) {
       }
     }
   };
+  // v173: синхронизировать ВСЕ файлы индекса подряд (MediaMarkt — 30+ файлов по одному слишком долго кликать)
+  const syncAllSubs = async (subs) => {
+    if (!subs || !subs.length) return;
+    if (!confirm(`Синхронизировать ВСЕ ${subs.length} файлов индекса по очереди? Это займёт ~${Math.max(2, Math.round(subs.length * 1.5))} мин — окно не закрывайте.`)) return;
+    let okN = 0, errN = 0;
+    for (const su of subs) {
+      try { await syncSitemap(su); okN++; } catch (e) { errN++; }
+      await new Promise(r => setTimeout(r, 1500)); // вежливая пауза между файлами
+    }
+    alert(`✅ Готово: файлов ${okN}${errN ? `, ошибок ${errN}` : ''}.`);
+    catSearch({ page: 0 }); loadCatStats();
+  };
   const catSearch = async (over = {}) => {
     const q = over.q !== undefined ? over.q : catQ;
     const pr = over.priced !== undefined ? over.priced : catPriced;
@@ -2963,7 +2973,10 @@ function ParseTab({ token, isMobileView, canRun }) {
     try {
       const r = await extSend({ cmd: 'status' });
       if (r && r.ok) {
-        setExtStatus({ running: !!r.running, last: r.last || '' });
+        // v173: показываем прогресс ТОЛЬКО текущего магазина (очереди разных сайтов идут параллельно)
+        const stag = CAT_STORE.host.replace(/^(www\.|canarias\.|tienda\.)/, '').replace(/\..*$/, '').toUpperCase();
+        const mine = r.lastBySite && r.lastBySite[stag];
+        setExtStatus({ running: !!r.running, last: mine ? mine.text : '', at: mine ? mine.at : 0, other: (!mine && r.last) ? r.last : '', queues: r.queues || 0 });
         if (r.running) setTimeout(pollExtStatus, 4000);
         else setTimeout(loadCatLogs, 1500); // парсинг кончился — обновить журнал
       }
@@ -3200,9 +3213,11 @@ function ParseTab({ token, isMobileView, canRun }) {
               <span style={{ color: '#1e7e34' }}>💶 С ценой: <b>{catStats.withPrice}</b></span>
               <span style={{ color: catStats.remaining > 0 ? '#d70015' : '#1e7e34' }}>⏳ Осталось спарсить: <b>{catStats.remaining}</b></span>
               {catStats.lastPriceAt && <span style={{ color: '#8e8e93' }}>🕐 последняя цена: {new Date(catStats.lastPriceAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>}
-              {extStatus && extStatus.running
-                ? <span style={{ color: '#8a6d3b', background: '#fff8e6', borderRadius: 8, padding: '1px 8px', border: '1px solid #ffd699' }}>🧩 Расширение работает: {extStatus.last || 'сбор цен…'}</span>
-                : <span style={{ color: '#8e8e93' }}>🧩 расширение не активно{extStatus && extStatus.last ? ` · последнее: ${extStatus.last}` : ''}</span>}
+              {extStatus && extStatus.running && extStatus.last
+                ? <span style={{ color: '#8a6d3b', background: '#fff8e6', borderRadius: 8, padding: '1px 8px', border: '1px solid #ffd699' }}>🧩 Расширение работает: {extStatus.last}{extStatus.at ? ` · обновлено ${new Date(extStatus.at).toLocaleTimeString('ru-RU')} (${Math.round((Date.now() - extStatus.at) / 1000)} с назад)` : ''}{extStatus.at && Date.now() - extStatus.at > 120000 ? ' — ⚠️ зависло? нажмите ■ в панели и запустите снова' : ''}</span>
+                : extStatus && extStatus.running
+                  ? <span style={{ color: '#8e8e93' }}>🧩 расширение собирает другой магазин{extStatus.queues ? ` (активных очередей: ${extStatus.queues})` : ''} — по «{CAT_STORE.title}» сбор не идёт{extStatus.other ? ` · сейчас: ${extStatus.other}` : ''}</span>
+                  : <span style={{ color: '#8e8e93' }}>🧩 расширение не активно{extStatus && extStatus.last ? ` · последнее по этому магазину: ${extStatus.last}` : ''}</span>}
             </div>
             <div title={`Спарсено с ценой ${catStats.withPrice} из ${catStats.total} (${catStats.total ? Math.round(catStats.withPrice / catStats.total * 100) : 0}%)`} style={{ marginTop: 6, height: 8, borderRadius: 6, background: '#e5e5ea', overflow: 'hidden' }}>
               <div style={{ height: '100%', width: (catStats.total ? Math.min(100, Math.round(catStats.withPrice / catStats.total * 100)) : 0) + '%', background: 'linear-gradient(90deg,#34c759,#0071e3)', borderRadius: 6, transition: 'width .5s' }} />
@@ -3283,6 +3298,21 @@ function ParseTab({ token, isMobileView, canRun }) {
             </button>
           ))}
           <span style={{ fontSize: 11, color: '#8e8e93' }}>каждый файл — тысячи товаров, синк 1–2 мин; если это индекс — откроются ссылки на файлы, синхронизируйте их по одному</span>
+          {canRun && (
+            <button onClick={async () => { // v172: бренд и № производителя из названий (MediaMarkt и др.)
+                try {
+                  const r = await fetch(`${API_URL}/api/parse/catalog/derive-brand-mpn?token=${token}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ site: CAT_STORE.host }) });
+                  const j = await r.json();
+                  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+                  alert(`✅ Проверено названий: ${j.scanned}, заполнено бренд/№: ${j.updated}`);
+                  catSearch();
+                } catch (e) { alert('❌ ' + e.message); }
+              }}
+              title="Заполнить «Производитель» и «№ производителя» из названий товаров (правила: «… — Бренд Номер, …» и «Бренд Модель, …»)"
+              style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #7c3aed', background: '#f5f3ff', color: '#7c3aed', fontSize: 12, cursor: 'pointer' }}>
+              🏷 Бренд/№ из названий
+            </button>
+          )}
         </div>
         )}
         {Object.entries(catSync).map(([u, st]) => (
@@ -3290,6 +3320,10 @@ function ParseTab({ token, isMobileView, canRun }) {
             <div style={{ fontSize: 12, marginTop: 4, color: st.status === 'err' ? '#e74c3c' : st.status === 'ok' ? '#1e7e34' : '#8e8e93' }}>{u.split('/').pop()}: {st.msg}</div>
             {st.subs && (
               <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 4 }}>
+                <button onClick={() => syncAllSubs(st.subs)}
+                  style={{ fontSize: 11, padding: '2px 10px', borderRadius: 999, border: '1px solid #7c3aed', background: '#f5f3ff', color: '#7c3aed', cursor: 'pointer', fontWeight: 700 }}>
+                  ⬇⬇ Синхронизировать ВСЕ ({st.subs.length})
+                </button>
                 {st.subs.map(su => (
                   <button key={su} onClick={() => syncSitemap(su)} disabled={catSync[su] && catSync[su].status === 'run'}
                     style={{ fontSize: 11, padding: '2px 9px', borderRadius: 999, border: '1px solid #d0d0d5', background: catSync[su] && catSync[su].status === 'ok' ? '#e8f8ef' : '#f5f5f7', cursor: 'pointer' }}>
@@ -3455,11 +3489,11 @@ function ParseTab({ token, isMobileView, canRun }) {
                     {catTh('brand', 'Производитель', { whiteSpace: 'nowrap' })}
                     {catTh('mpn', '№ производителя', { whiteSpace: 'nowrap' })}
                     {catTh('category', 'Раздел')}
+                    {catTh('date', 'Дата загрузки', { whiteSpace: 'nowrap' })}
                     {catTh('price', 'Цена', { whiteSpace: 'nowrap' })}
                     {catTh('price_original', 'Без скидки', { whiteSpace: 'nowrap' })}
                     {catTh('discount_pct', '−%', { whiteSpace: 'nowrap' })}
                     {catTh('discount_abs', '−€', { whiteSpace: 'nowrap' })}
-                    {catTh('date', 'Дата', { whiteSpace: 'nowrap' })}
                     {canRun && <th style={{ padding: '6px 8px', position: 'sticky', right: 0, background: '#fff', boxShadow: '-4px 0 6px rgba(0,0,0,.05)' }}></th>}
                   </tr>
                 </thead>
@@ -3489,6 +3523,10 @@ function ParseTab({ token, isMobileView, canRun }) {
                           ? <span onClick={() => pickCat(p.category)} style={{ cursor: 'pointer' }}>{p.category.split(' > ').slice(-2).join(' › ')}</span>
                           : '—'}
                       </td>
+                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontSize: 11, color: '#8e8e93' }}
+                        title={p.last_seen ? ('Дата парсинга: ' + new Date(p.last_seen).toLocaleString('ru-RU') + (p.first_seen ? ' · впервые: ' + new Date(p.first_seen).toLocaleString('ru-RU') : '') + (p.price_at ? ' · цена: ' + new Date(p.price_at).toLocaleString('ru-RU') : '')) : ''}>
+                        {p.last_seen ? new Date(p.last_seen).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }) + ' ' + new Date(p.last_seen).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                      </td>
                       <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
                         {p.price != null ? <b>{p.price} {p.currency || '€'}</b> : (p.price_estimate != null ? <span style={{ color: '#e67e22' }}>≈ {p.price_estimate} {p.currency || '€'} <span style={{ fontSize: 10 }}>(оценка)</span></span> : <span style={{ color: '#c7c7cc' }}>—</span>)}
                         {p.price_source === 'ai-search' && <span title="Цена найдена AI через веб-поиск (подтверждена по артикулу)" style={{ fontSize: 10, color: '#7c3aed', marginLeft: 4 }}>🤖</span>}
@@ -3504,10 +3542,6 @@ function ParseTab({ token, isMobileView, canRun }) {
                       </td>
                       <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontSize: 11 }} title="Скидка в евро (например, при покупке онлайн)">
                         {p.discount_abs != null ? <b style={{ color: '#d70015' }}>−{p.discount_abs} {p.currency || '€'}</b> : <span style={{ color: '#e5e5ea' }}>—</span>}
-                      </td>
-                      <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', fontSize: 11, color: '#8e8e93' }}
-                        title={p.last_seen ? ('Дата парсинга: ' + new Date(p.last_seen).toLocaleString('ru-RU') + (p.first_seen ? ' · впервые: ' + new Date(p.first_seen).toLocaleString('ru-RU') : '') + (p.price_at ? ' · цена: ' + new Date(p.price_at).toLocaleString('ru-RU') : '')) : ''}>
-                        {p.last_seen ? new Date(p.last_seen).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }) + ' ' + new Date(p.last_seen).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '—'}
                       </td>
                       {canRun && (
                         <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', position: 'sticky', right: 0, background: '#fff', boxShadow: '-4px 0 6px rgba(0,0,0,.05)' }}>
@@ -5772,6 +5806,40 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [authChecking, setAuthChecking] = useState(true);
   const [activeTab, setActiveTab] = useState('upload');
+  const [appMode, setAppMode] = useState('checks'); // v177: верхний переключатель проекта — '🧾 Чеки' (весь текущий проект) | '📦 Предметы' (клон проекта под предметы)
+  // v178: модуль «Предметы» — фото → AI (название + % схожести, бренд, MPN) → home_items → поиск по магазинам
+  const [itemsList, setItemsList] = useState([]);
+  const [itemsLoading, setItemsLoading] = useState(false);
+  const [itemsMissing, setItemsMissing] = useState(false); // таблица home_items ещё не создана
+  const [itemBusy, setItemBusy] = useState(false);         // идёт распознавание фото
+  const [itemError, setItemError] = useState('');
+  const [itemsQuery, setItemsQuery] = useState('');
+  const [itemEditId, setItemEditId] = useState(null);
+  const [itemEditForm, setItemEditForm] = useState({});
+  const [itemFiles, setItemFiles] = useState([]);          // v180: выбранные фото во вкладке «Загрузка» предметов
+  const [itemFilesIdx, setItemFilesIdx] = useState(0);
+  const [itemVisual, setItemVisual] = useState({});      // v181: id → {loading, results, error, model, candidates} — поиск «картинка по картинке»
+  const [itemProgress, setItemProgress] = useState({ done: 0, total: 0, name: '' }); // v182: прогресс пакетного распознавания
+  // v186: сортировка/пагинация/выбор/пакетные действия/магазины/место хранения
+  const [itemSort, setItemSort] = useState('created_desc');
+  const [itemPerPage, setItemPerPage] = useState(24);
+  const [itemPage, setItemPage] = useState(1);
+  const [itemSel, setItemSel] = useState({});            // id → true
+  const [itemBulkBusy, setItemBulkBusy] = useState(false);
+  const [itemShopMenu, setItemShopMenu] = useState(null); // id карточки с открытым меню магазинов
+  const [itemMonthFilter, setItemMonthFilter] = useState(null); // 'YYYY-MM' из тайм-шкалы справа
+  const [itemShopSel, setItemShopSel] = useState([]);           // v187: отмеченные магазины в меню карточки ([] = все)
+  const [itemSearchModal, setItemSearchModal] = useState(null); // v187: {item, loading, results, error, sites} — результаты во всплывающем окне
+  const [itemDebugModal, setItemDebugModal] = useState(null);   // v189: глобальная AI-отладка
+  const [itemLab, setItemLab] = useState(null);                 // v190: вкладка 🔬 — данные дашборда
+  // v191: журнал поисков (вкладка 🔎) — сюда падают результаты «Найти в магазинах» и «По фото»
+  const [journalDebugOpen, setJournalDebugOpen] = useState(true); // v193: панель AI-отладки в журнале
+  const [itemSearchLog, setItemSearchLog] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('itemSearchLog') || '[]'); } catch (e) { return []; }
+  });
+  const [itemLabLoading, setItemLabLoading] = useState(false);
+  const [embedRun, setEmbedRun] = useState(null);               // v190: прогон эмбеддингов {running, log: []}
+  const ITEM_STORES = [['', '🌐 Все магазины'], ['www.leroymerlin.es', '🗂 Leroy Merlin'], ['canarias.worten.es', '🛒 Worten'], ['canarias.mediamarkt.es', '🛒 MediaMarkt'], ['www.tutrebol.es', '🍀 TuTrebol'], ['tienda.mercadona.es', '🛒 Mercadona'], ['chafiras.com', '🔩 Chafiras']];
   const [chatUnread, setChatUnread] = useState({}); // v83: непрочитанные по каналам
   const [cashQ, setCashQ] = useState('');           // v85: поиск по движениям (Cash)
   const [cashVals, setCashVals] = useState({});     // v85: редактируемые значения строк {id: {counterparty, operation_date, amount}}
@@ -6098,9 +6166,315 @@ function App() {
   }, [isMobileView]);
 
   // v106.2: свайп влево/вправо по экрану — переход между разделами (порядок нижней навигации + «Ещё»)
+  // v178: загрузка списка предметов
+  const loadItems = async (q) => {
+    setItemsLoading(true); setItemError('');
+    try {
+      const r = await fetch(`${API_URL}/api/items?token=${token}${q ? '&q=' + encodeURIComponent(q) : ''}`);
+      const d = await r.json();
+      if (d.missing) setItemsMissing(true);
+      setItemsList(d.items || []);
+    } catch (e) { setItemError(e.message); }
+    setItemsLoading(false);
+  };
+
+  // v178: фото предмета → распознавание + запись в home_items
+  const recognizeItemPhoto = async (file) => {
+    if (!file) return;
+    setItemBusy(true); setItemError('');
+    try {
+      const fd = new FormData();
+      fd.append('image', file);
+      fd.append('model', selectedModel); // v182: распознавать ВЫБРАННОЙ моделью
+      const r = await fetch(`${API_URL}/api/items/recognize?token=${token}`, { method: 'POST', body: fd });
+      const d = await r.json();
+      if (!r.ok) {
+        if (d.missing) setItemsMissing(true);
+        throw new Error(d.error || `Ошибка ${r.status}`);
+      }
+      setItemsList(prev => [d.item, ...prev]);
+    } catch (e) { setItemError(e.message); }
+    setItemBusy(false);
+  };
+
+  // v180: вкладка «Загрузка» предметов — выбор/дроп фото + пакетное распознавание (как у чеков)
+  const addItemFiles = (files) => {
+    const imgs = Array.from(files || []).filter(f => /^image\//.test(f.type));
+    if (!imgs.length) return;
+    setItemFiles(prev => [...prev, ...imgs]);
+    setItemError('');
+  };
+  const itemDrop = (e) => { e.preventDefault(); addItemFiles(e.dataTransfer.files); };
+  const recognizeItemFiles = async () => {
+    if (!itemFiles.length || itemBusy) return;
+    setItemBusy(true); setItemError('');
+    const files = itemFiles.slice();
+    setItemProgress({ done: 0, total: files.length, name: '' });
+    const errs = [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      setItemProgress({ done: i, total: files.length, name: f.name });
+      try {
+        const fd = new FormData();
+        fd.append('image', f);
+        fd.append('model', selectedModel); // v182: распознавать ВЫБРАННОЙ моделью
+        const r = await fetch(`${API_URL}/api/items/recognize?token=${token}`, { method: 'POST', body: fd });
+        const d = await r.json();
+        if (!r.ok) { if (d.missing) setItemsMissing(true); throw new Error(d.error || `Ошибка ${r.status}`); }
+        setItemsList(prev => [d.item, ...prev]);
+      } catch (e) { errs.push(`${f.name}: ${e.message}`); }
+    }
+    if (errs.length) setItemError(errs.join(' · '));
+    setItemProgress({ done: 0, total: 0, name: '' });
+    setItemFiles([]); setItemFilesIdx(0);
+    setItemBusy(false);
+  };
+
+  // v178: ручная правка предмета
+  const saveItemEdit = async (id) => {
+    try {
+      const r = await fetch(`${API_URL}/api/items/${id}?token=${token}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(itemEditForm)
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
+      setItemsList(prev => prev.map(it => it.id === id ? d.item : it));
+      setItemEditId(null);
+    } catch (e) { setItemError(e.message); }
+  };
+
+  const deleteItem = async (id) => {
+    if (!window.confirm('Удалить предмет из базы?')) return;
+    try {
+      const r = await fetch(`${API_URL}/api/items/${id}?token=${token}`, { method: 'DELETE' });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
+      setItemsList(prev => prev.filter(it => it.id !== id));
+    } catch (e) { setItemError(e.message); }
+  };
+
+  // v178: похожие товары в базах магазинов
+  // v191: журнал поисков — каждая проверка = запись; нажатие переводит на вкладку 🔎
+  const pushSearchLog = (entry) => {
+    const id = 'log' + Date.now() + Math.random().toString(36).slice(2, 6);
+    setItemSearchLog(prev => [{ id, ts: Date.now(), open: true, ...entry }, ...prev].slice(0, 50));
+    return id;
+  };
+  const updateSearchLog = (logId, patch) => setItemSearchLog(prev => prev.map(e => e.id === logId ? { ...e, ...patch } : e));
+
+  const loadItemSimilar = async (id, sites) => { // v187: sites — массив ([]=все); v191: результат — в журнал 🔎
+    const it = itemsList.find(x => x.id === id) || { id };
+    const arr = (Array.isArray(sites) ? sites : []).filter(Boolean);
+    setActiveTab('journal');
+    const logId = pushSearchLog({ kind: 'text', item: { id: it.id, name_ru: it.name_ru, photo_url: it.photo_url }, sites: arr, model: selectedModel, loading: true });
+    try {
+      const r = await fetch(`${API_URL}/api/items/${id}/similar?token=${token}&model=${encodeURIComponent(selectedModel)}${arr.length ? '&sites=' + encodeURIComponent(arr.join(',')) : ''}`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
+      updateSearchLog(logId, { loading: false, results: d.results || [], debug: d.debug || null });
+    } catch (e) {
+      updateSearchLog(logId, { loading: false, error: e.message });
+    }
+  };
+
+  const itemConfBadge = (c) => {
+    if (c == null) return null;
+    const pct = Math.round(Number(c) * 100);
+    const color = pct >= 90 ? '#1e8449' : (pct >= 70 ? '#b26a00' : '#c0392b');
+    const bg = pct >= 90 ? '#e8f8ee' : (pct >= 70 ? '#fff4e0' : '#fdecea');
+    return <span style={{ fontSize: 11, fontWeight: 700, color, background: bg, borderRadius: 6, padding: '1px 7px', whiteSpace: 'nowrap' }}>{pct}%</span>;
+  };
+
+  // v181: визуальный поиск — фото предмета против фото кандидатов из каталогов
+  const loadItemVisual = async (id) => { // v191: результат — в журнал 🔎
+    const it = itemsList.find(x => x.id === id) || { id };
+    setActiveTab('journal');
+    const logId = pushSearchLog({ kind: 'visual', item: { id: it.id, name_ru: it.name_ru, photo_url: it.photo_url }, model: selectedModel, loading: true });
+    try {
+      const r = await fetch(`${API_URL}/api/items/${id}/similar-visual?token=${token}&model=${encodeURIComponent(selectedModel)}`); // v183: выбранная модель
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
+      updateSearchLog(logId, { loading: false, results: d.results || [], modelUsed: d.model, candidates: d.candidates, message: d.message });
+    } catch (e) {
+      updateSearchLog(logId, { loading: false, error: e.message });
+    }
+  };
+
+  // ===== v186: Tools — сортировка, выбор галками, пакетные действия, выгрузка в папку, место хранения =====
+  const itemsSorted = (() => {
+    const arr = itemsList.slice();
+    if (itemMonthFilter) arr.splice(0, arr.length, ...arr.filter(it => String(it.created_at || '').slice(0, 7) === itemMonthFilter));
+    switch (itemSort) {
+      case 'created_asc': arr.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))); break;
+      case 'name': arr.sort((a, b) => String(a.name_ru || '').localeCompare(String(b.name_ru || ''), 'ru')); break;
+      case 'brand': arr.sort((a, b) => String(a.brand || 'яя').localeCompare(String(b.brand || 'яя'), 'ru')); break;
+      case 'confidence': arr.sort((a, b) => (b.confidence ?? -1) - (a.confidence ?? -1)); break;
+      default: arr.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))); // created_desc = дата загрузки/распознавания
+    }
+    return arr;
+  })();
+  const itemPages = itemPerPage >= 100000 ? 1 : Math.max(1, Math.ceil(itemsSorted.length / itemPerPage));
+  const itemPageSafe = Math.min(itemPage, itemPages);
+  const itemsVisible = itemPerPage >= 100000 ? itemsSorted : itemsSorted.slice((itemPageSafe - 1) * itemPerPage, itemPageSafe * itemPerPage);
+  const itemsSelList = itemsSorted.filter(it => itemSel[it.id]);
+  const itemMonths = (() => { // тайм-шкала справа: месяцы + логарифмические бары
+    const m = new Map();
+    for (const it of itemsList) { const k = String(it.created_at || '').slice(0, 7); if (k.length === 7) m.set(k, (m.get(k) || 0) + 1); }
+    const rows = [...m.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+    const max = Math.max(1, ...rows.map(r => r[1]));
+    return rows.map(([k, c]) => ({ k, c, w: Math.round(Math.log(1 + c) / Math.log(1 + max) * 100) }));
+  })();
+
+  const itemStorageHints = (() => { // v187: уже заполненные места/стеллажи/полки — для выпадающих подсказок
+    const pick = (k) => [...new Set(itemsList.map(it => it[k]).filter(v => v != null && String(v).trim() !== '').map(String))].slice(0, 50);
+    return { place: pick('storage_place'), rack: pick('storage_rack'), shelf: pick('storage_shelf') };
+  })();
+  // v191: журнал поисков — сохранение между перезагрузками
+  useEffect(() => {
+    try { localStorage.setItem('itemSearchLog', JSON.stringify(itemSearchLog.filter(e => !e.loading).slice(0, 30))); } catch (e) {}
+  }, [itemSearchLog]);
+  const toggleItemSel = (id) => setItemSel(prev => { const c = { ...prev }; if (c[id]) delete c[id]; else c[id] = true; return c; });
+  const itemsSelectVisible = () => {
+    const all = itemsVisible.every(it => itemSel[it.id]) && itemsVisible.length > 0;
+    setItemSel(prev => { const c = { ...prev }; for (const it of itemsVisible) { if (all) delete c[it.id]; else c[it.id] = true; } return c; });
+  };
+
+  const itemsBulkDelete = async () => {
+    if (!itemsSelList.length) return;
+    if (!window.confirm(`Удалить выбранные предметы (${itemsSelList.length} шт.)?`)) return;
+    setItemBulkBusy(true); setItemError('');
+    const errs = [];
+    for (const it of itemsSelList) {
+      try {
+        const r = await fetch(`${API_URL}/api/items/${it.id}?token=${token}`, { method: 'DELETE' });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
+        setItemsList(prev => prev.filter(x => x.id !== it.id));
+      } catch (e) { errs.push(`${it.name_ru || it.id}: ${e.message}`); }
+    }
+    if (errs.length) setItemError(errs.join(' · '));
+    setItemSel({}); setItemBulkBusy(false);
+  };
+
+  const itemsBulkRerecognize = async () => {
+    if (!itemsSelList.length || itemBulkBusy) return;
+    setItemBulkBusy(true); setItemError('');
+    setItemProgress({ done: 0, total: itemsSelList.length, name: '' });
+    const errs = [];
+    for (let i = 0; i < itemsSelList.length; i++) {
+      const it = itemsSelList[i];
+      setItemProgress({ done: i, total: itemsSelList.length, name: it.name_ru || '' });
+      try {
+        const r = await fetch(`${API_URL}/api/items/${it.id}/rerecognize?token=${token}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: selectedModel })
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
+        setItemsList(prev => prev.map(x => x.id === it.id ? d.item : x));
+      } catch (e) { errs.push(`${it.name_ru || it.id}: ${e.message}`); }
+    }
+    if (errs.length) setItemError(errs.join(' · '));
+    setItemProgress({ done: 0, total: 0, name: '' });
+    setItemBulkBusy(false);
+  };
+
+  // выгрузка выбранных в ВЫБРАННУЮ папку (File System Access API); fallback — скачивание файлов
+  const exportSelectedItems = async () => {
+    if (!itemsSelList.length || itemBulkBusy) return;
+    setItemBulkBusy(true); setItemError('');
+    try {
+      const safe = (t) => String(t || 'item').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 60);
+      const files = [];
+      for (const it of itemsSelList) {
+        const base = `${safe(it.name_ru)}_${String(it.id).slice(0, 8)}`;
+        if (it.photo_url) {
+          try {
+            const b = await (await fetch(it.photo_url)).blob();
+            files.push({ name: base + '.jpg', blob: b });
+          } catch (e) {}
+        }
+      }
+      const jsonBlob = new Blob([JSON.stringify(itemsSelList, null, 2)], { type: 'application/json' });
+      files.push({ name: 'items.json', blob: jsonBlob });
+      if (window.showDirectoryPicker) {
+        const dir = await window.showDirectoryPicker({ mode: 'readwrite' });
+        for (const f of files) {
+          const h = await dir.getFileHandle(f.name, { create: true });
+          const w = await h.createWritable();
+          await w.write(f.blob); await w.close();
+        }
+      } else {
+        for (const f of files) { // старый браузер — просто скачиваем всё
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(f.blob); a.download = f.name; a.click();
+          await new Promise(r => setTimeout(r, 250));
+        }
+      }
+    } catch (e) { if (e && e.name !== 'AbortError') setItemError(e.message); }
+    setItemBulkBusy(false);
+  };
+
+  const uploadItemStorageMedia = async (id, file) => {
+    if (!file) return;
+    setItemError('');
+    try {
+      const fd = new FormData();
+      fd.append('media', file);
+      const r = await fetch(`${API_URL}/api/items/${id}/storage-media?token=${token}`, { method: 'POST', body: fd });
+      const d = await r.json();
+      if (!r.ok) { if (d.missing) setItemsMissing(true); throw new Error(d.error || `Ошибка ${r.status}`); }
+      setItemsList(prev => prev.map(x => x.id === id ? d.item : x));
+    } catch (e) { setItemError(e.message); }
+  };
+  const deleteItemStorageMedia = async (id, url) => {
+    try {
+      const r = await fetch(`${API_URL}/api/items/${id}/storage-media?token=${token}`, {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url })
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
+      setItemsList(prev => prev.map(x => x.id === id ? d.item : x));
+    } catch (e) { setItemError(e.message); }
+  };
+
+  // v190: вкладка 🔬 — загрузить/обновить дашборд AI-улучшений
+  const loadItemLab = async () => {
+    setItemLabLoading(true);
+    try {
+      const r = await fetch(`${API_URL}/api/items/debug?token=${token}`);
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
+      setItemLab(d);
+    } catch (e) { setItemLab({ error: e.message }); }
+    setItemLabLoading(false);
+  };
+  // v190: прогон эмбеддингов каталога порциями с логом (кнопка во вкладке 🔬)
+  const runEmbedCatalog = async (loop) => {
+    if (embedRun && embedRun.running) return;
+    setEmbedRun({ running: true, log: [] });
+    let total = 0;
+    try {
+      for (let i = 0; i < (loop ? 25 : 1); i++) {
+        const r = await fetch(`${API_URL}/api/parse/embed-catalog?token=${token}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ limit: 200 })
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
+        total += d.done || 0;
+        setEmbedRun(prev => ({ running: loop && d.left && d.left !== 'каталог покрыт', log: [...(prev ? prev.log : []), `порция ${i + 1}: +${d.done} (ошибок ${d.failed}) — ${d.left}`] }));
+        if (!loop || d.left === 'каталог покрыт') break;
+      }
+    } catch (e) {
+      setEmbedRun(prev => ({ running: false, log: [...(prev ? prev.log : []), '❌ ' + e.message] }));
+    }
+    setEmbedRun(prev => ({ running: false, log: [...(prev ? prev.log : []), `✅ всего проставлено: ${total}`] }));
+    loadItemLab();
+  };
+
   const gotoTab = (t) => {
     setActiveTab(t);
     if (t === 'list') loadReceipts();
+    if (t === 'tools') loadItems(); // v179
     if (t === 'analysis') { loadReceipts(); loadBankMovements(); loadPlannedPayments(); }
     if (t === 'taxes') { loadReceipts(); loadBankMovements(); }
     if (t === 'cash') { loadReceipts(); loadCashMovements(); }
@@ -6108,6 +6482,7 @@ function App() {
   const mobileTabsOrder = [
     user?.role !== 'viewer' && tabAllowed('upload') && 'upload',
     tabAllowed('list') && 'list',
+    appMode === 'items' && tabAllowed('list') && 'tools',
     tabAllowed('parse') && 'parse',
     tabAllowed('cash') && 'cash',
     (user?.role === 'admin' || user?.role === 'manager' || user?.role === 'user') && tabAllowed('crm') && 'crm',
@@ -6117,7 +6492,7 @@ function App() {
     tabAllowed('chat') && 'chat',
     user?.role === 'admin' && 'users',
     user?.role === 'admin' && 'log'
-  ].filter(Boolean);
+  ].filter(Boolean).filter(t => appMode === 'items' ? ['upload', 'tools', 'lab', 'journal'].includes(t) : !['tools', 'lab', 'journal'].includes(t)); // v179-v191: «Предметы» — Загрузка + Tools + 🔬 + 🔎
   const swipeRef = useRef(null);
   const onAppTouchStart = (e) => {
     if (!isMobileView) return;
@@ -6858,7 +7233,7 @@ ${receiptData.failover.from} — недоступна
   // Боковая навигация «год/месяц» (v39): подсветка группы, видимой при прокрутке списка чеков
   const [activeRailGk, setActiveRailGk] = useState(null);
   useEffect(() => {
-    if (activeTab !== 'list') return undefined;
+    if (activeTab !== 'list') return undefined; // v179: автоперевод только во вкладке «Чеки»
     const onScroll = () => {
       const headers = document.querySelectorAll('[id^="rg-"]');
       let cur = null;
@@ -9557,9 +9932,18 @@ ${bodyHtml}
                 <span className="provider-badge" style={{ backgroundColor: getProviderColor(activeModelDisplay.provider) }}>{activeModelDisplay.provider}</span>
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#95a5a6', fontWeight: 400 }}>{activeModelDisplay.displayName}</span>
               </button>
+              {/* v177: ВЕРХНИЙ переключатель проекта — Чеки (основной проект, по умолчанию) / Предметы (клон проекта под базу предметов) */}
+              <div style={{ display: 'flex', gap: 8, marginLeft: 10 }}>
+                {[['checks', '🧾 Чеки'], ['items', '📦 Предметы']].map(([mode, label]) => (
+                  <button key={mode}
+                    onClick={() => { setAppMode(mode); if (mode === 'items') { setActiveTab('tools'); loadItems(); } else { setActiveTab('list'); loadReceipts(); } }}
+                    style={{ border: appMode === mode ? 'none' : '1px solid #d0d0d5', background: appMode === mode ? '#0071e3' : '#f2f2f5', color: appMode === mode ? '#fff' : '#333', borderRadius: 9, padding: '7px 16px', fontSize: 13, fontWeight: appMode === mode ? 700 : 400, cursor: 'pointer', minHeight: 0, whiteSpace: 'nowrap', boxShadow: appMode === mode ? '0 1px 4px rgba(0,113,227,0.35)' : 'none' }}
+                  >{label}</button>
+                ))}
+              </div>
             </div>
             {/* v106.2: на мобильном кнопки распознавания — в шапке, между «Выбор модели» и «Выйти» */}
-            {isMobileView && activeTab === 'upload' && (
+            {isMobileView && appMode === 'checks' && activeTab === 'upload' && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <button
                   onClick={() => recognizeAndSave()}
@@ -9572,7 +9956,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-09 · v171 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-12 · v193 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9585,13 +9969,23 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-09 · v171</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-12 · v193</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
             {user?.role !== 'viewer' && tabAllowed('upload') && (
               <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>Загрузка</button>
             )}
+            {appMode === 'items' && tabAllowed('list') && (
+              <button className={activeTab === 'tools' ? 'active' : ''} onClick={() => { setActiveTab('tools'); loadItems(); }}>🔧 Tools{itemsList.length ? ` (${itemsList.length})` : ''}</button>
+            )}
+            {appMode === 'items' && tabAllowed('list') && (
+              <button className={activeTab === 'lab' ? 'active' : ''} title="Улучшение распознавания и сравнения — дашборд AI" onClick={() => { setActiveTab('lab'); loadItemLab(); }}>🔬</button>
+            )}
+            {appMode === 'items' && tabAllowed('list') && (
+              <button className={activeTab === 'journal' ? 'active' : ''} title="Журнал поисков — результаты «Найти в магазинах» и «По фото»" onClick={() => { setActiveTab('journal'); loadItemLab(); }}>🔎 Журнал{itemSearchLog.length ? ` (${itemSearchLog.length})` : ''}</button>
+            )}
+            {appMode !== 'items' && (<>
             {tabAllowed('list') && (
             <button className={activeTab === 'list' ? 'active' : ''} onClick={() => {setActiveTab('list'); loadReceipts();}}>
               🧾 Фактуры ({receiptCount}) · 📄 Доки ({invoiceCount})
@@ -9664,6 +10058,7 @@ ${bodyHtml}
                 📋 Журнал
               </button>
             )}
+            </>)}
           </nav>
         </div>
       </header>
@@ -9676,6 +10071,22 @@ ${bodyHtml}
               <span className="mbn-ico">📤</span>Загрузка
             </button>
           )}
+          {appMode === 'items' && tabAllowed('list') && (
+            <button className={activeTab === 'tools' ? 'active' : ''} onClick={() => gotoTab('tools')}>
+              <span className="mbn-ico">🔧</span>Tools{itemsList.length ? ` (${itemsList.length})` : ''}
+            </button>
+          )}
+          {appMode === 'items' && tabAllowed('list') && (
+            <button className={activeTab === 'lab' ? 'active' : ''} onClick={() => { setActiveTab('lab'); loadItemLab(); }}>
+              <span className="mbn-ico">🔬</span>
+            </button>
+          )}
+          {appMode === 'items' && tabAllowed('list') && (
+            <button className={activeTab === 'journal' ? 'active' : ''} onClick={() => { setActiveTab('journal'); loadItemLab(); }}>
+              <span className="mbn-ico">🔎</span>
+            </button>
+          )}
+          {appMode !== 'items' && (<>
           {tabAllowed('list') && (
             <button className={activeTab === 'list' ? 'active' : ''} onClick={() => { setActiveTab('list'); loadReceipts(); }}>
               <span className="mbn-ico">🧾</span>Фактуры
@@ -9724,6 +10135,7 @@ ${bodyHtml}
           <button onClick={() => setMoreNavOpen(true)}>
             <span className="mbn-ico">⋯</span>Ещё
           </button>
+          </>)}
         </nav>
       )}
       {isMobileView && moreNavOpen && (
@@ -9731,6 +10143,7 @@ ${bodyHtml}
           <div onClick={() => setMoreNavOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 1150 }} />
           <div className="mobile-more-sheet">
             <div style={{ textAlign: 'center', color: '#8e8e93', fontSize: 12, marginBottom: 6 }}>— Ещё —</div>
+            {appMode !== 'items' && (<>
             {tabAllowed('analysis') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('analysis'); loadReceipts(); loadBankMovements(); loadPlannedPayments(); }}>📊 Анализ</button>}
             {tabAllowed('taxes') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('taxes'); loadReceipts(); loadBankMovements(); }}>🧾 Налоги</button>}
             {tabAllowed('docs') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('docs'); }}>📁 Документы</button>}
@@ -9739,6 +10152,7 @@ ${bodyHtml}
             {tabAllowed('chat') && <button onClick={() => { setMoreNavOpen(false); setActiveTab('chat'); }}>💬 Чат{chatUnreadTotal > 0 ? ` (${chatUnreadTotal})` : ''}</button>}
             {user?.role === 'admin' && <button onClick={() => { setMoreNavOpen(false); setActiveTab('users'); }}>👥 Доступ</button>}
             {user?.role === 'admin' && <button onClick={() => { setMoreNavOpen(false); setActiveTab('log'); }}>📋 Журнал</button>}
+            </>)}
             <button onClick={() => { setMoreNavOpen(false); setModelModalOpen(true); loadModels(); }}>🤖 Выбор модели AI</button>
             <button onClick={() => { setMoreNavOpen(false); cycleUiMode(); }}>{uiMode === 'mobile' ? '🖥 Переключить на полную версию' : '📱/🖥 Режим интерфейса (сейчас: авто)'}</button>
             <button onClick={() => setMoreNavOpen(false)} style={{ textAlign: 'center', color: '#8e8e93', borderBottom: 'none' }}>Закрыть</button>
@@ -10467,7 +10881,80 @@ ${bodyHtml}
         </div>
       )}
 
-      {activeTab === 'upload' && (
+      {/* v180: режим «Предметы» — вкладка «Загрузка» как у чеков: тулбар + drop-зона + «Распознать и сохранить» */}
+      {appMode === 'items' && activeTab === 'upload' && (
+        <div className="upload-section">
+          <div className="upload-toolbar">
+            <label className="btn-camera" style={{ cursor: 'pointer' }}>
+              📷 {Capacitor.getPlatform() === 'ios' ? 'Камера' : 'Фото'}
+              <input type="file" accept="image/*" capture="environment" style={{ display: 'none' }}
+                onChange={e => { addItemFiles(e.target.files); e.target.value = ''; }} />
+            </label>
+            <label className="btn-file" style={{ cursor: 'pointer' }}>
+              📁 Выбрать файл
+              <input type="file" accept="image/*" multiple style={{ display: 'none' }}
+                onChange={e => { addItemFiles(e.target.files); e.target.value = ''; }} />
+            </label>
+            <label className="btn-folder" style={{ cursor: 'pointer' }} title="Выбрать папку — распознаются все изображения внутри">
+              📁 Распознать папку
+              <input type="file" accept="image/*" multiple webkitdirectory="" style={{ display: 'none' }}
+                onChange={e => { addItemFiles(e.target.files); e.target.value = ''; }} />
+            </label>
+            <button className="btn-file" onClick={recognizeItemFiles} disabled={!itemFiles.length || itemBusy}
+              style={{ background: (!itemFiles.length || itemBusy) ? '#c7d7ea' : '#0071e3', color: '#fff', border: 'none', cursor: (!itemFiles.length || itemBusy) ? 'not-allowed' : 'pointer' }}>
+              {itemBusy ? '⏳ Распознаю…' : `⚡ Распознать и сохранить${itemFiles.length > 1 ? ` (${itemFiles.length})` : ''}`}
+            </button>
+            <span style={{ fontSize: 12, color: '#6e6e73' }}>Модель: <b>{activeModelDisplay.displayName}</b> (смена — в шапке)</span>
+          </div>
+
+          {itemBusy && itemProgress.total > 0 && (
+            <div style={{ margin: '10px 0', background: '#fff', border: '1px solid #e0e0e5', borderRadius: 10, padding: '10px 14px' }}>
+              <div style={{ fontSize: 13, marginBottom: 6, color: '#1d1d1f' }}>⚡ Распознаю {itemProgress.done} / {itemProgress.total}{itemProgress.name ? ` — ${itemProgress.name}` : ''}</div>
+              <div style={{ height: 8, background: '#f0f0f3', borderRadius: 4, overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${Math.round(itemProgress.done / itemProgress.total * 100)}%`, background: '#0071e3', transition: 'width .3s' }} />
+              </div>
+            </div>
+          )}
+
+          <div className="drop-zone" onDrop={itemDrop} onDragOver={e => e.preventDefault()}>
+            {itemFiles.length ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: 10 }}>
+                <img src={URL.createObjectURL(itemFiles[Math.min(itemFilesIdx, itemFiles.length - 1)])} alt="preview" className="preview" />
+                {itemFiles.length > 1 && (
+                  <div className="file-nav">
+                    <button onClick={() => setItemFilesIdx(i => Math.max(0, i - 1))} disabled={itemFilesIdx === 0}>◀</button>
+                    <span>{itemFilesIdx + 1} / {itemFiles.length}</span>
+                    <button onClick={() => setItemFilesIdx(i => Math.min(itemFiles.length - 1, i + 1))} disabled={itemFilesIdx >= itemFiles.length - 1}>▶</button>
+                  </div>
+                )}
+                <p style={{ fontSize: 12, color: '#7f8c8d', margin: 0 }}>
+                  {itemFiles[Math.min(itemFilesIdx, itemFiles.length - 1)].name} · {(itemFiles[Math.min(itemFilesIdx, itemFiles.length - 1)].size / 1024 / 1024).toFixed(2)} MB
+                </p>
+                {itemFiles.length > 1 && <p style={{ fontSize: 12, color: '#2980b9', margin: 0, fontWeight: 600 }}>{itemFiles.length} фото → каждое в свою карточку Tools</p>}
+                <button onClick={() => { setItemFiles([]); setItemFilesIdx(0); }} style={{ fontSize: 12, border: '1px solid #ccc', background: '#fff', borderRadius: 6, padding: '4px 12px', cursor: 'pointer' }}>✕ Очистить</button>
+              </div>
+            ) : (
+              <div className="drop-text" onClick={() => { const el = document.getElementById('item-file-input'); if (el) el.click(); }} style={{ cursor: 'pointer' }}>
+                <p>Перетащите фото предмета сюда</p>
+                <p>или нажмите для выбора файлов</p>
+                <p className="hint">Можно выбрать несколько файлов — AI определит название (с % схожести), производителя и номер производителя</p>
+              </div>
+            )}
+            <input id="item-file-input" type="file" accept="image/*" multiple style={{ display: 'none' }}
+              onChange={e => { addItemFiles(e.target.files); e.target.value = ''; }} />
+          </div>
+
+          {itemError && <div style={{ marginTop: 10, background: '#fdecea', border: '1px solid #e74c3c', borderRadius: 10, padding: '8px 14px', fontSize: 13, color: '#c0392b' }}>Ошибка: {itemError}</div>}
+          {itemsMissing && (
+            <div style={{ marginTop: 10, background: '#fdecea', border: '1px solid #e74c3c', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#c0392b' }}>
+              ⚠️ Таблица <b>home_items</b> ещё не создана. Выполните один раз в Supabase → SQL Editor файл <b>supabase-migration-v178-home-items.sql</b>.
+            </div>
+          )}
+          <div style={{ fontSize: 12, color: '#95a5a6', marginTop: 8 }}>Карточки сохраняются во вкладке 🔧 Tools.</div>
+        </div>
+      )}
+
+      {appMode === 'checks' && activeTab === 'upload' && (
         <div className="upload-section">
           <div className="upload-toolbar">
             <button className="btn-camera" onClick={handleCameraClick}>
@@ -10917,6 +11404,610 @@ ${bodyHtml}
               >
                 Скрыть результаты
               </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* v178: модуль «Предметы» — загрузка фото → AI-распознавание → база дома → поиск по магазинам */}
+      {/* v191: вкладка 🔎 Журнал — все проверки «Найти в магазинах» / «По фото», каждая запись открывается/закрывается */}
+      {activeTab === 'journal' && (
+        <div className="list-section">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, background: '#fff', border: '1px solid #e0e0e5', borderRadius: 10, padding: '10px 14px' }}>
+            <b style={{ fontSize: 16 }}>🔎 Журнал поисков</b>
+            <span style={{ fontSize: 12, color: '#8e8e93' }}>каждое нажатие «🛒 Найти в магазинах» и «🖼 По фото» — запись ниже; клик по записи — раскрыть/свернуть</span>
+            <button onClick={() => { setItemSearchLog([]); try { localStorage.removeItem('itemSearchLog'); } catch (e) {} }}
+              style={{ marginLeft: 'auto', padding: '6px 12px', fontSize: 12, borderRadius: 7, border: '1px solid #e74c3c', background: '#fff', color: '#c0392b', cursor: 'pointer', fontWeight: 700 }}>
+              🗑 Очистить журнал
+            </button>
+          </div>
+          {/* v193: панель AI-отладки — переехала из Tools, сворачивается */}
+          <div style={{ background: '#fff', border: '1px solid #d9c8f5', borderRadius: 12, marginBottom: 12, overflow: 'hidden' }}>
+            <div onClick={() => setJournalDebugOpen(!journalDebugOpen)}
+              style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', cursor: 'pointer', background: '#f4ecfb' }}>
+                <b style={{ fontSize: 14, color: '#7c3aed' }}>🔬 AI-отладка: распознавание и сравнение с каталогом</b>
+                {itemLabLoading && <span style={{ fontSize: 11, color: '#8e8e93' }}>⏳ обновляю…</span>}
+                <span style={{ marginLeft: 'auto', fontSize: 13, color: '#7c3aed' }}>{journalDebugOpen ? '▾ свернуть' : '▸ развернуть'}</span>
+            </div>
+            {journalDebugOpen && itemLab && itemLab.ok && (() => {
+              const d = itemLab;
+              const h = d.hints || {};
+              const catEmb = typeof d.catalog_embedded === 'number' ? d.catalog_embedded : 0;
+              const catTot = typeof d.catalog_total === 'number' ? d.catalog_total : 0;
+              const catPct = catTot ? Math.round(catEmb / catTot * 100) : 0;
+              const itEmb = typeof d.items_embedded === 'number' ? d.items_embedded : 0;
+              const itTot = typeof d.items_total === 'number' ? d.items_total : 0;
+              const itPct = itTot ? Math.round(itEmb / itTot * 100) : 0;
+              const fb = (d.feedback && typeof d.feedback === 'object') ? d.feedback : {};
+              const Bar = ({ pct, color }) => (
+                <div style={{ height: 8, borderRadius: 4, background: '#eeeef2', overflow: 'hidden', margin: '4px 0 2px' }}>
+                  <div style={{ height: 8, borderRadius: 4, width: Math.max(0, Math.min(100, pct)) + '%', background: color || '#7c3aed', transition: 'width .4s' }}></div>
+                </div>
+              );
+              const KV = ({ k, v }) => <div style={{ fontSize: 12, color: '#3a3a3c', padding: '1.5px 0' }}><span style={{ color: '#8e8e93' }}>{k}: </span><b>{v}</b></div>;
+              const Sec = ({ t, children }) => (<div style={{ borderTop: '1px solid #f0f0f3', padding: '8px 14px' }}><div style={{ fontSize: 11, fontWeight: 700, color: '#8e8e93', marginBottom: 4 }}>{t}</div>{children}</div>);
+              return (<div style={{ fontSize: 12.5 }}>
+                <Sec t="РАСПОЗНАВАНИЕ ФОТО (выбранная в шапке модель, fallback-цепочка)">
+                  <KV k="цепочка предметов" v="выбранная модель → Gemini 3.5-flash → 3.1-pro → 3-flash → 2.5-flash → OpenRouter → Mistral → Kimi" />
+                  <KV k="предметов по моделям" v={d.items_by_model ? Object.entries(d.items_by_model).map(([m, c]) => `${m}×${c}`).join(' · ') : '—'} />
+                  <KV k="дубликатов в базе (MPN или бренд+название)" v={d.items_dup ?? '—'} />
+                </Sec>
+                <Sec t="ХОД 1 · СПРАВОЧНИК КАТАЛОГА (пункт 9 промпта распознавания)">
+                  <KV k="терминов / брендов" v={`${h.terms_count ?? '—'} / ${h.brands_count ?? '—'}`} />
+                  <Bar pct={Math.round((h.terms_count || 0) / 120 * 100)} />
+                  <KV k="обновлён" v={h.rebuilt_at ? `${new Date(h.rebuilt_at).toLocaleString('ru-RU')} (${h.age_min} мин назад; пересбор каждые 6 ч + после каждой правки)` : '—'} />
+                  <div style={{ fontSize: 11, color: '#6e6e73', background: '#f8f8fb', borderRadius: 7, padding: '5px 8px', marginTop: 3, lineHeight: 1.6, maxHeight: 80, overflowY: 'auto' }}>{(h.terms_sample || []).join(' · ') || '—'}</div>
+                </Sec>
+                <Sec t="ХОД 2+3 · НОРМАЛИЗАЦИЯ И РАЗДЕЛЫ">
+                  <KV k="бренд" v={`снап к ${h.brands_count ?? '—'} каноническим (WERA→Wera); MPN ищется по mpn И article`} />
+                  <KV k="раздел каталога" v="инструмент→herramient · электрика→electric · крепёж→ferreter/tornill · сантехника→fontaner (+4 к скорингу)" />
+                  <KV k="фильтр типа (v191)" v="первое слово name_es обязано быть в названии кандидата" />
+                </Sec>
+                <Sec t="ХОД 4 · ЭМБЕДДИНГИ (pgvector)">
+                  <KV k="режим" v={({ auto: '⚖️ авто (локальный → облако)', local: '🖥 только локальный', cloud: '☁️ только облако' })[d.embed_mode] || d.embed_mode} />
+                  <KV k="эффективный движок" v={String(d.embed_backend)} />
+                  {d.local_embed_url && <KV k="локальный AI" v={`${d.local_embed_url} — ${d.local_embed_alive === true ? '🟢 доступен' : d.local_embed_alive === false ? '🔴 НЕ ОТВЕЧАЕТ' : '…'}`} />}
+                  <KV k="каталог с векторами" v={`${catEmb} из ${catTot} — ${catPct}%`} />
+                  <Bar pct={catPct} color={catPct > 50 ? '#1e8449' : '#b26a00'} />
+                  <KV k="предметы с векторами" v={`${itEmb} из ${itTot} — ${itPct}%`} />
+                  <Bar pct={itPct} color="#0a84ff" />
+                </Sec>
+                <Sec t="КАТАЛОГ ПО МАГАЗИНАМ (база для сравнения)">
+                  {d.catalog_by_site && Object.entries(d.catalog_by_site).map(([st, c]) => (
+                    <div key={st} style={{ marginBottom: 3 }}>
+                      <KV k={st.replace(/^(www\.|canarias\.|tienda\.)/, '')} v={`${(c || 0).toLocaleString('ru-RU')} товаров`} />
+                      <Bar pct={catTot ? Math.round((c || 0) / catTot * 100) : 0} color="#8e44ad" />
+                    </div>
+                  ))}
+                </Sec>
+                <Sec t="ХОД 5 · ВИЗУАЛЬНОЕ СРАВНЕНИЕ ПО ФОТО">
+                  <KV k="пайплайн" v="кандидаты (слова+MPN+эмбеддинг, ≤12 с фото) → vision 2 прохода → консенсус → атрибутная перепроверка топ-5 (55% визуал + 45% атрибуты, бейдж 🧬)" />
+                </Sec>
+                <Sec t="ХОД 6 · ОБРАТНАЯ СВЯЗЬ (петля обучения)">
+                  <KV k="метки good / bad / правки" v={`${fb.good || 0} / ${fb.bad || 0} / ${fb.correction || 0}`} />
+                  <Bar pct={Math.min(100, ((fb.good || 0) + (fb.bad || 0) + (fb.correction || 0)) * 2)} color="#1e8449" />
+                  <div style={{ fontSize: 11, color: '#8e8e93' }}>«✕ не то» — исключает товар из выдачи предмета; правки name_es/бренд/MPN попадают в справочник (ход 1).</div>
+                </Sec>
+              </div>);
+            })()}
+            {journalDebugOpen && itemLab && itemLab.error && <div style={{ padding: '8px 14px', fontSize: 12, color: '#c0392b' }}>Ошибка: {itemLab.error}</div>}
+            {journalDebugOpen && !itemLab && !itemLabLoading && <div style={{ padding: '8px 14px', fontSize: 12, color: '#6e6e73' }}>Откройте вкладку 🔬 или нажмите сюда ещё раз — соберу данные.</div>}
+          </div>
+
+          {!itemSearchLog.length && (
+            <div style={{ padding: 24, textAlign: 'center', color: '#6e6e73', fontSize: 13 }}>Пока пусто. Нажмите в карточке предмета «🛒 Найти в магазинах» или «🖼 По фото» — результат появится здесь.</div>
+          )}
+          {itemSearchLog.map(en => (
+            <div key={en.id} style={{ background: '#fff', border: '1px solid #e0e0e5', borderRadius: 12, marginBottom: 10, overflow: 'hidden' }}>
+              <div onClick={() => updateSearchLog(en.id, { open: !en.open })}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', cursor: 'pointer', background: en.open ? '#f8f8fb' : '#fff' }}>
+                {en.item.photo_url && <img src={en.item.photo_url} alt="" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 8, border: '1px solid #eee', flexShrink: 0 }} />}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {en.kind === 'visual' ? '🖼' : '🛒'} {en.item.name_ru || 'Предмет'}
+                    {en.loading && <span style={{ color: '#0a84ff', fontWeight: 400 }}> — ⏳ идёт проверка…</span>}
+                    {!en.loading && en.error && <span style={{ color: '#c0392b', fontWeight: 400 }}> — ❌ {en.error}</span>}
+                    {!en.loading && !en.error && en.results && <span style={{ color: en.results.length ? '#1e8449' : '#b26a00', fontWeight: 400 }}> — совпадений: {en.results.length}</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#8e8e93' }}>
+                    {new Date(en.ts).toLocaleString('ru-RU')}
+                    {' · модель: '}{en.modelUsed || en.model || '—'}
+                    {en.kind === 'text' && en.sites && <>{' · '}{en.sites.length ? en.sites.map(sv => (ITEM_STORES.find(x => x[0] === sv) || [sv, sv])[1]).join(' · ') : '🌐 Все магазины'}</>}
+                    {en.kind === 'visual' && en.candidates != null && ` · сравнено фото: ${en.candidates}`}
+                  </div>
+                </div>
+                <span style={{ fontSize: 13, color: '#8e8e93', flexShrink: 0 }}>{en.open ? '▾' : '▸'}</span>
+              </div>
+              {en.open && (
+                <div style={{ padding: '8px 14px 12px', display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  {en.debug && (
+                    <div style={{ fontSize: 10.5, color: '#8e8e93', lineHeight: 1.5, background: '#f8f8fb', borderRadius: 7, padding: '5px 8px' }}>
+                      🔬 MPN {en.debug.mpn_ok ? '✓' : '—'}
+                      {' · '}слова: {(en.debug.search_words || []).join(', ') || '—'}
+                      {' · '}кандидаты: {Object.entries(en.debug.by_source || {}).map(([k, v]) => `${({ mpn: '🔢', name_es: '🇪🇸', name_ru: 'RU', embed: '🧠' })[k] || k}×${v}`).join(' ') || '0'}
+                      {' · 🧠'}{en.debug.embed_used ? '✓' : '✗'}
+                      {en.debug.cat_roots && en.debug.cat_roots.length ? ` · раздел: ${en.debug.cat_roots.join('/')}` : ''}
+                      {en.debug.bad_excluded ? ` · отсеяно «не то»: ${en.debug.bad_excluded}` : ''}
+                    </div>
+                  )}
+                  {en.message && !en.error && <div style={{ fontSize: 12, color: '#6e6e73' }}>{en.message}</div>}
+                  {!en.loading && !en.error && en.results && !en.results.length && <div style={{ fontSize: 12, color: '#6e6e73' }}>Совпадений не найдено.</div>}
+                  {(en.results || []).map((r, i) => (
+                    <a key={i} href={r.url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', color: 'inherit', background: en.kind === 'visual' ? '#f0f7ff' : '#f8f8fb', borderRadius: 9, padding: '7px 10px', fontSize: 13 }}>
+                      {r.image && <img src={r.image} alt="" style={{ width: 42, height: 42, objectFit: 'contain', borderRadius: 6, background: '#fff', flexShrink: 0 }} />}
+                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.name}>{r.name}</span>
+                      {en.kind === 'visual' && r.visual_score != null && (
+                        <span style={{ fontSize: 11, fontWeight: 700, color: r.visual_score >= 0.85 ? '#1e8449' : (r.visual_score >= 0.65 ? '#b26a00' : '#6e6e73'), background: '#fff', borderRadius: 6, padding: '1px 6px', flexShrink: 0 }}>
+                          🖼 {Math.round(r.visual_score * 100)}%{r.visual_verified !== false ? ' ✓×2' : ''}
+                        </span>
+                      )}
+                      {r.attr_checked && <span title={r.attr_notes || 'Атрибутная проверка пройдена'} style={{ fontSize: 11, flexShrink: 0, cursor: 'help' }}>🧬</span>}
+                      {en.kind === 'text' && <span style={{ fontSize: 10.5, color: '#95a5a6', flexShrink: 0 }}>{({ mpn: '🔢MPN', name_es: '🇪🇸назв.', name_ru: 'назв.RU', embed: '🧠семант.' })[r.match_by] || r.match_by}</span>}
+                      <span style={{ fontSize: 10.5, color: '#95a5a6', flexShrink: 0 }}>{String(r.site || '').replace('www.', '')}</span>
+                      <span style={{ fontWeight: 700, color: '#c0392b', flexShrink: 0 }}>{r.price != null ? `${r.price} €` : '—'}</span>
+                      {r.price_original != null && r.price_original > (r.price || 0) && <span style={{ textDecoration: 'line-through', color: '#95a5a6', flexShrink: 0 }}>{r.price_original} €</span>}
+                      {r.discount_pct != null && <span style={{ fontSize: 11, fontWeight: 700, color: '#1e8449', flexShrink: 0 }}>−{Math.round(r.discount_pct)}%</span>}
+                      <span onClick={async (e) => { // «не тот товар» — запомнить и убрать
+                          e.preventDefault(); e.stopPropagation();
+                          try {
+                            await fetch(`${API_URL}/api/items/${en.item.id}/feedback?token=${token}`, {
+                              method: 'POST', headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ product_url: r.url, verdict: 'bad' })
+                            });
+                            updateSearchLog(en.id, { results: (en.results || []).filter(x => x.url !== r.url) });
+                          } catch (err) { setItemError(err.message); }
+                        }} title="Не тот товар — запомню и уберу из выдачи"
+                        style={{ color: '#c0392b', fontSize: 13, fontWeight: 700, padding: '2px 5px', flexShrink: 0, cursor: 'pointer' }}>✕</span>
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* v190: вкладка 🔬 — дашборд улучшений распознавания и сравнения с прогресс-барами */}
+      {activeTab === 'lab' && (
+        <div className="list-section">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, background: '#fff', border: '1px solid #e0e0e5', borderRadius: 10, padding: '10px 14px' }}>
+            <b style={{ fontSize: 16 }}>🔬 Улучшение распознавания и сравнения</b>
+            <button onClick={loadItemLab} disabled={itemLabLoading} style={{ marginLeft: 'auto', padding: '7px 14px', fontSize: 13, borderRadius: 7, border: '1px solid #7c3aed', background: '#f4ecfb', color: '#7c3aed', fontWeight: 700, cursor: 'pointer' }}>
+              {itemLabLoading ? '⏳ Собираю…' : '🔄 Обновить'}
+            </button>
+          </div>
+          {!itemLab && !itemLabLoading && <div style={{ padding: 24, textAlign: 'center', color: '#6e6e73', fontSize: 13 }}>Нажмите «🔄 Обновить», чтобы собрать состояние механизмов.</div>}
+          {itemLab && itemLab.error && <div style={{ background: '#fdecea', border: '1px solid #e74c3c', borderRadius: 10, padding: '10px 14px', fontSize: 13, color: '#c0392b' }}>Ошибка: {itemLab.error}</div>}
+          {itemLab && itemLab.ok && (() => {
+            const d = itemLab;
+            const h = d.hints || {};
+            const catEmb = typeof d.catalog_embedded === 'number' ? d.catalog_embedded : 0;
+            const catTot = typeof d.catalog_total === 'number' ? d.catalog_total : 0;
+            const catPct = catTot ? Math.round(catEmb / catTot * 100) : 0;
+            const itEmb = typeof d.items_embedded === 'number' ? d.items_embedded : 0;
+            const itTot = typeof d.items_total === 'number' ? d.items_total : 0;
+            const itPct = itTot ? Math.round(itEmb / itTot * 100) : 0;
+            const fb = (d.feedback && typeof d.feedback === 'object') ? d.feedback : {};
+            const fbTotal = (fb.good || 0) + (fb.bad || 0) + (fb.correction || 0);
+            const Bar = ({ pct, color }) => (
+              <div style={{ height: 10, borderRadius: 5, background: '#f0f0f3', overflow: 'hidden', margin: '6px 0 2px' }}>
+                <div style={{ height: 10, borderRadius: 5, width: Math.max(0, Math.min(100, pct)) + '%', background: color || '#7c3aed', transition: 'width .4s' }}></div>
+              </div>
+            );
+            const Card = ({ n, title, status, children }) => (
+              <div style={{ background: '#fff', border: '1px solid #e0e0e5', borderRadius: 12, padding: '12px 14px', marginBottom: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <span style={{ background: '#f4ecfb', color: '#7c3aed', borderRadius: 7, padding: '2px 9px', fontSize: 12, fontWeight: 700 }}>Ход {n}</span>
+                  <b style={{ fontSize: 14 }}>{title}</b>
+                  <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 700, color: status === 'ok' ? '#1e8449' : status === 'warn' ? '#b26a00' : '#c0392b' }}>
+                    {status === 'ok' ? '✅ работает' : status === 'warn' ? '⚠️ частично' : '❌ нет данных'}
+                  </span>
+                </div>
+                {children}
+              </div>
+            );
+            const KV = ({ k, v }) => <div style={{ fontSize: 12.5, color: '#3a3a3c', padding: '2px 0' }}><span style={{ color: '#8e8e93' }}>{k}: </span><b>{v}</b></div>;
+            return (<>
+              <Card n={1} title="Справочник каталога → в промпт распознавания" status={h.terms_count > 10 ? 'ok' : 'bad'}>
+                <KV k="терминов (слова и пары слов из реальных названий каталога)" v={h.terms_count ?? '—'} />
+                <Bar pct={Math.round((h.terms_count || 0) / 120 * 100)} />
+                <KV k="брендов в справочнике parse_brands" v={h.brands_count ?? '—'} />
+                <Bar pct={Math.min(100, Math.round((h.brands_count || 0) / 2))} color="#0a84ff" />
+                <KV k="справочник обновлён" v={h.rebuilt_at ? `${new Date(h.rebuilt_at).toLocaleString('ru-RU')} (${h.age_min} мин назад; пересбор каждые 6 ч)` : '—'} />
+                <div style={{ fontSize: 11, color: '#6e6e73', background: '#f8f8fb', borderRadius: 8, padding: '6px 10px', marginTop: 4, lineHeight: 1.6, maxHeight: 90, overflowY: 'auto' }}>
+                  {(h.terms_sample || []).join(' · ') || '—'}
+                </div>
+              </Card>
+              <Card n={2} title="Нормализация бренда и MPN (+поиск по артикулу)" status={h.brands_count > 0 ? 'ok' : 'warn'}>
+                <KV k="канонических брендов для снапа (WERA→Wera)" v={h.brands_count ?? '—'} />
+                <KV k="MPN при поиске" v="ищется по mpn И по article каталога" />
+              </Card>
+              <Card n={3} title="Категория предмета → раздел каталога" status="ok">
+                <KV k="карта разделов" v="инструмент→herramient · электрика→electric/iluminac · крепёж→ferreter/tornill · сантехника→fontaner/bano · быт.техника→electrodom" />
+                <KV k="бонус к скорингу за свой раздел" v="+4" />
+              </Card>
+              <Card n={4} title="Эмбеддинги pgvector — семантический поиск кандидатов" status={catPct > 50 ? 'ok' : catPct > 0 ? 'warn' : 'bad'}>
+                <KV k="движок эмбеддингов" v={String(d.embed_backend)} />
+                {d.local_embed_url && <KV k="локальный AI" v={`${d.local_embed_url} — ${d.local_embed_alive === true ? '🟢 доступен' : d.local_embed_alive === false ? '🔴 НЕ ОТВЕЧАЕТ' : '…'}`} />}
+                <div style={{ display: 'flex', gap: 6, margin: '6px 0 8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                  <span style={{ fontSize: 12, color: '#8e8e93' }}>Режим движка:</span>
+                  {[['auto', '⚖️ Авто (локальный → облако)'], ['local', '🖥 Только локальный'], ['cloud', '☁️ Только облако']].map(([mv, lbl]) => (
+                    <button key={mv} disabled={embedRun && embedRun.running}
+                      onClick={async () => {
+                        try {
+                          const r = await fetch(`${API_URL}/api/items/embed-backend?token=${token}`, {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: mv })
+                          });
+                          const dd = await r.json();
+                          if (!r.ok) throw new Error(dd.error || `Ошибка ${r.status}`);
+                          loadItemLab();
+                        } catch (e) { setItemError(e.message); }
+                      }}
+                      style={{ border: d.embed_mode === mv ? '2px solid #7c3aed' : '1px solid #d0d0d5', background: d.embed_mode === mv ? '#f4ecfb' : '#fff', color: d.embed_mode === mv ? '#7c3aed' : '#3a3a3c', borderRadius: 8, padding: '5px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                      {lbl}{d.embed_mode === mv ? ' ✓' : ''}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ fontSize: 11, color: '#8e8e93', marginBottom: 4 }}>⚠️ Это движок ЭМБЕДДИНГОВ (семантический поиск), а не распознавания: фото предметов распознаёт модель, выбранная в шапке. Локальный движок задаётся переменной LOCAL_EMBED_URL на бэкенде.</div>
+                <KV k="каталог с векторами" v={`${catEmb} из ${catTot} — ${catPct}%`} />
+                <Bar pct={catPct} color={catPct > 50 ? '#1e8449' : '#b26a00'} />
+                <KV k="предметы с векторами" v={`${itEmb} из ${itTot} — ${itPct}%`} />
+                <Bar pct={itPct} color="#0a84ff" />
+                <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                  <button onClick={() => runEmbedCatalog(false)} disabled={embedRun && embedRun.running}
+                    style={{ border: 'none', background: '#7c3aed', color: '#fff', borderRadius: 7, padding: '7px 14px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
+                    {embedRun && embedRun.running ? '⏳ Считаю…' : '▶ Прогнать порцию (200)'}
+                  </button>
+                  <button onClick={() => runEmbedCatalog(true)} disabled={embedRun && embedRun.running}
+                    style={{ border: '1px solid #7c3aed', background: '#fff', color: '#7c3aed', borderRadius: 7, padding: '7px 14px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
+                    ▶▶ До покрытия каталога
+                  </button>
+                </div>
+                {embedRun && embedRun.log && embedRun.log.length > 0 && (
+                  <div style={{ fontSize: 11.5, fontFamily: 'monospace', background: '#1d1d1f', color: '#a5f3a5', borderRadius: 8, padding: '8px 10px', marginTop: 8, maxHeight: 130, overflowY: 'auto', whiteSpace: 'pre-wrap' }}>
+                    {embedRun.log.join('\n')}
+                  </div>
+                )}
+              </Card>
+              <Card n={5} title="Атрибутная перепроверка топ-5 визуального поиска" status="ok">
+                <KV k="что сравнивается" v="цвет · форма жала/губок · одиночный/набор · читаемая маркировка" />
+                <KV k="финальный score" v="55% визуал + 45% атрибуты · бейдж 🧬 в карточке" />
+              </Card>
+              <Card n={6} title="Петля обучения — ваши правки и метки «не то»" status={fbTotal > 0 ? 'ok' : 'warn'}>
+                <KV k="всего меток" v={fbTotal} />
+                <div style={{ display: 'flex', gap: 12, marginTop: 4 }}>
+                  {[['👍 good', fb.good || 0, '#1e8449'], ['✕ «не то»', fb.bad || 0, '#c0392b'], ['✏️ правки полей', fb.correction || 0, '#b26a00']].map(([lbl, cnt, col]) => (
+                    <div key={lbl} style={{ flex: 1, background: '#f8f8fb', borderRadius: 8, padding: '8px 10px' }}>
+                      <div style={{ fontSize: 11, color: '#8e8e93' }}>{lbl}</div>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: col }}>{cnt}</div>
+                      <Bar pct={fbTotal ? Math.round(cnt / fbTotal * 100) : 0} color={col} />
+                    </div>
+                  ))}
+                </div>
+                <div style={{ fontSize: 11, color: '#8e8e93', marginTop: 6 }}>Правки name_es сразу попадают в справочник терминов (ход 1); «не то» исключает товар из выдачи этого предмета.</div>
+              </Card>
+            </>);
+          })()}
+        </div>
+      )}
+
+      {activeTab === 'tools' && (
+        <div className="list-section">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12, background: '#fff', border: '1px solid #e0e0e5', borderRadius: 10, padding: '10px 14px' }}>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: itemBusy ? '#b9c8bd' : '#0071e3', color: '#fff', borderRadius: 9, padding: '8px 16px', fontSize: 14, fontWeight: 700, cursor: itemBusy ? 'default' : 'pointer' }}>
+              {itemBusy ? '⏳ Распознаю…' : '📷 Загрузить фото предмета'}
+              <input type="file" accept="image/*" capture="environment" disabled={itemBusy} style={{ display: 'none' }}
+                onChange={e => { const f = e.target.files && e.target.files[0]; if (f) recognizeItemPhoto(f); e.target.value = ''; }} />
+            </label>
+            <input type="text" placeholder="🔍 Поиск по предметам: название, бренд, номер…" value={itemsQuery}
+              onChange={e => setItemsQuery(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') loadItems(itemsQuery); }}
+              style={{ flex: '1 1 220px', minWidth: 0, maxWidth: 380, padding: '7px 10px', fontSize: 13, borderRadius: 6, border: '1px solid #ccc' }} />
+            <button onClick={() => loadItems(itemsQuery)} style={{ padding: '7px 12px', fontSize: 13 }}>Найти</button>
+            <button onClick={() => { setItemsQuery(''); loadItems(''); }} style={{ padding: '7px 12px', fontSize: 13 }}>🔄</button>
+            <span style={{ fontSize: 12, color: '#6e6e73' }}>Всего: {itemsList.length}</span>
+            <select value={itemSort} onChange={e => { setItemSort(e.target.value); setItemPage(1); }} title="Сортировка"
+              style={{ padding: '6px 8px', fontSize: 12, borderRadius: 6, border: '1px solid #ccc' }}>
+              <option value="created_desc">По дате распознавания ↓</option>
+              <option value="created_asc">По дате распознавания ↑</option>
+              <option value="name">По названию</option>
+              <option value="brand">По бренду</option>
+              <option value="confidence">По % распознавания</option>
+            </select>
+            <select value={itemPerPage} onChange={e => { setItemPerPage(Number(e.target.value)); setItemPage(1); }} title="Карточек на странице"
+              style={{ padding: '6px 8px', fontSize: 12, borderRadius: 6, border: '1px solid #ccc' }}>
+              <option value={12}>12 на стр.</option>
+              <option value={24}>24 на стр.</option>
+              <option value={48}>48 на стр.</option>
+              <option value={96}>96 на стр.</option>
+              <option value={100000}>Все</option>
+            </select>
+            {itemMonthFilter && (
+              <button onClick={() => { setItemMonthFilter(null); setItemPage(1); }} title="Сбросить фильтр тайм-шкалы"
+                style={{ padding: '6px 10px', fontSize: 12, borderRadius: 6, border: '1px solid #0a84ff', background: '#e8f2ff', color: '#0a84ff', cursor: 'pointer', fontWeight: 700 }}>
+                📅 {itemMonthFilter} ✕
+              </button>
+            )}
+          </div>
+
+          {/* v186: панель выбора — галки + пакетные действия */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12, background: '#fff', border: '1px solid #e0e0e5', borderRadius: 10, padding: '8px 14px' }}>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 13, cursor: 'pointer', userSelect: 'none' }}>
+              <input type="checkbox" style={{ width: 16, height: 16, cursor: 'pointer' }}
+                checked={itemsVisible.length > 0 && itemsVisible.every(it => itemSel[it.id])}
+                onChange={itemsSelectVisible} />
+              Выбрать все на странице
+            </label>
+            <span style={{ fontSize: 12, color: '#6e6e73' }}>Выбрано: <b>{itemsSelList.length}</b></span>
+            <button onClick={itemsBulkDelete} disabled={!itemsSelList.length || itemBulkBusy}
+              style={{ border: '1px solid #e74c3c', background: itemsSelList.length ? '#fff' : '#f5f5f7', color: '#c0392b', borderRadius: 7, padding: '6px 12px', fontSize: 12, fontWeight: 700, cursor: itemsSelList.length ? 'pointer' : 'default' }}>
+              🗑 Удалить
+            </button>
+            <button onClick={itemsBulkRerecognize} disabled={!itemsSelList.length || itemBulkBusy}
+              title="Заново распознать выбранные предметы выбранной в шапке моделью"
+              style={{ border: 'none', background: itemsSelList.length ? '#0a84ff' : '#b9c8d5', color: '#fff', borderRadius: 7, padding: '6px 12px', fontSize: 12, fontWeight: 700, cursor: itemsSelList.length ? 'pointer' : 'default' }}>
+              🔄 Перераспознать
+            </button>
+            <button onClick={exportSelectedItems} disabled={!itemsSelList.length || itemBulkBusy}
+              title="Сохранить фото + items.json выбранных предметов в папку на диске (браузер спросит папку)"
+              style={{ border: 'none', background: itemsSelList.length ? '#1e8449' : '#b9c8bd', color: '#fff', borderRadius: 7, padding: '6px 12px', fontSize: 12, fontWeight: 700, cursor: itemsSelList.length ? 'pointer' : 'default' }}>
+              💾 Выгрузить в папку
+            </button>
+            {itemBulkBusy && <span style={{ fontSize: 12, color: '#6e6e73' }}>⏳ выполняю…</span>}
+            {itemPages > 1 && (
+              <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                <button onClick={() => setItemPage(p => Math.max(1, p - 1))} disabled={itemPageSafe <= 1} style={{ padding: '4px 10px', fontSize: 12 }}>◀</button>
+                <span style={{ color: '#6e6e73' }}>{itemPageSafe} / {itemPages}</span>
+                <button onClick={() => setItemPage(p => Math.min(itemPages, p + 1))} disabled={itemPageSafe >= itemPages} style={{ padding: '4px 10px', fontSize: 12 }}>▶</button>
+              </span>
+            )}
+          </div>
+
+          {/* v187: подсказки мест хранения — выбрать из существующих или ввести вручную */}
+          <datalist id="dl-item-place">{itemStorageHints.place.map(v => <option key={v} value={v} />)}</datalist>
+          <datalist id="dl-item-rack">{itemStorageHints.rack.map(v => <option key={v} value={v} />)}</datalist>
+          <datalist id="dl-item-shelf">{itemStorageHints.shelf.map(v => <option key={v} value={v} />)}</datalist>
+
+          {itemsMissing && (
+            <div style={{ background: '#fdecea', border: '1px solid #e74c3c', borderRadius: 10, padding: '10px 14px', marginBottom: 12, fontSize: 13, color: '#c0392b' }}>
+              ⚠️ Таблица <b>home_items</b> ещё не создана. Выполните один раз в Supabase → SQL Editor файл <b>supabase-migration-v178-home-items.sql</b>.
+            </div>
+          )}
+          {itemError && (
+            <div style={{ background: '#fdecea', border: '1px solid #e74c3c', borderRadius: 10, padding: '8px 14px', marginBottom: 12, fontSize: 13, color: '#c0392b' }}>Ошибка: {itemError}</div>
+          )}
+          {itemsLoading && <div style={{ fontSize: 13, color: '#6e6e73', padding: 8 }}>Загрузка…</div>}
+          {!itemsLoading && !itemsList.length && !itemsMissing && (
+            <div style={{ fontSize: 14, color: '#6e6e73', padding: 24, textAlign: 'center' }}>
+              📦 База предметов пуста. Сфотографируйте предмет — AI определит название (с % схожести), производителя и номер производителя.
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12, flex: 1, minWidth: 0 }}>
+            {itemsVisible.map(it => (
+              <div key={it.id} style={{ background: '#fff', border: itemSel[it.id] ? '2px solid #0071e3' : '1px solid #e0e0e5', borderRadius: 12, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <input type="checkbox" checked={!!itemSel[it.id]} onChange={() => toggleItemSel(it.id)} title="Выбрать"
+                    style={{ width: 18, height: 18, cursor: 'pointer', flexShrink: 0, marginTop: 2 }} />
+                  {it.photo_url
+                    ? <img src={it.photo_url} alt="" style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 8, border: '1px solid #eee', flexShrink: 0, cursor: 'pointer' }} onClick={() => window.open(it.photo_url, '_blank')} />
+                    : <div style={{ width: 72, height: 72, borderRadius: 8, background: '#f2f2f5', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, flexShrink: 0 }}>📦</div>}
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 700, fontSize: 14 }}>{it.name_ru || '—'}</span>
+                      {itemConfBadge(it.confidence)}
+                      {it.edited && <span title="Исправлено вручную" style={{ fontSize: 11, color: '#8e44ad' }}>✏️</span>}
+                      {it.dup && <span title="Дубликат: есть ещё карточка с таким же MPN или парой «бренд + название»" style={{ fontSize: 11, fontWeight: 700, color: '#c0392b', background: '#fdecea', borderRadius: 6, padding: '1px 7px', whiteSpace: 'nowrap' }}>🔁 Дубликат</span>}
+                    </div>
+                    {it.name_original && <div style={{ fontSize: 12, color: '#6e6e73' }}>{it.name_original}</div>}
+                    {it.name_es && <div style={{ fontSize: 12, color: '#6e6e73' }}>🇪🇸 {it.name_es}</div>}
+                    {it.category && <div style={{ fontSize: 11, color: '#95a5a6' }}>🏷 {it.category}</div>}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', fontSize: 12 }}>
+                  <span style={{ background: '#f2f2f5', borderRadius: 6, padding: '2px 8px' }}>
+                    🏭 {it.brand ? <b>{it.brand}</b> : '—'} {it.brand && itemConfBadge(it.brand_confidence)}
+                  </span>
+                  <span style={{ background: '#f2f2f5', borderRadius: 6, padding: '2px 8px' }}>
+                    🔢 {it.mpn ? <b>{it.mpn}</b> : '—'} {it.mpn && itemConfBadge(it.mpn_confidence)}
+                  </span>
+                </div>
+                <div style={{ fontSize: 11, color: '#b0b0b5' }}>
+                  {new Date(it.created_at).toLocaleString('ru-RU')}{it.ai_model ? ` · ${it.ai_model}` : ''}
+                </div>
+
+                {/* v186: место хранения + фото/видео места */}
+                <div style={{ background: '#f8f8fb', borderRadius: 8, padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: 12 }}>
+                    <span style={{ color: '#3a3a3c' }}>
+                      📍 {it.location_city ? <b>{it.location_city === 'Дубай' ? '🇦🇪 Дубай' : it.location_city === 'Тенерифе' ? '🇮🇨 Тенерифе' : it.location_city}</b> : <span style={{ color: '#b0b0b5' }}>где находится — не указано</span>}
+                      {it.storage_place ? ` · ${it.storage_place}` : ''}
+                      {it.storage_rack ? ` · стеллаж ${it.storage_rack}` : ''}
+                      {it.storage_shelf ? ` · полка ${it.storage_shelf}` : ''}
+                    </span>
+                    <label title="Добавить фото или видео места хранения" style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: '#0a84ff', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                      📷 место хранения
+                      <input type="file" accept="image/*,video/*" style={{ display: 'none' }}
+                        onChange={e => { const f = e.target.files && e.target.files[0]; if (f) uploadItemStorageMedia(it.id, f); e.target.value = ''; }} />
+                    </label>
+                  </div>
+                  {Array.isArray(it.storage_media) && it.storage_media.length > 0 && (
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {it.storage_media.map((m, mi) => (
+                        <span key={mi} style={{ position: 'relative', display: 'inline-block' }}>
+                          {m.kind === 'video'
+                            ? <video src={m.url} controls style={{ width: 88, height: 66, objectFit: 'cover', borderRadius: 6, border: '1px solid #eee', background: '#000' }} />
+                            : <img src={m.url} alt="" onClick={() => window.open(m.url, '_blank')} style={{ width: 88, height: 66, objectFit: 'cover', borderRadius: 6, border: '1px solid #eee', cursor: 'pointer' }} />}
+                          <span onClick={() => deleteItemStorageMedia(it.id, m.url)} title="Удалить"
+                            style={{ position: 'absolute', top: -6, right: -6, width: 17, height: 17, borderRadius: '50%', background: '#e74c3c', color: '#fff', fontSize: 11, lineHeight: '17px', textAlign: 'center', cursor: 'pointer', fontWeight: 700 }}>✕</span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {itemEditId === it.id ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, background: '#f8f8fb', borderRadius: 8, padding: 8 }}>
+                    {[['name_ru', 'Название (рус)'], ['name_original', 'Название (ориг.)'], ['name_es', 'Название (исп.)'], ['brand', 'Производитель'], ['mpn', 'Номер производителя'], ['category', 'Категория'], ['notes', 'Заметки']].map(([k, lbl]) => (
+                      <input key={k} type="text" placeholder={lbl} value={itemEditForm[k] ?? (it[k] || '')}
+                        onChange={e => setItemEditForm(prev => ({ ...prev, [k]: e.target.value }))}
+                        style={{ padding: '5px 8px', fontSize: 12, borderRadius: 5, border: '1px solid #ccc' }} />
+                    ))}
+                    {/* v186: место хранения */}
+                    <select value={itemEditForm.location_city ?? (it.location_city || '')}
+                      onChange={e => setItemEditForm(prev => ({ ...prev, location_city: e.target.value }))}
+                      style={{ padding: '5px 8px', fontSize: 12, borderRadius: 5, border: '1px solid #ccc', background: '#fff' }}>
+                      <option value="">📍 Где находится…</option>
+                      <option value="Дубай">🇦🇪 Дубай</option>
+                      <option value="Тенерифе">🇮🇨 Тенерифе</option>
+                    </select>
+                    {[['storage_place', 'Место (гараж, кладовая…) ▾', 'dl-item-place'], ['storage_rack', 'Стеллаж ▾', 'dl-item-rack'], ['storage_shelf', 'Полка ▾', 'dl-item-shelf']].map(([k, lbl, dl]) => (
+                      <input key={k} type="text" list={dl} placeholder={lbl} value={itemEditForm[k] ?? (it[k] || '')}
+                        onChange={e => setItemEditForm(prev => ({ ...prev, [k]: e.target.value }))}
+                        style={{ padding: '5px 8px', fontSize: 12, borderRadius: 5, border: '1px solid #ccc' }} />
+                    ))}
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button onClick={() => saveItemEdit(it.id)} style={{ flex: 1, background: '#1e8449', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>💾 Сохранить</button>
+                      <button onClick={() => setItemEditId(null)} style={{ flex: 1, background: '#fff', border: '1px solid #ccc', borderRadius: 6, padding: '6px 0', fontSize: 12, cursor: 'pointer' }}>Отмена</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    <button onClick={() => { setItemEditId(it.id); setItemEditForm({ name_ru: it.name_ru || '', name_original: it.name_original || '', name_es: it.name_es || '', brand: it.brand || '', mpn: it.mpn || '', category: it.category || '', notes: it.notes || '', location_city: it.location_city || '', storage_place: it.storage_place || '', storage_rack: it.storage_rack || '', storage_shelf: it.storage_shelf || '' }); }}
+                      style={{ border: '1px solid #ccc', background: '#fff', borderRadius: 6, padding: '5px 10px', fontSize: 12, cursor: 'pointer' }}>✏️ Правка</button>
+                    <span style={{ position: 'relative', display: 'inline-block' }}>
+                      <button onClick={() => setItemShopMenu(itemShopMenu === it.id ? null : it.id)}
+                        style={{ border: 'none', background: '#8e44ad', color: '#fff', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                        🛒 Найти в магазинах ▾
+                      </button>
+                      {itemShopMenu === it.id && (
+                        <div style={{ position: 'absolute', zIndex: 60, top: '100%', left: 0, marginTop: 4, background: '#fff', border: '1px solid #d0d0d5', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,.18)', minWidth: 210, overflow: 'hidden' }}>
+                          <div style={{ padding: '7px 12px 3px', fontSize: 10.5, color: '#8e8e93', fontWeight: 700 }}>ГДЕ ИСКАТЬ — ни одной галки = 🌐 все:</div>
+                          {ITEM_STORES.filter(x => x[0]).map(([sv, lbl]) => (
+                            <label key={sv} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 12px', fontSize: 13, cursor: 'pointer' }}>
+                              <input type="checkbox" style={{ width: 15, height: 15, cursor: 'pointer', margin: 0 }}
+                                checked={itemShopSel.includes(sv)}
+                                onChange={() => setItemShopSel(prev => prev.includes(sv) ? prev.filter(x => x !== sv) : [...prev, sv])} />
+                              {lbl}
+                            </label>
+                          ))}
+                          <button onClick={() => { setItemShopMenu(null); loadItemSimilar(it.id, itemShopSel); }}
+                            style={{ margin: 8, width: 'calc(100% - 16px)', border: 'none', background: '#8e44ad', color: '#fff', borderRadius: 7, padding: '7px 0', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+                            🔍 Найти{itemShopSel.length ? ` (${itemShopSel.length})` : ' везде'}
+                          </button>
+                        </div>
+                      )}
+                    </span>
+                    <button onClick={() => loadItemVisual(it.id)} disabled={itemVisual[it.id]?.loading}
+                      title="Визуальный поиск: AI сравнивает фото предмета с фото товаров из каталогов"
+                      style={{ border: 'none', background: '#0a84ff', color: '#fff', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                      {itemVisual[it.id]?.loading ? '⏳ Сравниваю…' : '🖼 По фото'}
+                    </button>
+                    <button onClick={() => deleteItem(it.id)}
+                      style={{ marginLeft: 'auto', border: '1px solid #e74c3c', background: '#fff', color: '#c0392b', borderRadius: 6, padding: '5px 10px', fontSize: 12, cursor: 'pointer' }}>🗑</button>
+                  </div>
+                )}
+
+                {itemVisual[it.id]?.error && <div style={{ fontSize: 12, color: '#c0392b' }}>Ошибка визуального поиска: {itemVisual[it.id].error}</div>}
+                {itemVisual[it.id]?.results && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <div style={{ fontSize: 11, color: '#0a84ff', fontWeight: 700 }}>
+                      🖼 Визуальный поиск: сравнено фото — {itemVisual[it.id].candidates ?? '?'} кандидатов{itemVisual[it.id].model ? ` · ${itemVisual[it.id].model}` : ''}
+                    </div>
+                    {!itemVisual[it.id].results.length && <div style={{ fontSize: 12, color: '#6e6e73' }}>{itemVisual[it.id].message || 'Визуально похожих товаров не найдено.'}</div>}
+                    {itemVisual[it.id].results.map((r, i) => (
+                      <a key={i} href={r.url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 8, textDecoration: 'none', color: 'inherit', background: '#f0f7ff', borderRadius: 8, padding: '5px 8px', fontSize: 12 }}>
+                        {r.image && <img src={r.image} alt="" style={{ width: 34, height: 34, objectFit: 'contain', borderRadius: 5, background: '#fff', flexShrink: 0 }} />}
+                        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.name}>{r.name}</span>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: r.visual_score >= 0.85 ? '#1e8449' : (r.visual_score >= 0.65 ? '#b26a00' : '#6e6e73'), background: '#fff', borderRadius: 6, padding: '1px 6px', flexShrink: 0 }}>🖼 {Math.round(r.visual_score * 100)}%{r.visual_verified !== false ? ' ✓×2' : ''}</span>
+                        {r.attr_checked && <span title={r.attr_notes || 'Атрибутная проверка пройдена'} style={{ fontSize: 11, flexShrink: 0, cursor: 'help' }}>🧬</span>}
+                        <span style={{ fontSize: 10, color: '#95a5a6', flexShrink: 0 }}>{String(r.site || '').replace('www.', '')}</span>
+                        <span style={{ fontWeight: 700, color: '#c0392b', flexShrink: 0 }}>{r.price != null ? `${r.price} €` : '—'}</span>
+                      </a>
+                    ))}
+                  </div>
+                )}
+
+              </div>
+            ))}
+          </div>
+          {/* v186: логарифмическая тайм-шкала справа — клик по месяцу фильтрует карточки */}
+          {itemMonths.length > 1 && (
+            <div style={{ width: 118, flexShrink: 0, position: 'sticky', top: 70, background: '#fff', border: '1px solid #e0e0e5', borderRadius: 10, padding: '8px 8px', maxHeight: '70vh', overflowY: 'auto' }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#8e8e93', marginBottom: 5, textAlign: 'center' }}>ШКАЛА</div>
+              {itemMonths.map(m => (
+                <div key={m.k} onClick={() => { setItemMonthFilter(itemMonthFilter === m.k ? null : m.k); setItemPage(1); }}
+                  title={`${m.k}: ${m.c} шт.`}
+                  style={{ cursor: 'pointer', marginBottom: 4, padding: '2px 4px', borderRadius: 6, background: itemMonthFilter === m.k ? '#e8f2ff' : 'transparent', border: itemMonthFilter === m.k ? '1px solid #0a84ff' : '1px solid transparent' }}>
+                  <div style={{ fontSize: 10, color: itemMonthFilter === m.k ? '#0a84ff' : '#3a3a3c', fontWeight: 700, whiteSpace: 'nowrap' }}>{m.k.slice(2)} <span style={{ color: '#8e8e93', fontWeight: 400 }}>{m.c}</span></div>
+                  <div style={{ height: 5, borderRadius: 3, background: '#f0f0f3', marginTop: 2 }}>
+                    <div style={{ height: 5, borderRadius: 3, width: m.w + '%', background: itemMonthFilter === m.k ? '#0a84ff' : '#7c3aed', transition: 'width .2s' }}></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          </div>
+
+          {/* v187: результаты поиска по магазинам — во всплывающем окне, а не в карточке */}
+          {itemSearchModal && (
+            <div onClick={() => setItemSearchModal(null)}
+              style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+              <div onClick={e => e.stopPropagation()}
+                style={{ background: '#fff', borderRadius: 14, width: '100%', maxWidth: 640, maxHeight: '85vh', display: 'flex', flexDirection: 'column', boxShadow: '0 18px 60px rgba(0,0,0,.3)', overflow: 'hidden' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid #eee' }}>
+                  {itemSearchModal.item.photo_url && <img src={itemSearchModal.item.photo_url} alt="" style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 8, border: '1px solid #eee', flexShrink: 0 }} />}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{itemSearchModal.item.name_ru || 'Предмет'}</div>
+                    <div style={{ fontSize: 11.5, color: '#8e44ad', fontWeight: 700 }}>
+                      🛒 {itemSearchModal.sites && itemSearchModal.sites.length
+                        ? itemSearchModal.sites.map(sv => (ITEM_STORES.find(x => x[0] === sv) || [sv, sv])[1]).join(' · ')
+                        : '🌐 Все магазины'}
+                    </div>
+                    {itemSearchModal.debug && (
+                      <div style={{ fontSize: 10.5, color: '#8e8e93', marginTop: 2, lineHeight: 1.5 }}>
+                        🔬 MPN {itemSearchModal.debug.mpn_ok ? '✓' : '—'}
+                        {' · '}слова: {(itemSearchModal.debug.search_words || []).join(', ') || '—'}
+                        {' · '}кандидаты: {Object.entries(itemSearchModal.debug.by_source || {}).map(([k, v]) => `${({ mpn: '🔢', name_es: '🇪🇸', name_ru: 'RU', embed: '🧠' })[k] || k}×${v}`).join(' ') || '0'}
+                        {' · 🧠'}{itemSearchModal.debug.embed_used ? '✓' : '✗'}
+                        {itemSearchModal.debug.cat_roots && itemSearchModal.debug.cat_roots.length ? ` · раздел: ${itemSearchModal.debug.cat_roots.join('/')}` : ''}
+                        {itemSearchModal.debug.bad_excluded ? ` · отсеяно «не то»: ${itemSearchModal.debug.bad_excluded}` : ''}
+                      </div>
+                    )}
+                  </div>
+                  <button onClick={() => setItemSearchModal(null)} title="Закрыть"
+                    style={{ border: 'none', background: '#f2f2f5', borderRadius: 8, width: 32, height: 32, fontSize: 15, cursor: 'pointer', flexShrink: 0 }}>✕</button>
+                </div>
+                <div style={{ padding: '12px 16px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 5 }}>
+                  {itemSearchModal.loading && <div style={{ fontSize: 13, color: '#6e6e73', padding: 18, textAlign: 'center' }}>⏳ Ищу по базам магазинов…</div>}
+                  {itemSearchModal.error && <div style={{ fontSize: 13, color: '#c0392b' }}>Ошибка поиска: {itemSearchModal.error}</div>}
+                  {itemSearchModal.results && !itemSearchModal.results.length && (
+                    <div style={{ fontSize: 13, color: '#6e6e73', padding: 18, textAlign: 'center' }}>Похожих товаров не найдено{itemSearchModal.sites && itemSearchModal.sites.length ? ' в выбранных магазинах' : ''}.</div>
+                  )}
+                  {(itemSearchModal.results || []).map((r, i) => (
+                    <a key={i} href={r.url} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', color: 'inherit', background: '#f8f8fb', borderRadius: 9, padding: '7px 10px', fontSize: 13 }}>
+                      {r.image && <img src={r.image} alt="" style={{ width: 42, height: 42, objectFit: 'contain', borderRadius: 6, background: '#fff', flexShrink: 0 }} />}
+                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.name}>{r.name}</span>
+                      <span style={{ fontSize: 10.5, color: '#95a5a6', flexShrink: 0 }}>{({ mpn: '🔢MPN', name_es: '🇪🇸назв.', 'brand+name': '🏭+назв.', name: 'назв.', name_ru: 'назв.RU', embed: '🧠семант.' })[r.match_by] || r.match_by} · {String(r.site || '').replace('www.', '')}</span>
+                      <span style={{ fontWeight: 700, color: '#c0392b', flexShrink: 0 }}>{r.price != null ? `${r.price} €` : '—'}</span>
+                      {r.price_original != null && r.price_original > (r.price || 0) && <span style={{ textDecoration: 'line-through', color: '#95a5a6', flexShrink: 0 }}>{r.price_original} €</span>}
+                      {r.discount_pct != null && <span style={{ fontSize: 11, fontWeight: 700, color: '#1e8449', flexShrink: 0 }}>−{Math.round(r.discount_pct)}%</span>}
+                      <span onClick={async (e) => { // v188 ход 6: «не тот товар» — запомнить и больше не показывать
+                          e.preventDefault(); e.stopPropagation();
+                          try {
+                            await fetch(`${API_URL}/api/items/${itemSearchModal.item.id}/feedback?token=${token}`, {
+                              method: 'POST', headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ product_url: r.url, verdict: 'bad' })
+                            });
+                            setItemSearchModal(prev => prev ? { ...prev, results: (prev.results || []).filter(x => x.url !== r.url) } : prev);
+                          } catch (err) { setItemError(err.message); }
+                        }} title="Не тот товар — запомню и уберу из выдачи"
+                        style={{ color: '#c0392b', fontSize: 13, fontWeight: 700, padding: '2px 5px', flexShrink: 0, cursor: 'pointer' }}>✕</span>
+                    </a>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
         </div>
