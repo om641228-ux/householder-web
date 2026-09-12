@@ -2245,7 +2245,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v192 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v193 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -5833,6 +5833,7 @@ function App() {
   const [itemDebugModal, setItemDebugModal] = useState(null);   // v189: глобальная AI-отладка
   const [itemLab, setItemLab] = useState(null);                 // v190: вкладка 🔬 — данные дашборда
   // v191: журнал поисков (вкладка 🔎) — сюда падают результаты «Найти в магазинах» и «По фото»
+  const [journalDebugOpen, setJournalDebugOpen] = useState(true); // v193: панель AI-отладки в журнале
   const [itemSearchLog, setItemSearchLog] = useState(() => {
     try { return JSON.parse(localStorage.getItem('itemSearchLog') || '[]'); } catch (e) { return []; }
   });
@@ -9955,7 +9956,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-12 · v192 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-12 · v193 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9968,7 +9969,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-12 · v192</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-12 · v193</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
@@ -9982,7 +9983,7 @@ ${bodyHtml}
               <button className={activeTab === 'lab' ? 'active' : ''} title="Улучшение распознавания и сравнения — дашборд AI" onClick={() => { setActiveTab('lab'); loadItemLab(); }}>🔬</button>
             )}
             {appMode === 'items' && tabAllowed('list') && (
-              <button className={activeTab === 'journal' ? 'active' : ''} title="Журнал поисков — результаты «Найти в магазинах» и «По фото»" onClick={() => setActiveTab('journal')}>🔎 Журнал{itemSearchLog.length ? ` (${itemSearchLog.length})` : ''}</button>
+              <button className={activeTab === 'journal' ? 'active' : ''} title="Журнал поисков — результаты «Найти в магазинах» и «По фото»" onClick={() => { setActiveTab('journal'); loadItemLab(); }}>🔎 Журнал{itemSearchLog.length ? ` (${itemSearchLog.length})` : ''}</button>
             )}
             {appMode !== 'items' && (<>
             {tabAllowed('list') && (
@@ -10081,7 +10082,7 @@ ${bodyHtml}
             </button>
           )}
           {appMode === 'items' && tabAllowed('list') && (
-            <button className={activeTab === 'journal' ? 'active' : ''} onClick={() => setActiveTab('journal')}>
+            <button className={activeTab === 'journal' ? 'active' : ''} onClick={() => { setActiveTab('journal'); loadItemLab(); }}>
               <span className="mbn-ico">🔎</span>
             </button>
           )}
@@ -11420,6 +11421,79 @@ ${bodyHtml}
               🗑 Очистить журнал
             </button>
           </div>
+          {/* v193: панель AI-отладки — переехала из Tools, сворачивается */}
+          <div style={{ background: '#fff', border: '1px solid #d9c8f5', borderRadius: 12, marginBottom: 12, overflow: 'hidden' }}>
+            <div onClick={() => setJournalDebugOpen(!journalDebugOpen)}
+              style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', cursor: 'pointer', background: '#f4ecfb' }}>
+                <b style={{ fontSize: 14, color: '#7c3aed' }}>🔬 AI-отладка: распознавание и сравнение с каталогом</b>
+                {itemLabLoading && <span style={{ fontSize: 11, color: '#8e8e93' }}>⏳ обновляю…</span>}
+                <span style={{ marginLeft: 'auto', fontSize: 13, color: '#7c3aed' }}>{journalDebugOpen ? '▾ свернуть' : '▸ развернуть'}</span>
+            </div>
+            {journalDebugOpen && itemLab && itemLab.ok && (() => {
+              const d = itemLab;
+              const h = d.hints || {};
+              const catEmb = typeof d.catalog_embedded === 'number' ? d.catalog_embedded : 0;
+              const catTot = typeof d.catalog_total === 'number' ? d.catalog_total : 0;
+              const catPct = catTot ? Math.round(catEmb / catTot * 100) : 0;
+              const itEmb = typeof d.items_embedded === 'number' ? d.items_embedded : 0;
+              const itTot = typeof d.items_total === 'number' ? d.items_total : 0;
+              const itPct = itTot ? Math.round(itEmb / itTot * 100) : 0;
+              const fb = (d.feedback && typeof d.feedback === 'object') ? d.feedback : {};
+              const Bar = ({ pct, color }) => (
+                <div style={{ height: 8, borderRadius: 4, background: '#eeeef2', overflow: 'hidden', margin: '4px 0 2px' }}>
+                  <div style={{ height: 8, borderRadius: 4, width: Math.max(0, Math.min(100, pct)) + '%', background: color || '#7c3aed', transition: 'width .4s' }}></div>
+                </div>
+              );
+              const KV = ({ k, v }) => <div style={{ fontSize: 12, color: '#3a3a3c', padding: '1.5px 0' }}><span style={{ color: '#8e8e93' }}>{k}: </span><b>{v}</b></div>;
+              const Sec = ({ t, children }) => (<div style={{ borderTop: '1px solid #f0f0f3', padding: '8px 14px' }}><div style={{ fontSize: 11, fontWeight: 700, color: '#8e8e93', marginBottom: 4 }}>{t}</div>{children}</div>);
+              return (<div style={{ fontSize: 12.5 }}>
+                <Sec t="РАСПОЗНАВАНИЕ ФОТО (выбранная в шапке модель, fallback-цепочка)">
+                  <KV k="цепочка предметов" v="выбранная модель → Gemini 3.5-flash → 3.1-pro → 3-flash → 2.5-flash → OpenRouter → Mistral → Kimi" />
+                  <KV k="предметов по моделям" v={d.items_by_model ? Object.entries(d.items_by_model).map(([m, c]) => `${m}×${c}`).join(' · ') : '—'} />
+                  <KV k="дубликатов в базе (MPN или бренд+название)" v={d.items_dup ?? '—'} />
+                </Sec>
+                <Sec t="ХОД 1 · СПРАВОЧНИК КАТАЛОГА (пункт 9 промпта распознавания)">
+                  <KV k="терминов / брендов" v={`${h.terms_count ?? '—'} / ${h.brands_count ?? '—'}`} />
+                  <Bar pct={Math.round((h.terms_count || 0) / 120 * 100)} />
+                  <KV k="обновлён" v={h.rebuilt_at ? `${new Date(h.rebuilt_at).toLocaleString('ru-RU')} (${h.age_min} мин назад; пересбор каждые 6 ч + после каждой правки)` : '—'} />
+                  <div style={{ fontSize: 11, color: '#6e6e73', background: '#f8f8fb', borderRadius: 7, padding: '5px 8px', marginTop: 3, lineHeight: 1.6, maxHeight: 80, overflowY: 'auto' }}>{(h.terms_sample || []).join(' · ') || '—'}</div>
+                </Sec>
+                <Sec t="ХОД 2+3 · НОРМАЛИЗАЦИЯ И РАЗДЕЛЫ">
+                  <KV k="бренд" v={`снап к ${h.brands_count ?? '—'} каноническим (WERA→Wera); MPN ищется по mpn И article`} />
+                  <KV k="раздел каталога" v="инструмент→herramient · электрика→electric · крепёж→ferreter/tornill · сантехника→fontaner (+4 к скорингу)" />
+                  <KV k="фильтр типа (v191)" v="первое слово name_es обязано быть в названии кандидата" />
+                </Sec>
+                <Sec t="ХОД 4 · ЭМБЕДДИНГИ (pgvector)">
+                  <KV k="режим" v={({ auto: '⚖️ авто (локальный → облако)', local: '🖥 только локальный', cloud: '☁️ только облако' })[d.embed_mode] || d.embed_mode} />
+                  <KV k="эффективный движок" v={String(d.embed_backend)} />
+                  {d.local_embed_url && <KV k="локальный AI" v={`${d.local_embed_url} — ${d.local_embed_alive === true ? '🟢 доступен' : d.local_embed_alive === false ? '🔴 НЕ ОТВЕЧАЕТ' : '…'}`} />}
+                  <KV k="каталог с векторами" v={`${catEmb} из ${catTot} — ${catPct}%`} />
+                  <Bar pct={catPct} color={catPct > 50 ? '#1e8449' : '#b26a00'} />
+                  <KV k="предметы с векторами" v={`${itEmb} из ${itTot} — ${itPct}%`} />
+                  <Bar pct={itPct} color="#0a84ff" />
+                </Sec>
+                <Sec t="КАТАЛОГ ПО МАГАЗИНАМ (база для сравнения)">
+                  {d.catalog_by_site && Object.entries(d.catalog_by_site).map(([st, c]) => (
+                    <div key={st} style={{ marginBottom: 3 }}>
+                      <KV k={st.replace(/^(www\.|canarias\.|tienda\.)/, '')} v={`${(c || 0).toLocaleString('ru-RU')} товаров`} />
+                      <Bar pct={catTot ? Math.round((c || 0) / catTot * 100) : 0} color="#8e44ad" />
+                    </div>
+                  ))}
+                </Sec>
+                <Sec t="ХОД 5 · ВИЗУАЛЬНОЕ СРАВНЕНИЕ ПО ФОТО">
+                  <KV k="пайплайн" v="кандидаты (слова+MPN+эмбеддинг, ≤12 с фото) → vision 2 прохода → консенсус → атрибутная перепроверка топ-5 (55% визуал + 45% атрибуты, бейдж 🧬)" />
+                </Sec>
+                <Sec t="ХОД 6 · ОБРАТНАЯ СВЯЗЬ (петля обучения)">
+                  <KV k="метки good / bad / правки" v={`${fb.good || 0} / ${fb.bad || 0} / ${fb.correction || 0}`} />
+                  <Bar pct={Math.min(100, ((fb.good || 0) + (fb.bad || 0) + (fb.correction || 0)) * 2)} color="#1e8449" />
+                  <div style={{ fontSize: 11, color: '#8e8e93' }}>«✕ не то» — исключает товар из выдачи предмета; правки name_es/бренд/MPN попадают в справочник (ход 1).</div>
+                </Sec>
+              </div>);
+            })()}
+            {journalDebugOpen && itemLab && itemLab.error && <div style={{ padding: '8px 14px', fontSize: 12, color: '#c0392b' }}>Ошибка: {itemLab.error}</div>}
+            {journalDebugOpen && !itemLab && !itemLabLoading && <div style={{ padding: '8px 14px', fontSize: 12, color: '#6e6e73' }}>Откройте вкладку 🔬 или нажмите сюда ещё раз — соберу данные.</div>}
+          </div>
+
           {!itemSearchLog.length && (
             <div style={{ padding: 24, textAlign: 'center', color: '#6e6e73', fontSize: 13 }}>Пока пусто. Нажмите в карточке предмета «🛒 Найти в магазинах» или «🖼 По фото» — результат появится здесь.</div>
           )}
@@ -11648,18 +11722,6 @@ ${bodyHtml}
               <option value={96}>96 на стр.</option>
               <option value={100000}>Все</option>
             </select>
-            <button onClick={async () => { // v189: панель отладки AI-механизмов
-                setItemDebugModal({ loading: true });
-                try {
-                  const r = await fetch(`${API_URL}/api/items/debug?token=${token}`);
-                  const d = await r.json();
-                  if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
-                  setItemDebugModal(d);
-                } catch (e) { setItemDebugModal({ error: e.message }); }
-              }} title="Отладка: справочник каталога, эмбеддинги, обратная связь"
-              style={{ padding: '6px 10px', fontSize: 12, borderRadius: 6, border: '1px solid #7c3aed', background: '#f4ecfb', color: '#7c3aed', cursor: 'pointer', fontWeight: 700 }}>
-              🔬 AI
-            </button>
             {itemMonthFilter && (
               <button onClick={() => { setItemMonthFilter(null); setItemPage(1); }} title="Сбросить фильтр тайм-шкалы"
                 style={{ padding: '6px 10px', fontSize: 12, borderRadius: 6, border: '1px solid #0a84ff', background: '#e8f2ff', color: '#0a84ff', cursor: 'pointer', fontWeight: 700 }}>
@@ -11887,52 +11949,6 @@ ${bodyHtml}
             </div>
           )}
           </div>
-
-          {/* v189: панель AI-отладки — все 6 механизмов одним взглядом */}
-          {itemDebugModal && (
-            <div onClick={() => setItemDebugModal(null)}
-              style={{ position: 'fixed', inset: 0, zIndex: 1001, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-              <div onClick={e => e.stopPropagation()}
-                style={{ background: '#fff', borderRadius: 14, width: '100%', maxWidth: 560, maxHeight: '85vh', overflowY: 'auto', padding: 16, boxShadow: '0 18px 60px rgba(0,0,0,.3)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', marginBottom: 10 }}>
-                  <b style={{ fontSize: 16 }}>🔬 AI-отладка сравнения с каталогом</b>
-                  <button onClick={() => setItemDebugModal(null)} style={{ marginLeft: 'auto', border: 'none', background: '#f2f2f5', borderRadius: 8, width: 30, height: 30, cursor: 'pointer' }}>✕</button>
-                </div>
-                {itemDebugModal.loading && <div style={{ padding: 16, textAlign: 'center', color: '#6e6e73' }}>⏳ Собираю…</div>}
-                {itemDebugModal.error && <div style={{ color: '#c0392b', fontSize: 13 }}>Ошибка: {itemDebugModal.error}</div>}
-                {itemDebugModal.ok && (() => {
-                  const d = itemDebugModal;
-                  const row = (lbl, val, ok) => (
-                    <div style={{ display: 'flex', gap: 8, padding: '7px 10px', background: '#f8f8fb', borderRadius: 8, marginBottom: 5, fontSize: 12.5, alignItems: 'baseline' }}>
-                      <span style={{ flexShrink: 0 }}>{ok === true ? '✅' : ok === false ? '⚠️' : 'ℹ️'}</span>
-                      <span style={{ color: '#6e6e73', flexShrink: 0, minWidth: 190 }}>{lbl}</span>
-                      <b style={{ wordBreak: 'break-word' }}>{val}</b>
-                    </div>
-                  );
-                  const h = d.hints || {};
-                  const embPct = (typeof d.catalog_embedded === 'number' && d.catalog_total) ? Math.round(d.catalog_embedded / d.catalog_total * 100) : null;
-                  const fb = typeof d.feedback === 'object' && d.feedback ? d.feedback : null;
-                  return (<>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: '#8e8e93', margin: '4px 0 6px' }}>ХОД 1 · СПРАВОЧНИК КАТАЛОГА (в промпте распознавания)</div>
-                    {h.error ? row('справочник', 'ошибка: ' + h.error, false) : (<>
-                      {row('терминов / брендов', `${h.terms_count} / ${h.brands_count}`, h.terms_count > 10)}
-                      {row('обновлён', h.rebuilt_at ? `${new Date(h.rebuilt_at).toLocaleString('ru-RU')} (${h.age_min} мин назад)` : '—', true)}
-                      <div style={{ fontSize: 11, color: '#6e6e73', background: '#f8f8fb', borderRadius: 8, padding: '6px 10px', marginBottom: 5, lineHeight: 1.6 }}>
-                        {(h.terms_sample || []).join(' · ') || '—'}
-                      </div>
-                    </>)}
-                    <div style={{ fontSize: 11, fontWeight: 700, color: '#8e8e93', margin: '10px 0 6px' }}>ХОД 4 · ЭМБЕДДИНГИ (pgvector)</div>
-                    {row('движок', d.embed_backend, !/НЕ НАСТРОЕН/.test(String(d.embed_backend)))}
-                    {row('каталог с векторами', typeof d.catalog_embedded === 'number' ? `${d.catalog_embedded} из ${d.catalog_total} (${embPct}%)` : String(d.catalog_embedded), embPct !== null && embPct > 50)}
-                    {row('предметы с векторами', `${d.items_embedded ?? '—'} из ${d.items_total ?? '—'}`, true)}
-                    {embPct !== null && embPct < 100 && <div style={{ fontSize: 11, color: '#b26a00', marginBottom: 5 }}>→ Прогнать каталог: POST /api/parse/embed-catalog (порциями по 200–500)</div>}
-                    <div style={{ fontSize: 11, fontWeight: 700, color: '#8e8e93', margin: '10px 0 6px' }}>ХОД 6 · ОБРАТНАЯ СВЯЗЬ (петля обучения)</div>
-                    {fb ? row('метки good / bad / правки', `${fb.good || 0} / ${fb.bad || 0} / ${fb.correction || 0}`, true) : row('feedback', String(d.feedback), false)}
-                  </>);
-                })()}
-              </div>
-            </div>
-          )}
 
           {/* v187: результаты поиска по магазинам — во всплывающем окне, а не в карточке */}
           {itemSearchModal && (

@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v192-2026-09-12', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v193-2026-09-12', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -7497,6 +7497,28 @@ app.get('/api/items/debug', requireAuth, async (req, res) => {
     out.feedback = m;
   } catch (e) { out.feedback = 'нет таблицы — выполните миграцию v188'; }
   out.embed_note = 'Это движок ЭМБЕДДИНГОВ (семантический поиск), а не распознавания: фото распознаёт модель, выбранная в шапке.';
+  // v193: максимум информации для отладки
+  const SITES6 = ['www.leroymerlin.es', 'canarias.worten.es', 'canarias.mediamarkt.es', 'www.tutrebol.es', 'tienda.mercadona.es', 'chafiras.com'];
+  out.catalog_by_site = {};
+  for (const st of SITES6) {
+    try { const { count } = await supabaseAdmin.from('parse_products').select('*', { count: 'exact', head: true }).eq('site', st); out.catalog_by_site[st] = count; } catch (e) {}
+  }
+  try {
+    const { data: its } = await supabaseAdmin.from('home_items').select('ai_model, mpn, brand, name_es').limit(300);
+    const bm = {};
+    let dupCnt = 0;
+    const seen = new Map();
+    for (const it of its || []) {
+      const mdl = String(it.ai_model || '—'); bm[mdl] = (bm[mdl] || 0) + 1;
+      const keys = [];
+      if (it.mpn) keys.push('mpn:' + String(it.mpn).toLowerCase().replace(/[\s-]+/g, ''));
+      const nm = String(it.name_es || '').toLowerCase().trim();
+      if (nm) keys.push('name:' + (it.brand ? String(it.brand).toLowerCase() + '|' : '') + nm);
+      for (const k of keys) { if (seen.has(k)) { dupCnt++; } else seen.set(k, 1); }
+    }
+    out.items_by_model = bm;
+    out.items_dup = dupCnt;
+  } catch (e) {}
   out.embed_mode = await getEmbedMode(); // v192: auto | local | cloud
   out.local_embed_url = process.env.LOCAL_EMBED_URL || null;
   out.local_embed_alive = null;
