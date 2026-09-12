@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v188-2026-09-12', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v189-2026-09-12', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -7314,7 +7314,22 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
         push(data, 'name_ru');
       }
     }
-    res.json({ item: { id: item.id, name_ru: item.name_ru, name_es: item.name_es, brand: item.brand, mpn: item.mpn }, results: out.slice(0, 30) });
+    // v189: телеметрия пайплайна для отладки
+    const bySrc = {};
+    for (const r of out) bySrc[r.match_by] = (bySrc[r.match_by] || 0) + 1;
+    res.json({
+      item: { id: item.id, name_ru: item.name_ru, name_es: item.name_es, brand: item.brand, mpn: item.mpn },
+      results: out.slice(0, 30),
+      debug: {
+        mpn_ok: !!mpnOk,
+        search_words: searchWords,
+        es_words: esWords,
+        cat_roots: catRoots,
+        embed_used: !!item.name_embed,
+        bad_excluded: badUrls.size,
+        by_source: bySrc
+      }
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -7437,6 +7452,34 @@ async function rankImagesWithFallback(queryImg, candImgs) {
   }
   throw new Error(errors.join(' | ') || 'Нет доступных vision-провайдеров');
 }
+
+// v189: отладка AI-механизмов — справочник, эмбеддинги, feedback (для панели «🔬 AI-отладка»)
+app.get('/api/items/debug', requireAuth, async (req, res) => {
+  const out = { ok: true, now: new Date().toISOString() };
+  try {
+    const hints = await getCatalogHints();
+    out.hints = {
+      rebuilt_at: hints.at ? new Date(hints.at).toISOString() : null,
+      age_min: hints.at ? Math.round((Date.now() - hints.at) / 60000) : null,
+      terms_count: hints.terms.length,
+      brands_count: hints.brands.length,
+      terms_sample: hints.terms.slice(0, 40)
+    };
+  } catch (e) { out.hints = { error: e.message }; }
+  try { const { count } = await supabaseAdmin.from('parse_products').select('*', { count: 'exact', head: true }); out.catalog_total = count; } catch (e) { out.catalog_total = 'err: ' + e.message; }
+  try { const { count } = await supabaseAdmin.from('parse_products').select('*', { count: 'exact', head: true }).not('name_embed', 'is', null); out.catalog_embedded = count; } catch (e) { out.catalog_embedded = 'нет колонки — выполните миграцию v188'; }
+  try { const { count } = await supabaseAdmin.from('home_items').select('*', { count: 'exact', head: true }); out.items_total = count; } catch (e) {}
+  try { const { count } = await supabaseAdmin.from('home_items').select('*', { count: 'exact', head: true }).not('name_embed', 'is', null); out.items_embedded = count; } catch (e) { out.items_embedded = 'нет колонки — выполните миграцию v188'; }
+  try {
+    const { data } = await supabaseAdmin.from('item_feedback').select('verdict');
+    const m = {}; for (const r of data || []) m[r.verdict] = (m[r.verdict] || 0) + 1;
+    out.feedback = m;
+  } catch (e) { out.feedback = 'нет таблицы — выполните миграцию v188'; }
+  out.embed_backend = process.env.LOCAL_EMBED_URL
+    ? `локальный AI: ${process.env.LOCAL_EMBED_URL} (${process.env.LOCAL_EMBED_MODEL || 'nomic-embed-text'})`
+    : (process.env.GEMINI_API_KEY ? 'gemini-embedding-001 (облако)' : 'НЕ НАСТРОЕН');
+  res.json(out);
+});
 
 // v188 ход 6: обратная связь — «не тот товар» / «верное совпадение»
 app.post('/api/items/:id/feedback', requireAuth, async (req, res) => {
