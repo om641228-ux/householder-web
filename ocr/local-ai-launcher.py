@@ -18,14 +18,28 @@ local-ai-launcher.py — лаунчер локального AI для household
 import json, os, re, subprocess, sys, threading, time, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-# ====== НАСТРОЙКИ (поправьте под себя, если пути другие) ======
-OCR_DIR = os.path.expanduser("~/ocr")                      # папка с mac-ocr-server.py
-OCR_PY = os.path.join(OCR_DIR, "venv", "bin", "python")    # python из venv
-OCR_SCRIPT = os.path.join(OCR_DIR, "mac-ocr-server.py")
+# ====== НАСТРОЙКИ ======
+# Папка лаунчера = папка с mac-ocr-server.py (положите лаунчер рядом с ним).
+# Дополнительно проверяем ~/ocr на случай другого расположения.
+_LAUNCHER_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _find_ocr():
+    for d in [_LAUNCHER_DIR, os.path.expanduser("~/ocr"), os.path.expanduser("~/householder-web/ocr")]:
+        script = os.path.join(d, "mac-ocr-server.py")
+        if os.path.exists(script):
+            return d, script
+    return _LAUNCHER_DIR, os.path.join(_LAUNCHER_DIR, "mac-ocr-server.py")
+
+
+OCR_DIR, OCR_SCRIPT = _find_ocr()
+# python из venv рядом со скриптом; если нет — системный python3
+_venv_py = os.path.join(OCR_DIR, "venv", "bin", "python")
+OCR_PY = _venv_py if os.path.exists(_venv_py) else "/usr/bin/env python3"
 OLLAMA_PORT = 11434
 OCR_PORT = 8787
 LAUNCHER_PORT = 8790
-LOG_DIR = os.path.expanduser("~/ocr/logs")
+LOG_DIR = os.path.join(OCR_DIR, "logs")
 # ==============================================================
 
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -54,7 +68,7 @@ def spawn(cmd, log_name, env=None):
     e = dict(os.environ)
     if env:
         e.update(env)
-    p = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=e)
+    p = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=e, start_new_session=True)
     STATE["procs"].append(p)
     return p, log
 
@@ -73,10 +87,15 @@ def start_ollama():
 def start_ocr():
     if ocr_up():
         return True
-    py = OCR_PY if os.path.exists(OCR_PY) else sys.executable
     if not os.path.exists(OCR_SCRIPT):
         return False
-    spawn([py, OCR_SCRIPT], "ocr.log")
+    if " " in OCR_PY:  # '/usr/bin/env python3'
+        cmd = OCR_PY.split() + [OCR_SCRIPT]
+    elif os.path.exists(OCR_PY):
+        cmd = [OCR_PY, OCR_SCRIPT]
+    else:
+        cmd = [sys.executable, OCR_SCRIPT]
+    spawn(cmd, "ocr.log")
     for _ in range(30):
         if ocr_up():
             return True
@@ -116,6 +135,7 @@ def start_all():
         "ollama": ok_ollama, "ocr": ok_ocr,
         "ollama_url": STATE["ollama_url"],
         "ocr_url": STATE["ocr_url"],
+        "ocr_dir": OCR_DIR, "ocr_script_found": os.path.exists(OCR_SCRIPT),
     }
 
 
@@ -136,7 +156,9 @@ class H(BaseHTTPRequestHandler):
         self._send(200, {"ok": True})
 
     def do_GET(self):
-        if self.path.startswith("/status"):
+        if self.path.startswith("/start"):
+            self._send(200, start_all())
+        elif self.path.startswith("/status"):
             self._send(200, {
                 "ollama": ollama_up(), "ocr": ocr_up(),
                 "ollama_url": STATE["ollama_url"], "ocr_url": STATE["ocr_url"],
@@ -154,12 +176,38 @@ class H(BaseHTTPRequestHandler):
         pass
 
 
+def watchdog():
+    while True:
+        time.sleep(60)
+        try:
+            if not ollama_up():
+                start_ollama()
+            if not ocr_up():
+                start_ocr()
+            if STATE["ollama_url"] and not http_alive(STATE["ollama_url"] + "/api/tags", timeout=8):
+                STATE["ollama_url"] = None
+            if STATE["ocr_url"] and not http_alive(STATE["ocr_url"] + "/", timeout=8):
+                STATE["ocr_url"] = None
+            if ollama_up() and not STATE["ollama_url"]:
+                STATE["ollama_url"] = start_tunnel(OLLAMA_PORT, "tunnel-ollama.log")
+            if ocr_up() and not STATE["ocr_url"]:
+                STATE["ocr_url"] = start_tunnel(OCR_PORT, "tunnel-ocr.log")
+        except Exception:
+            pass
+
+
 def main():
     print(f"local-ai-launcher слушает http://127.0.0.1:{LAUNCHER_PORT}")
     print("Кнопка в приложении householder-web вызовет /start.")
     print("Запускаю сервисы сразу…")
     print(json.dumps(start_all(), ensure_ascii=False, indent=2))
-    ThreadingHTTPServer(("127.0.0.1", LAUNCHER_PORT), H).serve_forever()
+    threading.Thread(target=watchdog, daemon=True).start()
+    print("Сторож запущен: упавшие сервисы/туннели переподнимаются автоматически.")
+    print("Ctrl+C остановит только лаунчер — Ollama/OCR/туннели продолжат работать.")
+    try:
+        ThreadingHTTPServer(("127.0.0.1", LAUNCHER_PORT), H).serve_forever()
+    except KeyboardInterrupt:
+        print("\nЛаунчер остановлен. Сервисы работают в фоне. Повторный запуск подхватит их.")
 
 
 if __name__ == "__main__":
