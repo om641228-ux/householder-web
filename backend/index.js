@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v200-2026-09-13', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v201-2026-09-13', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -950,22 +950,32 @@ const ES_STOP_HINT = new Set(['de', 'del', 'la', 'el', 'los', 'las', 'con', 'par
 
 // Ход 1+6: справочник испанских наименований из РЕАЛЬНЫХ названий каталога (+ термины из ваших ручных правок)
 async function rebuildCatalogHints() {
-  const { data: rows } = await supabaseAdmin.from('parse_products').select('name').not('name', 'is', null).order('last_seen', { ascending: false }).limit(4000);
-  const uni = new Map(), bi = new Map();
-  for (const r of rows || []) {
-    const ws = String(r.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
-      .filter(w => w.length >= 3 && !ES_STOP_HINT.has(w) && !/^\d+$/.test(w));
-    ws.slice(0, 8).forEach(w => uni.set(w, (uni.get(w) || 0) + 1));
-    for (let i = 0; i < Math.min(ws.length - 1, 4); i++) { const b = ws[i] + ' ' + ws[i + 1]; bi.set(b, (bi.get(b) || 0) + 1); }
-  }
+  // v201: ОСНОВНОЕ ОБУЧЕНИЕ — наименования Leroy Merlin (инструмент/стройка); остальные магазины — добавка в конец
+  const grams = (rows) => {
+    const uni = new Map(), bi = new Map();
+    for (const r of rows || []) {
+      const ws = String(r.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+        .filter(w => w.length >= 3 && !ES_STOP_HINT.has(w) && !/^\d+$/.test(w));
+      ws.slice(0, 8).forEach(w => uni.set(w, (uni.get(w) || 0) + 1));
+      for (let i = 0; i < Math.min(ws.length - 1, 4); i++) { const b = ws[i] + ' ' + ws[i + 1]; bi.set(b, (bi.get(b) || 0) + 1); }
+    }
+    return { uni, bi };
+  };
   const top = (m, min, lim) => [...m.entries()].filter(x => x[1] >= min).sort((a, b) => b[1] - a[1]).slice(0, lim).map(x => x[0]);
+  const { data: leroyRows } = await supabaseAdmin.from('parse_products').select('name').eq('site', 'www.leroymerlin.es').not('name', 'is', null).order('last_seen', { ascending: false }).limit(5000);
+  const { data: otherRows } = await supabaseAdmin.from('parse_products').select('name').neq('site', 'www.leroymerlin.es').not('name', 'is', null).order('last_seen', { ascending: false }).limit(1500);
+  const lg = grams(leroyRows), og = grams(otherRows);
   let feedbackTerms = [];
   try {
     const { data: fb } = await supabaseAdmin.from('item_feedback').select('new_value').eq('field', 'name_es').not('new_value', 'is', null).limit(200);
     feedbackTerms = (fb || []).map(x => String(x.new_value || '').trim()).filter(Boolean);
   } catch (e) {}
-  CATALOG_HINTS.terms = [...new Set([...feedbackTerms, ...top(bi, 3, 60), ...top(uni, 8, 60)])].slice(0, 120);
+  CATALOG_HINTS.terms = [...new Set([
+    ...feedbackTerms,                       // правки пользователя — всегда первые
+    ...top(lg.bi, 3, 50), ...top(lg.uni, 6, 40), // Leroy Merlin — основной массив (до 90)
+    ...top(og.bi, 4, 20), ...top(og.uni, 10, 10) // остальные магазины — добавка (до 30)
+  ])].slice(0, 120);
   const { data: br } = await supabaseAdmin.from('parse_brands').select('name').limit(1000);
   CATALOG_HINTS.brands = [...new Set((br || []).map(x => String(x.name || '').trim()).filter(Boolean))];
   CATALOG_HINTS.at = Date.now();
