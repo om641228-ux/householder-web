@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v197-2026-09-13', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v200-2026-09-13', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -1030,6 +1030,31 @@ async function embedText(text, opts = {}) {
   try { return await embedTextCloud(t); } catch (e) { console.warn('cloud embed failed (auto):', e.message); }
   return null;
 }
+// v200: испанский мини-стеммер (ед./мн. число) + словарь синонимов типов товаров
+function stemEs2(w) {
+  w = String(w || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  if (w.length > 5 && /(ces|zes|ses)$/.test(w)) return w.slice(0, -2);
+  if (w.length > 5 && w.endsWith('es') && /[bcdfghjklmnptv]es$/.test(w)) return w.slice(0, -2); // alicates→alicat
+  if (w.length > 4 && w.endsWith('s')) return w.slice(0, -1);
+  if (w.length > 5 && w.endsWith('e')) return w.slice(0, -1); // alicate→alicat — обе стороны сходятся
+  return w;
+}
+const STEM_SYN = {
+  alicat: ['pinza', 'tenaza'], pinza: ['alicat'], tenaza: ['alicat'],
+  sierra: ['serrucho'], serrucho: ['sierra'],
+  destornillador: ['desarmador'], desarmador: ['destornillador'],
+  cutter: ['cortador', 'cuchilla'], cortador: ['cutter'],
+  broca: ['mecha'], mecha: ['broca'],
+  martillo: ['mazo'], mazo: ['martillo'],
+  lima: ['escofina'], escofina: ['lima'],
+};
+function stemsHit(nmStemSet, word) {
+  const st = stemEs2(word);
+  if (nmStemSet.has(st)) return true;
+  for (const syn of (STEM_SYN[st] || [])) if (nmStemSet.has(stemEs2(syn))) return true;
+  return false;
+}
+
 async function matchProductsByEmbedding(vec, k = 15) {
   if (!Array.isArray(vec) || !vec.length) return [];
   try {
@@ -7291,40 +7316,67 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
     const latWords = wordsOf(item.name_original, 3, 3).filter(w => !item.brand || !String(item.brand).toLowerCase().includes(w));
     const searchWords = [...new Set([...esWords, ...latWords])];
     if (searchWords.length) {
-      const orExpr = searchWords.map(w => `name.ilike.%${w.replace(/[%_]/g, ' ')}%`).join(',');
+      // v200: кандидаты по СТЕМАМ — префикс ловит и ед., и мн. число (alicat → alicate/alicates)
+      const queryStems = [...new Set(searchWords.map(stemEs2).filter(w => w.length >= 3))];
+      const orExpr = queryStems.map(w => `name.ilike.%${w.replace(/[%_]/g, ' ')}%`).join(',');
       const { data: cand } = await bySite(supabaseAdmin.from('parse_products').select(COLS))
-        .or(orExpr).limit(120);
+        .or(orExpr).limit(150);
       const brandLc = String(item.brand || '').toLowerCase();
       const scored = (cand || []).map(r => {
         const nm = String(r.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        const nmStemSet = new Set(nm.split(/[^a-z0-9-]+/).filter(Boolean).map(stemEs2)); // v200
         let score = 0, esHits = 0, latHits = 0;
         const esPhrase = String(item.name_es || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s-]/g, ' ').replace(/\s+/g, ' ').trim();
         if (esPhrase.length >= 8 && nm.includes(esPhrase)) score += 10; // v184: полная фраза name_es целиком — сильный сигнал
-        for (const w of esWords) if (nm.includes(w)) { score += 2; esHits++; } // испанские слова весят больше
-        for (const w of latWords) if (nm.includes(w)) { score += 1; latHits++; }
+        for (const w of esWords) if (stemsHit(nmStemSet, w)) { score += 2; esHits++; } // v200: стем+синонимы
+        for (const w of latWords) if (stemsHit(nmStemSet, w)) { score += 1; latHits++; }
         const brandHit = brandLc && String(r.brand || '').toLowerCase().includes(brandLc);
         if (brandHit) score += 3;
         const mpnHit = mpnOk && r.mpn && String(r.mpn).toLowerCase() === String(item.mpn).toLowerCase();
         if (mpnHit) score += 5;
         if (catRoots.length && r.category && catRoots.some(c => String(r.category).toLowerCase().includes(c))) score += 4; // v188 ход 3: свой раздел каталога
+        if (r.price == null) score -= 2;  // v200: товар без цены — ниже
+        if (!r.image) score -= 1;         // v200: товар без фото — ниже
         // v182: отсев мусора — нужно ≥2 испанских слова, ИЛИ бренд+слово, ИЛИ точный MPN (одно общее слово недостаточно)
         // v191: ГЛАВНОЕ существительное (первое слово name_es = тип предмета) обязано быть в названии кандидата —
         // иначе «alicates de punta larga» матчился с «punta de destornillador … larga» по словам punta/larga
-        const headHit = !esWords.length || nm.includes(esWords[0]);
+        const headHit = !esWords.length || stemsHit(nmStemSet, esWords[0]); // v200: стем+синоним
         const ok = mpnHit || (headHit && (esHits >= 2 || (brandHit && (esHits + latHits) >= 1) || (esWords.length === 1 && esHits === 1)));
         return { r, score, ok };
       }).filter(x => x.ok);
       scored.sort((a, b) => b.score - a.score || (a.r.price ?? 1e9) - (b.r.price ?? 1e9));
       push(scored.slice(0, 30).map(x => x.r), 'name_es');
     }
-    // v188 ход 4: семантические кандидаты — эмбеддинг «name_es brand mpn» против векторов каталога (pgvector)
+    // v199 (заменяет логику хода 4 v188): эмбеддинги НЕ подмешивают кандидатов сами по себе —
+    // 1) усиливают товары, уже найденные по словам (поле embed_sim, подъём в сортировке),
+    // 2) fallback только если словесных совпадений почти нет: близость ≥0.72 И главное существительное в названии.
+    let embedRows = [];
     if (item.name_embed) {
       try {
         const vec = typeof item.name_embed === 'string' ? JSON.parse(item.name_embed) : item.name_embed;
-        const vrows = await matchProductsByEmbedding(vec, 15);
-        const vsel = SITES.length ? (vrows || []).filter(r => SITES.includes(r.site)) : (vrows || []);
-        push(vsel.filter(r => r.name).map(r => ({ ...r, price: r.price ?? null })), 'embed');
+        const vrows = await matchProductsByEmbedding(vec, 30);
+        embedRows = (SITES.length ? (vrows || []).filter(r => SITES.includes(r.site)) : (vrows || [])).filter(r => r && r.name && r.url);
       } catch (e) { console.warn('embed candidates:', e.message); }
+    }
+    const normNm = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const simOf = (r) => typeof r.similarity === 'number' ? r.similarity : (typeof r.distance === 'number' ? 1 - r.distance : 0);
+    // усиление найденных словами
+    const embedSimByKey = new Map(embedRows.map(r => [r.site + '|' + r.url, simOf(r)]));
+    for (const r of out) {
+      const sim = embedSimByKey.get(r.site + '|' + r.url);
+      if (sim != null) r.embed_sim = Math.round(sim * 100) / 100;
+    }
+    // строгий fallback при провале словесного поиска
+    let embedFallbackUsed = false;
+    if (out.length < 5 && embedRows.length) {
+      const fb = embedRows.filter(r => {
+        if (simOf(r) < 0.75) return false; // v200: порог поднят (покрытие векторов растёт)
+        const nm = normNm(r.name);
+        if (esWords.length && !nm.includes(normNm(esWords[0]))) return false; // тип предмета обязателен
+        return true;
+      }).sort((a, b) => simOf(b) - simOf(a));
+      if (fb.length) embedFallbackUsed = true;
+      push(fb.slice(0, 10).map(r => ({ ...r, price: r.price ?? null, embed_sim: Math.round(simOf(r) * 100) / 100 })), 'embed');
     }
     // 3) слова русского названия (широкий поиск, вдруг каталог на русском)
     if (out.length < 10 && item.name_ru) {
@@ -7336,6 +7388,9 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
         push(data, 'name_ru');
       }
     }
+    // v199: финальная сортировка — сначала ранг источника (mpn > слова > embed > ru), внутри — embed-усиление
+    const SRC_RANK = { mpn: 0, name_es: 1, embed: 2, name_ru: 3 };
+    out.sort((a, b) => (SRC_RANK[a.match_by] ?? 9) - (SRC_RANK[b.match_by] ?? 9) || (b.embed_sim || 0) - (a.embed_sim || 0));
     // v189: телеметрия пайплайна для отладки
     const bySrc = {};
     for (const r of out) bySrc[r.match_by] = (bySrc[r.match_by] || 0) + 1;
@@ -7348,6 +7403,7 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
         es_words: esWords,
         cat_roots: catRoots,
         embed_used: !!item.name_embed,
+        embed_fallback: embedFallbackUsed,
         bad_excluded: badUrls.size,
         by_source: bySrc
       }
@@ -7722,18 +7778,20 @@ app.get('/api/items/:id/similar-visual', requireAuth, async (req, res) => {
     const latWords = wordsOf(item.name_original, 3, 3).filter(w => !item.brand || !String(item.brand).toLowerCase().includes(w));
     const searchWords = [...new Set([...esWords, ...latWords])];
     if (searchWords.length) {
-      const orExpr = searchWords.map(w => `name.ilike.%${w.replace(/[%_]/g, ' ')}%`).join(',');
+      const queryStemsV = [...new Set(searchWords.map(stemEs2).filter(w => w.length >= 3))]; // v200
+      const orExpr = queryStemsV.map(w => `name.ilike.%${w.replace(/[%_]/g, ' ')}%`).join(',');
       const { data: rows } = await supabaseAdmin.from('parse_products').select(COLS)
         .or(orExpr).not('image', 'is', null).limit(150);
       const brandLc = String(item.brand || '').toLowerCase();
       for (const r of rows || []) {
         const nm = String(r.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        const nmStemSet = new Set(nm.split(/[^a-z0-9-]+/).filter(Boolean).map(stemEs2)); // v200
         let sc = 0;
-        for (const w of esWords) if (nm.includes(w)) sc += 2;
-        for (const w of latWords) if (nm.includes(w)) sc += 1;
+        for (const w of esWords) if (stemsHit(nmStemSet, w)) sc += 2;
+        for (const w of latWords) if (stemsHit(nmStemSet, w)) sc += 1;
         if (brandLc && String(r.brand || '').toLowerCase().includes(brandLc)) sc += 3;
         if (mpnOkV && r.mpn && String(r.mpn).toLowerCase() === String(item.mpn).toLowerCase()) sc += 5;
-        const headOkV = !esWords.length || nm.includes(esWords[0]); // v191: тип предмета обязателен
+        const headOkV = !esWords.length || stemsHit(nmStemSet, esWords[0]); // v191 + v200: тип предмета обязателен (стем/синоним)
         if (sc >= 2 && headOkV) {
           const key = r.site + '|' + r.url;
           if (!candMap.has(key)) candMap.set(key, { r, score: sc });
