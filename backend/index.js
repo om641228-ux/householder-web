@@ -1,3 +1,4 @@
+// === BUILD MARKER v202-2026-09-14T0015 ===
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -325,7 +326,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v201-2026-09-13', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v202-2026-09-13', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -1062,6 +1063,14 @@ function stemsHit(nmStemSet, word) {
   const st = stemEs2(word);
   if (nmStemSet.has(st)) return true;
   for (const syn of (STEM_SYN[st] || [])) if (nmStemSet.has(stemEs2(syn))) return true;
+  return false;
+}
+// v202: стем ИЛИ подстрока — «extracorto» содержит «cort» (составные слова в названиях)
+function stemsHitSub(nm, nmStemSet, word) {
+  const st = stemEs2(word);
+  if (stemsHit(nmStemSet, word)) return true;
+  if (st.length >= 4 && nm.includes(st)) return true;
+  for (const syn of (STEM_SYN[st] || [])) { const ss = stemEs2(syn); if (ss.length >= 4 && nm.includes(ss)) return true; }
   return false;
 }
 
@@ -7332,30 +7341,56 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
       const { data: cand } = await bySite(supabaseAdmin.from('parse_products').select(COLS))
         .or(orExpr).limit(150);
       const brandLc = String(item.brand || '').toLowerCase();
-      const scored = (cand || []).map(r => {
+      // v202: скоринг кандидата — функция, используется в нескольких проходах (перебор комбинаций слов)
+      const scoreOne = (r, wordsOverride) => {
+        const esW = wordsOverride || esWords;
         const nm = String(r.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-        const nmStemSet = new Set(nm.split(/[^a-z0-9-]+/).filter(Boolean).map(stemEs2)); // v200
+        const nmStemSet = new Set(nm.split(/[^a-z0-9-]+/).filter(Boolean).map(stemEs2));
         let score = 0, esHits = 0, latHits = 0;
         const esPhrase = String(item.name_es || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s-]/g, ' ').replace(/\s+/g, ' ').trim();
-        if (esPhrase.length >= 8 && nm.includes(esPhrase)) score += 10; // v184: полная фраза name_es целиком — сильный сигнал
-        for (const w of esWords) if (stemsHit(nmStemSet, w)) { score += 2; esHits++; } // v200: стем+синонимы
-        for (const w of latWords) if (stemsHit(nmStemSet, w)) { score += 1; latHits++; }
+        if (esPhrase.length >= 8 && nm.includes(esPhrase)) score += 10; // v184: полная фраза — сильный сигнал
+        for (const w of esW) if (stemsHitSub(nm, nmStemSet, w)) { score += 2; esHits++; } // v202: стем+синоним+подстрока (extracorto→cort)
+        for (const w of latWords) if (stemsHitSub(nm, nmStemSet, w)) { score += 1; latHits++; }
         const brandHit = brandLc && String(r.brand || '').toLowerCase().includes(brandLc);
         if (brandHit) score += 3;
         const mpnHit = mpnOk && r.mpn && String(r.mpn).toLowerCase() === String(item.mpn).toLowerCase();
         if (mpnHit) score += 5;
-        if (catRoots.length && r.category && catRoots.some(c => String(r.category).toLowerCase().includes(c))) score += 4; // v188 ход 3: свой раздел каталога
-        if (r.price == null) score -= 2;  // v200: товар без цены — ниже
-        if (!r.image) score -= 1;         // v200: товар без фото — ниже
-        // v182: отсев мусора — нужно ≥2 испанских слова, ИЛИ бренд+слово, ИЛИ точный MPN (одно общее слово недостаточно)
-        // v191: ГЛАВНОЕ существительное (первое слово name_es = тип предмета) обязано быть в названии кандидата —
-        // иначе «alicates de punta larga» матчился с «punta de destornillador … larga» по словам punta/larga
-        const headHit = !esWords.length || stemsHit(nmStemSet, esWords[0]); // v200: стем+синоним
-        const ok = mpnHit || (headHit && (esHits >= 2 || (brandHit && (esHits + latHits) >= 1) || (esWords.length === 1 && esHits === 1)));
+        if (catRoots.length && r.category && catRoots.some(c => String(r.category).toLowerCase().includes(c))) score += 4;
+        if (r.price == null) score -= 2;  // v200: без цены — ниже
+        if (!r.image) score -= 1;         // v200: без фото — ниже
+        const headHit = !esW.length || stemsHitSub(nm, nmStemSet, esW[0]); // v191/v202: тип предмета обязателен
+        const ok = mpnHit || (headHit && (esHits >= 2 || (brandHit && (esHits + latHits) >= 1) || (esW.length === 1 && esHits === 1)));
         return { r, score, ok };
-      }).filter(x => x.ok);
+      };
+      const scored = (cand || []).map(r => scoreOne(r)).filter(x => x.ok);
       scored.sort((a, b) => b.score - a.score || (a.r.price ?? 1e9) - (b.r.price ?? 1e9));
       push(scored.slice(0, 30).map(x => x.r), 'name_es');
+      // v202: ПЕРЕБОР КОМБИНАЦИЙ — устойчивость к ошибочному слову распознавания.
+      // Проход B: AND-пары «главное слово + каждое из остальных» (стемы-подстроки ловят extracorto→cort)
+      if (scored.length < 3 && esWords.length >= 2) {
+        const headSt = stemEs2(esWords[0]);
+        for (let i = 1; i < esWords.length && scored.length < 5; i++) {
+          const wSt = stemEs2(esWords[i]);
+          const q = bySite(supabaseAdmin.from('parse_products').select(COLS))
+            .ilike('name', '%' + headSt.replace(/[%_]/g, ' ') + '%')
+            .ilike('name', '%' + wSt.replace(/[%_]/g, ' ') + '%');
+          const { data: pr } = await q.limit(40);
+          const extra = (pr || []).map(r => scoreOne(r)).filter(x => x.ok && !seen.has(x.r.site + '|' + x.r.url));
+          extra.sort((a, b) => b.score - a.score);
+          push(extra.slice(0, 15).map(x => x.r), 'name_es');
+          for (const x of extra) scored.push(x);
+        }
+      }
+      // Проход C: на тех же кандидатах пересчёт без каждого НЕглавного слова по очереди (оно могло быть ошибочным)
+      if (scored.length < 3 && esWords.length >= 3 && cand && cand.length) {
+        for (let skip = 1; skip < esWords.length && scored.length < 5; skip++) {
+          const subset = esWords.filter((_, i) => i !== skip);
+          const extra = cand.map(r => scoreOne(r, subset)).filter(x => x.ok && !seen.has(x.r.site + '|' + x.r.url));
+          extra.sort((a, b) => b.score - a.score);
+          push(extra.slice(0, 15).map(x => x.r), 'name_es');
+          for (const x of extra) scored.push(x);
+        }
+      }
     }
     // v199 (заменяет логику хода 4 v188): эмбеддинги НЕ подмешивают кандидатов сами по себе —
     // 1) усиливают товары, уже найденные по словам (поле embed_sim, подъём в сортировке),
@@ -7797,11 +7832,11 @@ app.get('/api/items/:id/similar-visual', requireAuth, async (req, res) => {
         const nm = String(r.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
         const nmStemSet = new Set(nm.split(/[^a-z0-9-]+/).filter(Boolean).map(stemEs2)); // v200
         let sc = 0;
-        for (const w of esWords) if (stemsHit(nmStemSet, w)) sc += 2;
-        for (const w of latWords) if (stemsHit(nmStemSet, w)) sc += 1;
+        for (const w of esWords) if (stemsHitSub(nm, nmStemSet, w)) sc += 2; // v202
+        for (const w of latWords) if (stemsHitSub(nm, nmStemSet, w)) sc += 1;
         if (brandLc && String(r.brand || '').toLowerCase().includes(brandLc)) sc += 3;
         if (mpnOkV && r.mpn && String(r.mpn).toLowerCase() === String(item.mpn).toLowerCase()) sc += 5;
-        const headOkV = !esWords.length || stemsHit(nmStemSet, esWords[0]); // v191 + v200: тип предмета обязателен (стем/синоним)
+        const headOkV = !esWords.length || stemsHitSub(nm, nmStemSet, esWords[0]); // v191/v202: тип предмета обязателен
         if (sc >= 2 && headOkV) {
           const key = r.site + '|' + r.url;
           if (!candMap.has(key)) candMap.set(key, { r, score: sc });
