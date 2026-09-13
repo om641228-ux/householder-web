@@ -2245,7 +2245,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v196 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v197 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -6445,6 +6445,12 @@ function App() {
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
       setItemLab(d);
+      // v197: если на сервере уже идёт фоновый прогон — подхватить опрос статуса
+      try {
+        const rs = await fetch(`${API_URL}/api/parse/embed-catalog/status?token=${token}`);
+        const ds = await rs.json();
+        if (rs.ok && ds.job && ds.job.running) { window.__embedPollOn = false; pollEmbedStatus(); }
+      } catch (e) {}
     } catch (e) { setItemLab({ error: e.message }); }
     setItemLabLoading(false);
   };
@@ -6479,6 +6485,49 @@ function App() {
     }
     setEmbedRun(prev => ({ running: false, log: [...(prev ? prev.log : []), `✅ всего проставлено: ${total}`] }));
     loadItemLab();
+  };
+
+  // v197: фоновый прогон НА СЕРВЕРЕ до конца каталога — не зависит от вкладки
+  const startEmbedAuto = async () => {
+    if (embedRun && embedRun.running) return;
+    try {
+      const r = await fetch(`${API_URL}/api/parse/embed-catalog/start?token=${token}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ embed_url: localEmbedUrl || undefined })
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
+      setEmbedRun({ running: true, serverJob: true, base: 0, total: 0, done: 0, t0: Date.now(), log: [`фоновый прогон запущен на сервере [${d.job && d.job.engine}] — вкладку можно закрыть, прогон продолжится`] });
+      window.__embedPollOn = false;
+      pollEmbedStatus();
+    } catch (e) { setEmbedRun({ running: false, log: ['❌ ' + e.message] }); }
+  };
+  const pollEmbedStatus = async () => {
+    if (window.__embedPollOn) return;
+    window.__embedPollOn = true;
+    try {
+      while (true) {
+        try {
+          const r = await fetch(`${API_URL}/api/parse/embed-catalog/status?token=${token}`);
+          const d = await r.json();
+          if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
+          const j = d.job || {};
+          const embedded = typeof d.embedded === 'number' ? d.embedded : 0;
+          const t0 = j.started_at ? Date.parse(j.started_at) : Date.now();
+          setEmbedRun(prev => {
+            const prevLog = prev ? prev.log : [];
+            const last = prev && typeof prev._lastDone === 'number' ? prev._lastDone : 0;
+            const line = (j.done || 0) !== last ? `сеанс: +${j.done} (ошибок ${j.failed}) [${j.engine || '?'}]${j.running ? '' : j.finished ? ' — ✅ каталог покрыт' : ' — остановлен'}` : null;
+            return { running: !!j.running, serverJob: true, base: Math.max(0, embedded - (j.done || 0)), total: d.total || 0, done: j.done || 0, t0, _lastDone: j.done || 0, log: line ? [...prevLog, line].slice(-30) : prevLog };
+          });
+          if (!j.running) { window.__embedPollOn = false; loadItemLab(); return; }
+        } catch (e) { /* транзиентная ошибка — продолжаем опрос */ }
+        await new Promise(res => setTimeout(res, 4000));
+      }
+    } finally { window.__embedPollOn = false; }
+  };
+  const stopEmbedAuto = async () => {
+    try { await fetch(`${API_URL}/api/parse/embed-catalog/stop?token=${token}`, { method: 'POST' }); } catch (e) {}
+    setTimeout(() => { window.__embedPollOn = false; pollEmbedStatus(); }, 500);
   };
 
   const gotoTab = (t) => {
@@ -9966,7 +10015,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-12 · v196 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-13 · v197 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -9979,7 +10028,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-12 · v196</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-13 · v197</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
@@ -11712,10 +11761,16 @@ ${bodyHtml}
                     style={{ border: 'none', background: '#7c3aed', color: '#fff', borderRadius: 7, padding: '7px 14px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
                     {embedRun && embedRun.running ? '⏳ Считаю…' : '▶ Прогнать порцию (200)'}
                   </button>
-                  <button onClick={() => runEmbedCatalog(true)} disabled={embedRun && embedRun.running}
+                  <button onClick={startEmbedAuto} disabled={embedRun && embedRun.running}
                     style={{ border: '1px solid #7c3aed', background: '#fff', color: '#7c3aed', borderRadius: 7, padding: '7px 14px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
-                    ▶▶ До покрытия каталога
+                    ▶▶ До покрытия каталога (фон на сервере)
                   </button>
+                  {embedRun && embedRun.running && embedRun.serverJob && (
+                    <button onClick={stopEmbedAuto}
+                      style={{ border: '1px solid #c0392b', background: '#fff', color: '#c0392b', borderRadius: 7, padding: '7px 14px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
+                      ⏹ Стоп
+                    </button>
+                  )}
                 </div>
                 {embedRun && embedRun.total > 0 && (() => { // v195: прогресс-бар с процентами, скоростью и ETA
                   const doneAll = (embedRun.base || 0) + (embedRun.done || 0);
@@ -11741,7 +11796,7 @@ ${bodyHtml}
                       <div style={{ height: 10, borderRadius: 5, background: '#eeeef2', overflow: 'hidden' }}>
                         <div style={{ height: 10, borderRadius: 5, width: pct + '%', background: embedRun.running ? 'linear-gradient(90deg,#7c3aed,#a855f7)' : '#1e8449', transition: 'width .5s' }}></div>
                       </div>
-                      {embedRun.running && <div style={{ fontSize: 11, color: '#8e8e93', marginTop: 3 }}>Прогон идёт порциями по 200 — не закрывайте вкладку. Кнопку «▶▶» можно нажимать повторно для следующих 25 порций.</div>}
+                      {embedRun.running && <div style={{ fontSize: 11, color: '#8e8e93', marginTop: 3 }}>{embedRun.serverJob ? 'Прогон идёт В ФОНЕ на сервере до конца каталога — вкладку можно закрыть. Прогресс обновляется каждые 4 с.' : 'Прогон идёт порциями по 200 — не закрывайте вкладку.'}</div>}
                     </div>
                   );
                 })()}

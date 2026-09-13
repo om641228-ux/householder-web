@@ -325,7 +325,7 @@ app.get('/api/prompts/current', (req, res) => {
   res.json({ prompt: buildReceiptPrompt(currency, docType), build: 'v153' });
 });
 
-app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v194-2026-09-12', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
+app.get('/api/health', (req, res) => res.json({ status: 'ok', build: 'v197-2026-09-13', features: ['planned-freq', 'docs', 'crm-contact-files', 'model-monitor', 'doc-links-graph', 'pwa', 'home-items'] }));
 
 // ========== v106: PWA — манифест и иконки (установка сайта на домашний экран телефона) ==========
 // Фронтенд подключает <link rel="manifest"> динамически; service worker не используем —
@@ -7569,6 +7569,84 @@ app.post('/api/items/:id/feedback', requireAuth, async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// v197: фоновый прогон эмбеддингов каталога ДО КОНЦА (не зависит от вкладки браузера)
+const EMBED_JOB = { running: false, done: 0, failed: 0, started_at: null, engine: null, last_error: null, finished: false };
+
+async function embedCatalogBatchOnce(embedUrl) {
+  const { data: rows, error } = await supabaseAdmin.from('parse_products').select('id,name,brand,mpn').is('name_embed', null).not('name', 'is', null).limit(200);
+  if (error) throw error;
+  if (!rows || !rows.length) return 0;
+  // по 5 параллельно — локальный Ollama на M1 Max тянет спокойно, в разы быстрее
+  const CH = 5;
+  for (let i = 0; i < rows.length; i += CH) {
+    if (!EMBED_JOB.running) return rows.length; // остановлен
+    const chunk = rows.slice(i, i + CH);
+    const vecs = await Promise.all(chunk.map(r => embedText([r.name, r.brand, r.mpn].filter(Boolean).join(' '), { urlOverride: embedUrl }).catch(() => null)));
+    for (let j = 0; j < chunk.length; j++) {
+      const vec = vecs[j];
+      if (vec) {
+        const { error: ue } = await supabaseAdmin.from('parse_products').update({ name_embed: JSON.stringify(vec) }).eq('id', chunk[j].id);
+        if (ue) EMBED_JOB.failed++; else EMBED_JOB.done++;
+      } else EMBED_JOB.failed++;
+    }
+  }
+  return rows.length;
+}
+
+async function embedCatalogWorker(embedUrl) {
+  try {
+    while (EMBED_JOB.running) {
+      const n = await embedCatalogBatchOnce(embedUrl);
+      if (n === 0) break; // каталог покрыт
+    }
+    EMBED_JOB.finished = true;
+  } catch (e) {
+    EMBED_JOB.last_error = e.message;
+  } finally {
+    EMBED_JOB.running = false;
+  }
+}
+
+app.post('/api/parse/embed-catalog/start', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    if (EMBED_JOB.running) return res.json({ started: false, already: true, job: EMBED_JOB });
+    const embedUrl = (req.body && String(req.body.embed_url || '').trim()) || null;
+    const mode = await getEmbedMode();
+    if (mode === 'local' && !embedUrl && !process.env.LOCAL_EMBED_URL) {
+      return res.status(400).json({ error: 'Режим «только локальный», но адрес локального AI не задан — впишите его в поле в карточке Хода 4.' });
+    }
+    if (embedUrl) {
+      try { await axios.get(embedUrl.replace(/\/+$/, '') + '/api/tags', { timeout: 5000 }); }
+      catch (e) { return res.status(400).json({ error: `Локальный AI не отвечает по ${embedUrl}: ${e.message}` }); }
+    }
+    EMBED_JOB.running = true; EMBED_JOB.done = 0; EMBED_JOB.failed = 0;
+    EMBED_JOB.started_at = new Date().toISOString(); EMBED_JOB.finished = false; EMBED_JOB.last_error = null;
+    EMBED_JOB.engine = embedUrl ? 'local(ui)' : (process.env.LOCAL_EMBED_URL && mode !== 'cloud' ? 'local(env)' : 'cloud');
+    embedCatalogWorker(embedUrl); // без await — фон
+    logActivity(req.user, 'Парсинг', 'фоновый прогон эмбеддингов запущен', EMBED_JOB.engine, req);
+    res.json({ started: true, job: EMBED_JOB });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/parse/embed-catalog/status', requireAuth, async (req, res) => {
+  try {
+    let total = null, embedded = null;
+    try {
+      const t = await supabaseAdmin.from('parse_products').select('id', { count: 'exact', head: true }).not('name', 'is', null);
+      total = t.count;
+      const e2 = await supabaseAdmin.from('parse_products').select('id', { count: 'exact', head: true }).not('name_embed', 'is', null);
+      embedded = e2.count;
+    } catch (e) {}
+    res.json({ job: EMBED_JOB, total, embedded });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/parse/embed-catalog/stop', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  EMBED_JOB.running = false;
+  logActivity(req.user, 'Парсинг', 'фоновый прогон эмбеддингов остановлен', `проставлено ${EMBED_JOB.done}`, req);
+  res.json({ stopped: true, job: EMBED_JOB });
 });
 
 // v188 ход 4: проставить эмбеддинги названий каталога (порциями; локальный AI в приоритете через LOCAL_EMBED_URL)
