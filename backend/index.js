@@ -1,4 +1,4 @@
-// === BUILD MARKER v202-2026-09-14T0015 ===
+// === BUILD MARKER v203-2026-09-15T0035 ===
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -1034,10 +1034,10 @@ async function embedText(text, opts = {}) {
   const t = String(text || '').trim().slice(0, 2000);
   if (!t) return null;
   const mode = await getEmbedMode();
-  if (mode === 'local') { try { return await embedTextLocal(t, opts.urlOverride); } catch (e) { console.warn('local embed failed (режим local):', e.message); return null; } }
+  if (mode === 'local') { try { return await embedTextLocal(t, opts.urlOverride); } catch (e) { LAST_EMBED_ERROR = e.message; console.warn('local embed failed (режим local):', e.message); return null; } }
   if (mode === 'cloud') { try { return await embedTextCloud(t); } catch (e) { console.warn('cloud embed failed (режим cloud):', e.message); return null; } }
   // auto: локальный → облако
-  try { return await embedTextLocal(t, opts.urlOverride); } catch (e) { console.warn('local embed failed (auto):', e.message); }
+  try { return await embedTextLocal(t, opts.urlOverride); } catch (e) { LAST_EMBED_ERROR = e.message; console.warn('local embed failed (auto):', e.message); }
   try { return await embedTextCloud(t); } catch (e) { console.warn('cloud embed failed (auto):', e.message); }
   return null;
 }
@@ -7672,6 +7672,7 @@ app.post('/api/items/:id/feedback', requireAuth, async (req, res) => {
   }
 });
 
+let LAST_EMBED_ERROR = null; // v203: причина последней ошибки эмбеддинга
 // v197: фоновый прогон эмбеддингов каталога ДО КОНЦА (не зависит от вкладки браузера)
 const EMBED_JOB = { running: false, done: 0, failed: 0, started_at: null, engine: null, last_error: null, finished: false };
 
@@ -7689,8 +7690,8 @@ async function embedCatalogBatchOnce(embedUrl) {
       const vec = vecs[j];
       if (vec) {
         const { error: ue } = await supabaseAdmin.from('parse_products').update({ name_embed: JSON.stringify(vec) }).eq('id', chunk[j].id);
-        if (ue) EMBED_JOB.failed++; else EMBED_JOB.done++;
-      } else EMBED_JOB.failed++;
+        if (ue) { EMBED_JOB.failed++; EMBED_JOB.last_error = 'db: ' + ue.message; } else EMBED_JOB.done++;
+      } else { EMBED_JOB.failed++; if (LAST_EMBED_ERROR) EMBED_JOB.last_error = LAST_EMBED_ERROR; }
     }
   }
   return rows.length;
