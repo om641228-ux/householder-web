@@ -1,4 +1,4 @@
-// === BUILD MARKER v203-2026-09-15T0035 ===
+// === BUILD MARKER v204-2026-09-15T0100 ===
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -95,9 +95,10 @@ const USERS = {
 const tokens = new Map();
 
 // v57.4: сессии переживают redeploy/рестарт Railway — токен ПОДПИСАН (HMAC), а не только в памяти.
-// Секрет: AUTH_SECRET (рекомендуется задать в Variables) → иначе SUPABASE_SERVICE_ROLE_KEY → встроенный.
+// v204: хардкод-фоллбэк УБРАН (был в публичном репо). Секрет: AUTH_SECRET (Railway Variables) → иначе SUPABASE_SERVICE_ROLE_KEY.
 const cryptoAuth = require('crypto');
-const AUTH_SECRET = process.env.AUTH_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || 'householder-auth-secret-v1';
+const AUTH_SECRET = process.env.AUTH_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY;
+if (!AUTH_SECRET) { console.error('FATAL: задайте AUTH_SECRET (или SUPABASE_SERVICE_ROLE_KEY) в Railway Variables'); process.exit(1); }
 const b64u = (buf) => Buffer.from(buf).toString('base64url');
 function signPayload(payloadB64) {
   return cryptoAuth.createHmac('sha256', AUTH_SECRET).update(payloadB64).digest('base64url');
@@ -107,8 +108,17 @@ function generateToken(userId) {
   return `s1.${payload}.${signPayload(payload)}`;
 }
 // Проверка: сначала in-memory (старые токены до рестарта), затем — по подписи
+const TOKEN_TTL_MS = 30 * 24 * 3600 * 1000; // v204: токен живёт 30 дней
 function resolveToken(token) {
   if (!token) return null;
+  // v204: проверка возраста по payload (userId.timestamp.rand) — до любого кэша
+  const mAge = String(token).match(/^s1\.([A-Za-z0-9_\-]+)\./);
+  if (mAge) {
+    try {
+      const ts = Number(Buffer.from(mAge[1], 'base64url').toString('utf8').split('.')[1]);
+      if (!ts || Date.now() - ts > TOKEN_TTL_MS) { tokens.delete(token); return null; }
+    } catch (_) { return null; }
+  }
   const mem = tokens.get(token);
   if (mem) return mem;
   const m = String(token).match(/^s1\.([A-Za-z0-9_\-]+)\.([A-Za-z0-9_\-]+)$/);
@@ -373,7 +383,18 @@ app.get('/pwa-icon-512.png', pwaIcon(512));
 app.get('/', (req, res) => res.json({ status: 'Receipt Manager API', health: '/health' }));
 
 // ========== AUTH ROUTES ==========
-app.post('/api/login', async (req, res) => {
+// v204: анти-брутфорс — 10 попыток за 5 минут с одного IP (in-memory, чистится по TTL)
+const loginAttempts = new Map(); // ip -> [ts, ...]
+function loginRateLimit(req, res, next) {
+  const ip = String(req.headers['x-forwarded-for'] || req.ip || '?').split(',')[0].trim();
+  const now = Date.now(), WIN = 5 * 60 * 1000, MAX = 10;
+  const arr = (loginAttempts.get(ip) || []).filter(t => now - t < WIN);
+  if (arr.length >= MAX) return res.status(429).json({ error: 'Слишком много попыток входа. Подождите 5 минут.' });
+  arr.push(now); loginAttempts.set(ip, arr);
+  if (loginAttempts.size > 5000) loginAttempts.clear();
+  next();
+}
+app.post('/api/login', loginRateLimit, async (req, res) => {
   const { password } = req.body;
   const login = String((req.body || {}).login || '').trim().toLowerCase();
   // v74/v76: сначала пользователи из базы (app_users), затем хардкод-совместимость
@@ -4587,7 +4608,8 @@ app.post('/api/reprocess-receipt', requireAuth, async (req, res) => {
 // ========== DIAGNOSTICS ==========
 // Открой в браузере: https://householder-api-production.up.railway.app/api/diagnostics
 // Сразу видно: какая версия кода задеплоена, есть ли колонка raw_text_ru, какие ключи настроены
-app.get('/api/diagnostics', async (req, res) => {
+app.get('/api/diagnostics', requireAuth, async (req, res) => {
+  if ((req.user || {}).role !== 'admin') return res.status(403).json({ error: 'Admin only' }); // v204
   try {
     const columns = await getTableColumns();
     res.json({
@@ -10380,7 +10402,8 @@ function upsertModelStatus(entry) {
   else modelStatusCache.models.push(entry);
 }
 
-app.get('/api/check-models', async (req, res) => {
+app.get('/api/check-models', requireAuth, async (req, res) => {
+  if ((req.user || {}).role !== 'admin') return res.status(403).json({ error: 'Admin only' }); // v204
   try {
     const force = String(req.query.refresh || '') === '1';
     if (!force && modelStatusCache.models.length) {
