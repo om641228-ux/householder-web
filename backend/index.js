@@ -1,4 +1,4 @@
-// === BUILD MARKER v207-2026-09-15T2015 ===
+// === BUILD MARKER v208-2026-09-15T2030 ===
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -10126,7 +10126,7 @@ app.post('/api/export-excel', requireAuth, async (req, res) => {
 });
 
 // ========== LIST MODELS ==========
-app.get('/api/list-gemini-models', async (req, res) => {
+app.get('/api/list-gemini-models', requireAuth, async (req, res) => { // v208: был открыт
   if (!genAI) return res.json({ models: [] });
   res.json({
     models: [
@@ -10140,7 +10140,7 @@ app.get('/api/list-gemini-models', async (req, res) => {
   });
 });
 
-app.get('/api/list-groq-models', async (req, res) => {
+app.get('/api/list-groq-models', requireAuth, async (req, res) => { // v208: был открыт
   if (!groq) return res.json({ models: [] });
   res.json({
     models: [
@@ -10152,7 +10152,7 @@ app.get('/api/list-groq-models', async (req, res) => {
   });
 });
 
-app.get('/api/list-ocrspace-models', async (req, res) => {
+app.get('/api/list-ocrspace-models', requireAuth, async (req, res) => { // v208: был открыт
   res.json({
     models: [
       { id: 'engine1', name: 'Engine 1 (Basic)' },
@@ -10456,7 +10456,7 @@ app.get('/api/check-models', requireAuth, async (req, res) => {
 });
 
 // v105: одиночная проверка модели по кнопке 🔍 — не жжёт квоту остальных
-app.get('/api/check-model', async (req, res) => {
+app.get('/api/check-model', requireAuth, async (req, res) => { // v208: был открыт
   const name = String(req.query.name || '');
   if (!name) return res.status(400).json({ error: 'Параметр name обязателен' });
   try {
