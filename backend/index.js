@@ -1,4 +1,4 @@
-// === BUILD MARKER v206-2026-09-15T0155 ===
+// === BUILD MARKER v207-2026-09-15T2015 ===
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -142,6 +142,17 @@ function resolveToken(token) {
 // user — старая роль хардкод-пользователей: свои чеки, без новых ограничений.
 let dbUsersCache = { map: {}, loadedAt: 0 };
 const hashPass = (salt, pass) => cryptoAuth.createHash('sha256').update(`${salt}:${String(pass)}`).digest('hex');
+// v207: bcrypt для паролей (npm i bcryptjs). Если пакета нет — мягкий фоллбэк на sha256 + предупреждение в лог.
+let bcrypt = null; try { bcrypt = require('bcryptjs'); } catch (_) { console.warn('⚠ bcryptjs не установлен — пароли хешируются sha256. Выполните: cd backend && npm i bcryptjs'); }
+const BCRYPT_RE = /^\$2[aby]\$/;
+const BCRYPT_ROUNDS = 10;
+const hashPassAsync = async (salt, pass) => bcrypt ? bcrypt.hash(`${salt}:${String(pass)}`, BCRYPT_ROUNDS) : hashPass(salt, pass);
+// true, если пароль верный; второй элемент — нужна ли миграция (старый sha256-хеш)
+const verifyPass = async (salt, pass, stored) => {
+  if (!stored) return { ok: false, migrate: false };
+  if (BCRYPT_RE.test(stored)) return { ok: bcrypt ? await bcrypt.compare(`${salt}:${String(pass)}`, stored) : false, migrate: false };
+  return { ok: stored === hashPass(salt, pass), migrate: !!bcrypt }; // sha256 → пересохранить в bcrypt
+};
 async function refreshUsersCache(force) {
   if (!supabaseAdmin) return;
   if (!force && Date.now() - dbUsersCache.loadedAt < 60000) return;
@@ -420,9 +431,18 @@ app.post('/api/login', loginRateLimit, async (req, res) => {
   try {
     await refreshUsersCache(true);
     const { data } = await supabaseAdmin.from('app_users').select('*');
-    // логин указан → ищем строго его; без логина — старое поведение (по паролю)
-    const hit = (data || []).find(u => !u.disabled && (!login || String(u.id).toLowerCase() === login) && u.pass_hash === hashPass(u.salt, password));
+    // логин указан → ищем строго его; без логина — старое поведение (по паролю). v207: sha256 ИЛИ bcrypt
+    let hit = null, hitMigrate = false;
+    for (const u of (data || [])) {
+      if (u.disabled) continue;
+      if (login && String(u.id).toLowerCase() !== login) continue;
+      const v = await verifyPass(u.salt, password, u.pass_hash);
+      if (v.ok) { hit = u; hitMigrate = v.migrate; break; }
+    }
     if (hit) {
+      if (hitMigrate) { // молча пересохраняем пароль в bcrypt — пользователь ничего не замечает
+        try { await supabaseAdmin.from('app_users').update({ pass_hash: await hashPassAsync(hit.salt, password) }).eq('id', hit.id); } catch (me) { console.warn('bcrypt-миграция пароля не удалась:', me.message); }
+      }
       const user = { id: hit.id, name: hit.name || hit.id, role: hit.role || 'viewer', sections: Array.isArray(hit.sections) ? hit.sections : null, objects: Array.isArray(hit.objects) ? hit.objects : null, tabs: normTabs(hit.tabs), can_view: Array.isArray(hit.can_view) ? hit.can_view : null, can_view_crm: Array.isArray(hit.can_view_crm) ? hit.can_view_crm : null };
       const token = generateToken(user.id);
       tokens.set(token, user);
@@ -588,9 +608,9 @@ app.post('/api/users', requireAuth, requireRole('admin'), async (req, res) => {
       can_view_crm: Array.isArray(can_view_crm) && can_view_crm.length ? can_view_crm : null,
       disabled: !!disabled
     };
-    if (password) { // пароль задан (или меняется) — новая соль+хэш
+    if (password) { // пароль задан (или меняется) — новая соль+хэш. v207: bcrypt, если пакет установлен
       row.salt = require('crypto').randomBytes(8).toString('hex');
-      row.pass_hash = hashPass(row.salt, password);
+      row.pass_hash = await hashPassAsync(row.salt, password);
     } else {
       const { data: ex } = await supabaseAdmin.from('app_users').select('id').eq('id', uid).maybeSingle();
       if (!ex) return res.status(400).json({ error: 'Для нового пользователя задайте пароль' });

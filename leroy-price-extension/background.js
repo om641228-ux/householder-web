@@ -25,6 +25,10 @@ const fetchT = (url, opts = {}, ms = 25000) => {
   return fetch(url, { ...opts, signal: ctl.signal }).finally(() => clearTimeout(t));
 };
 const isStuck = () => running && progressAt && (Date.now() - progressAt > 120000); // v1.16: 2 мин без прогресса = завис
+// v1.27.7: 401/403 = токен недействителен (после v204 секрет подписи сменился) — останавливаем ВСЁ и просим новый токен
+let authFailed = false;
+const authCheck = (r) => { if (r && (r.status === 401 || r.status === 403)) { authFailed = true; throw new Error('AUTH'); } return r; };
+const AUTH_MSG = '🔒 ТОКЕН НЕДЕЙСТВИТЕЛЕН. Сервер обновлён (v204): старые токены отозваны.\nОткройте веб-приложение, скопируйте НОВЫЙ токен из адресной строки (?token=…), вставьте в поле «Токен» выше и нажмите «Сохранить» — затем запустите сбор снова.';
 
 // извлечение JSON-LD Product на странице товара
 function extractOnPage() {
@@ -461,7 +465,7 @@ async function fetchQueue(api, token, lim, mode, staleDays, site) {
   const path = mode === 'stale'
     ? `/api/parse/catalog/stale-prices?limit=${lim}&days=${staleDays || 7}${sq}`
     : `/api/parse/catalog/pending-prices?limit=${lim}${sq}`;
-  const r = await fetchT(`${api}${path}&token=${encodeURIComponent(token)}`, {}, 25000); // v1.23.0: таймаут 25 с
+  const r = authCheck(await fetchT(`${api}${path}&token=${encodeURIComponent(token)}`, {}, 25000)); // v1.23.0: таймаут 25 с
   const j = await r.json();
   if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
   return { items: j.products || [], total: j.total };
@@ -543,15 +547,15 @@ async function collectOne(api, token, p) {
       } catch (e) {}
     }
     if (d.price != null) {
-      const rr = await fetchT(`${api}/api/parse/ext-price?token=${encodeURIComponent(token)}`, {
+      const rr = authCheck(await fetchT(`${api}/api/parse/ext-price?token=${encodeURIComponent(token)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: p.url, price: d.price, currency: d.currency, title: d.title, image: d.image, article: d.article || undefined, brand: d.brand || undefined, mpn: d.mpn || undefined, price_original: d.price_original, discount_pct: d.discount_pct, discount_abs: d.discount_abs })
-      });
+      }));
       if (rr.ok) { saved = true; const jj = await rr.json().catch(() => ({})); chg = jj.changed || null; }
     } else {
       failReason = d.captcha ? 'captcha' : 'no-price';
     }
-  } catch (e) { failReason = 'load-error'; }
+  } catch (e) { if (String(e.message) === 'AUTH') throw e; failReason = 'load-error'; } // v1.27.7
   // v1.2: сообщаем серверу о неудаче — товар получит +1 попытку и не будет крутиться вечно
   if (failReason) {
     try {
@@ -570,6 +574,7 @@ async function run(api, token, batch, mode, staleDays, continuous, site) {
   // v1.21.0: очереди разных магазинов работают ПАРАЛЛЕЛЬНО; дубль той же очереди — игнор
   const runKey = 'q:' + (site || '*');
   const tag = site ? '[' + site.replace(/^(www\.|canarias\.|tienda\.)/, '').replace(/\..*$/, '').toUpperCase() + '] ' : '[ВСЕ] ';
+  if (authFailed) { progress(tag + AUTH_MSG); return; }
   if (running || activeRuns.has(runKey)) { progress(tag + 'эта очередь уже собирается — дождитесь конца или остановите'); return; }
   activeRuns.add(runKey);
   let myStop = false;
@@ -606,7 +611,13 @@ async function run(api, token, batch, mode, staleDays, continuous, site) {
       await sleep(3000 + Math.random() * 2000); // пауза между пачками
     }
     if (!stoppedNow() && rounds) progress(tag + `✅ Готово: обработано ${totalDone}, цен сохранено ${totalOk}, изменений цен ${totalChanges}${continuous ? ' — очередь исчерпана' : '. Можно запустить ещё раз.'}`);
-  } catch (e) { progress(tag + '❌ ' + e.message); }
+  } catch (e) {
+    if (String(e.message) === 'AUTH' || authFailed) {
+      progress(tag + AUTH_MSG);
+      stopAllQ = true; // останавливаем все очереди — со старым токеном крутиться бессмысленно
+      try { chrome.action.setBadgeText({ text: '!' }); chrome.action.setBadgeBackgroundColor({ color: '#d32f2f' }); } catch (e3) {}
+    } else progress(tag + '❌ ' + e.message);
+  }
   activeRuns.delete(runKey); stopReq.delete(runKey);
   if (!activeRuns.size && !running) { try { chrome.action.setBadgeText({ text: '' }); } catch (e2) {} }
 }
@@ -1160,7 +1171,7 @@ chrome.runtime.onMessage.addListener((m) => {
   if (m.type === 'brands' && !running) runBrands(m.api, m.token);
   if (m.type === 'start' && !running) run(m.api, m.token, m.batch, m.mode, m.staleDays, !!m.continuous, m.site || '');
   if (m.type === 'stop') { stopped = true; stopAllQ = true; } // v1.21.0: стоп = все очереди
-  if (m.type === 'start') { stopAllQ = false; stopReq.clear(); } // новый запуск снимает общий стоп
+  if (m.type === 'start') { stopAllQ = false; stopReq.clear(); authFailed = false; try { chrome.action.setBadgeText({ text: '' }); } catch (e4) {} } // v1.27.7: новый запуск = возможно новый токен
   if (m.type === 'schedule') { // v124: планировщик — часы между запусками (0 = выкл)
     chrome.storage.local.set({ schedHours: m.hours });
     chrome.alarms.clear('lm-collect');
@@ -1173,6 +1184,7 @@ chrome.alarms.onAlarm.addListener(async (a) => {
   if (a.name !== 'lm-collect' || running) return;
   const v = await chrome.storage.local.get(['api', 'token', 'batch', 'mode', 'staleDays', 'schedHours', 'site', 'sites']);
   if (!v.api || !v.token || !v.schedHours) return;
+  if (authFailed) { progress('🔒 Расписание пропущено: токен недействителен — вставьте новый в настройках панели.'); return; } // v1.27.7
   // v1.27.6: расписание повторяет мультивыбор панели — каждая отмеченная галка = своя очередь
   const sites = Array.isArray(v.sites) && v.sites.length ? v.sites : (v.site ? [v.site] : ['']);
   for (const site of sites) run(v.api, v.token, v.batch || 20, v.mode || 'pending', v.staleDays || 7, false, site);
