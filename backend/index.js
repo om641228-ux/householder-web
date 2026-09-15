@@ -1,4 +1,4 @@
-// === BUILD MARKER v204-2026-09-15T0100 ===
+// === BUILD MARKER v205-2026-09-15T0130 ===
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -258,8 +258,17 @@ const docSectionGuard = (req, res, next) =>
   canAccessSection(req.user, String(req.params.category || '')) ? next() : res.status(403).json({ error: 'Нет доступа к этому разделу документов' });
 
 // ========== CORS ==========
+// v205: узкий белый список вместо '*'. Кому нужен доступ:
+//  - фронт на Railway; - расширение Chrome (origin chrome-extension:// и контент-скрипт на leroymerlin.es);
+//  - локалка (localhost/127.0.0.1); - запросы без Origin (curl, health-check Railway, сервер-сервер) пропускаем.
+const CORS_ALLOW = [
+  /^https:\/\/householder-web-production\.up\.railway\.app$/,
+  /^chrome-extension:\/\//,
+  /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/,
+  /^https:\/\/([a-z0-9-]+\.)?leroymerlin\.es$/
+];
 app.use(cors({
-  origin: '*',
+  origin: (origin, cb) => cb(null, !origin || CORS_ALLOW.some(rx => rx.test(origin))),
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-token'],
   credentials: true

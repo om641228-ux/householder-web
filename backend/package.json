@@ -25,8 +25,6 @@
     "pdf-lib": "^1.17.1",
     "@aws-sdk/client-s3": "^3.0.0",
     "@aws-sdk/s3-request-presigner": "^3.0.0",
-  
-
     "ffmpeg-static": "^5.2.0",
     "xlsx": "^0.18.5"
   }

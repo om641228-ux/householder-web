@@ -27,4 +27,8 @@ Thumbs.db
 
 # Logs
 *.log
-npm-debug.log*
+npm-debug.log*venv/
+*.zip
+*.bak-*
+ocr/venv/
+__pycache__/
