@@ -1,4 +1,4 @@
-// === BUILD MARKER v213-2026-09-16T2330 ===
+// === BUILD MARKER v214-2026-09-16T2345 ===
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -2344,12 +2344,19 @@ function enforceCurrencyAndTotal(data, rawText) {
     const n = parseAmountLike(m[1]);
     if (n != null && n > 0 && n < 1e9) candidates.push(n);
   }
-  const best = candidates.length ? Math.max(...candidates) : null; // итог фактуры — обычно самая крупная сумма
+  let best = candidates.length ? Math.max(...candidates) : null; // итог фактуры — обычно самая крупная сумма
   const itemsSum = Array.isArray(data.items)
     ? data.items.reduce((sum, it) => sum + (Number(it && it.total) || 0), 0)
     : 0;
   const total = data.total_amount != null ? Number(data.total_amount) : null;
   const close = (a, b, pct) => a != null && b != null && b !== 0 && Math.abs(a - b) / b <= pct;
+
+  // v214: кандидат итога в разы больше суммы позиций — это мусор (TRN/штрихкод/телефон с чека,
+  // напр. «10060039490003» у New Balance Dubai), а не итог — отбрасываем
+  if (best != null && itemsSum > 0 && best > itemsSum * 5) {
+    console.log(`v214: кандидат итога ${best} несуразно больше суммы позиций ${itemsSum.toFixed(2)} — отброшен (мусорный номер)`);
+    best = null;
+  }
 
   if (best != null) {
     const itemsBackBest = itemsSum > 0 && close(itemsSum, best, 0.02); // контрольная сумма по строкам сошлась
@@ -2369,6 +2376,10 @@ function enforceCurrencyAndTotal(data, rawText) {
     const t = Number(data.total_amount);
     if (itemsSum - t > 5 && t < itemsSum * 0.6) {
       console.log(`v213: итог ${t} несуразно меньше суммы позиций ${itemsSum.toFixed(2)} — исправлен на сумму строк`);
+      data.total_amount = Math.round(itemsSum * 100) / 100;
+    } else if (t > itemsSum * 5 && itemsSum > 0) {
+      // v214: итог в разы БОЛЬШЕ суммы позиций — модель/текст подставили мусорный номер (TRN, штрихкод)
+      console.log(`v214: итог ${t} несуразно больше суммы позиций ${itemsSum.toFixed(2)} — исправлен на сумму строк`);
       data.total_amount = Math.round(itemsSum * 100) / 100;
     }
   }
@@ -2654,8 +2665,12 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
       return cand.length ? Math.max(...cand) : null;
     }).filter(n => n != null && n > 0);
     const nearN = (a, b) => Math.abs(a - b) <= Math.max(0.03, b * 0.01);
+    // v214: отбрасываем мусорные гигантские суммы страниц (TRN/штрихкод/телефон),
+    // если есть позиции — страничный максимум не может превышать сумму позиций в разы
+    const itemsSum214 = (Array.isArray(data.items) ? data.items : []).reduce((sm, it) => sm + (Number(it && it.total) || 0), 0);
+    const chunkMaxClean = itemsSum214 > 0 ? chunkMax.filter(n => n <= itemsSum214 * 5) : chunkMax;
     const uniq = [];
-    chunkMax.forEach(n => { if (!uniq.some(u => nearN(u, n))) uniq.push(n); });
+    chunkMaxClean.forEach(n => { if (!uniq.some(u => nearN(u, n))) uniq.push(n); });
     const cur = Number(data.total_amount) || 0;
     const sumAll = Math.round(uniq.reduce((a, b) => a + b, 0) * 100) / 100;
     const chunkDocNums = new Set(chunks.map(c => pageDocSignature(c).docNum).filter(Boolean));
