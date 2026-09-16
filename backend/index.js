@@ -1,4 +1,4 @@
-// === BUILD MARKER v212-2026-09-16T2225 ===
+// === BUILD MARKER v213-2026-09-16T2330 ===
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -2338,7 +2338,7 @@ function enforceCurrencyAndTotal(data, rawText) {
 
   // Кандидаты итога из текста: «TOTAL A PAGAR 1.171,27 €», «Итого: …»
   const candidates = [];
-  const re = /(?:total\s*a\s*pagar|total\s*importe\s*factura|importe\s*total|total\s*factura|итого|всего\s+к\s+оплате|total)\D{0,30}?(\d{1,3}(?:[. ]\d{3})+,\d{2}|\d+,\d{2}|\d+\.\d{2})/gi;
+  const re = /(?:total\s*a\s*pagar|total\s*importe\s*factura|importe\s*total|total\s*factura|итого|всего\s+к\s+оплате|total)\D{0,30}?(\d{1,3}(?:,\d{3})+\.\d{2}|\d{1,3}(?:[. ]\d{3})+,\d{2}|\d+,\d{2}|\d+\.\d{2})/gi;
   let m;
   while ((m = re.exec(text)) !== null && candidates.length < 40) {
     const n = parseAmountLike(m[1]);
@@ -2363,6 +2363,14 @@ function enforceCurrencyAndTotal(data, rawText) {
   if (data.total_amount == null && itemsSum > 0) {
     data.total_amount = Math.round(itemsSum * 100) / 100;
     console.log(`v53: итог восстановлен как сумма строк = ${data.total_amount}`);
+  } else if (itemsSum > 0) {
+    // v213: итог в разы меньше суммы позиций (кейс «1,09» вместо «1,099.26» — обрезанный US-формат)
+    // и ключевых итогов в тексте не нашлось — доверяем сумме строк
+    const t = Number(data.total_amount);
+    if (itemsSum - t > 5 && t < itemsSum * 0.6) {
+      console.log(`v213: итог ${t} несуразно меньше суммы позиций ${itemsSum.toFixed(2)} — исправлен на сумму строк`);
+      data.total_amount = Math.round(itemsSum * 100) / 100;
+    }
   }
 
   // v54.3: штамп чека «дата+время» в подвале (…000929 10/01/2026 10:50) — самый надёжный источник даты.
@@ -2637,7 +2645,7 @@ async function finalizeDocumentFromPageTexts(pageTexts, currency, docType) {
       // Все денежные суммы страницы (12,20 / 1.171,27 / 218.87); итог фактуры — самая крупная
       // (ключевые слова ненадёжны: в табличной шапке «TOTAL IMP. … TOTAL FRA» слово оторвано от цифры)
       const cand = [];
-      const reT = /(\d{1,3}(?:[. ]\d{3})+,\d{2}|\d+,\d{2}|\d+\.\d{2})/g;
+      const reT = /(\d{1,3}(?:,\d{3})+\.\d{2}|\d{1,3}(?:[. ]\d{3})+,\d{2}|\d+,\d{2}|\d+\.\d{2})/g;
       let mm;
       while ((mm = reT.exec(ch)) !== null && cand.length < 60) {
         const n = parseAmountLike(mm[1]);
