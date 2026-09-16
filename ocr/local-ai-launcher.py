@@ -44,6 +44,25 @@ LOG_DIR = os.path.join(OCR_DIR, "logs")
 
 os.makedirs(LOG_DIR, exist_ok=True)
 STATE = {"ollama_url": None, "ocr_url": None, "procs": []}
+
+# v2 (2026-09-16): при запуске двойным кликом PATH урезан (нет Homebrew) —
+# ищем бинари по всем стандартным местам, включая Ollama.app
+import shutil
+def find_bin(name):
+    p = shutil.which(name)
+    if p:
+        return p
+    for c in [f"/opt/homebrew/bin/{name}", f"/usr/local/bin/{name}",
+              f"/Applications/Ollama.app/Contents/Resources/{name}",
+              os.path.expanduser(f"~/.ollama/bin/{name}")]:
+        if os.path.exists(c) and os.access(c, os.X_OK):
+            return c
+    return None
+
+OLLAMA_BIN = find_bin("ollama")
+CF_BIN = find_bin("cloudflared")
+# запасной PATH для дочерних процессов
+os.environ["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + os.environ.get("PATH", "")
 TUNNEL_RE = re.compile(r"https://[a-z0-9\-]+\.trycloudflare\.com")
 
 
@@ -76,7 +95,11 @@ def spawn(cmd, log_name, env=None):
 def start_ollama():
     if ollama_up():
         return True
-    spawn(["ollama", "serve"], "ollama.log", env={"OLLAMA_HOST": "0.0.0.0"})
+    if not OLLAMA_BIN:
+        print("[launcher] OLLAMA НЕ НАЙДЕНА. Установи: brew install ollama  (или скачай Ollama.app)", flush=True)
+        return False
+    print(f"[launcher] стартую Ollama: {OLLAMA_BIN}", flush=True)
+    spawn([OLLAMA_BIN, "serve"], "ollama.log", env={"OLLAMA_HOST": "0.0.0.0"})
     for _ in range(30):
         if ollama_up():
             return True
@@ -105,7 +128,10 @@ def start_ocr():
 
 def start_tunnel(port, log_name, wait_sec=45):
     """Запустить cloudflared и вытащить выданный https://....trycloudflare.com из лога."""
-    p, log = spawn(["cloudflared", "tunnel", "--url", f"http://127.0.0.1:{port}"], log_name)
+    if not CF_BIN:
+        print("[launcher] CLOUDFLARED НЕ НАЙДЕН. Установи: brew install cloudflared", flush=True)
+        return None
+    p, log = spawn([CF_BIN, "tunnel", "--url", f"http://127.0.0.1:{port}"], log_name)
     path = os.path.join(LOG_DIR, log_name)
     t0 = time.time()
     while time.time() - t0 < wait_sec:
@@ -197,6 +223,22 @@ def watchdog():
 
 
 def main():
+    # v2.1: если лаунчер УЖЕ висит на 8790 — не падаем: просим старый поднять сервисы и выходим
+    if http_alive(f"http://127.0.0.1:{LAUNCHER_PORT}/status", timeout=2):
+        print("⚠ Лаунчер уже запущен (порт 8790 занят). Прошу его поднять сервисы…")
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{LAUNCHER_PORT}/start", data=b"{}", headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(req, timeout=90) as r:
+                print(r.read().decode("utf-8", "replace"))
+        except Exception as e:
+            print(f"Старый лаунчер не ответил: {e}")
+            print("Убей его и запусти заново:  pkill -f local-ai-launcher.py")
+        print("\nЭто окно можно закрыть — сервисы работают под СТАРЫМ лаунчером.")
+        try:
+            input("Enter — закрыть окно… ")
+        except Exception:
+            pass
+        return
     print(f"local-ai-launcher слушает http://127.0.0.1:{LAUNCHER_PORT}")
     print("Кнопка в приложении householder-web вызовет /start.")
     print("Запускаю сервисы сразу…")
@@ -204,10 +246,16 @@ def main():
     threading.Thread(target=watchdog, daemon=True).start()
     print("Сторож запущен: упавшие сервисы/туннели переподнимаются автоматически.")
     print("Ctrl+C остановит только лаунчер — Ollama/OCR/туннели продолжат работать.")
+    print("ЭТО ОКНО НЕ ЗАКРЫВАЙ — иначе сторож перестанет следить за сервисами.")
     try:
         ThreadingHTTPServer(("127.0.0.1", LAUNCHER_PORT), H).serve_forever()
     except KeyboardInterrupt:
         print("\nЛаунчер остановлен. Сервисы работают в фоне. Повторный запуск подхватит их.")
+    except OSError as e:
+        if getattr(e, "errno", None) == 48:
+            print(f"\nПорт {LAUNCHER_PORT} занят не лаунчером. Освободи:  lsof -ti :{LAUNCHER_PORT} | xargs kill")
+        else:
+            raise
 
 
 if __name__ == "__main__":

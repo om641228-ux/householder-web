@@ -1,4 +1,4 @@
-// === BUILD MARKER v208-2026-09-15T2030 ===
+// === BUILD MARKER v209-2026-09-16T1820 ===
 // redeploy-trigger: 2026-09-10-v175-ext-watchdog
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import './App.css';
@@ -2246,7 +2246,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v208 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v209 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -6532,6 +6532,29 @@ function App() {
     setTimeout(() => { window.__embedPollOn = false; pollEmbedStatus(); }, 500);
   };
 
+  // v209: единый запуск локального AI (Ollama+OCR+туннели) — кнопки в шапке и в журнале зовут её
+  const startLocalAi = async () => {
+    setLocalAiStart({ busy: true });
+    try {
+      const r = await fetch('http://127.0.0.1:8790/start', { method: 'POST' });
+      const dd = await r.json();
+      if (!r.ok) throw new Error(dd.error || `Ошибка ${r.status}`);
+      if (dd.ollama_url) {
+        setLocalEmbedUrl(dd.ollama_url);
+        try { localStorage.setItem('localEmbedUrl', dd.ollama_url); } catch (e) {}
+      }
+      if (dd.ocr_url) { // свежий туннель сразу в настройки OCR
+        try { localStorage.setItem('mac_ocr_url_v1', dd.ocr_url); } catch (e) {}
+        setMacOcrUrl(dd.ocr_url);
+      }
+      setLocalAiStart({ busy: false, done: true, ollama: dd.ollama, ocr: dd.ocr, ollama_url: dd.ollama_url, ocr_url: dd.ocr_url });
+      loadItemLab();
+    } catch (e) {
+      setLocalAiStart({ busy: false, error: e.message });
+      alert('🚀 Локальный AI не отвечает.\n\nЗапустите на Mac двойным кликом: start-local-ai.command\n(лаунчер слушает 127.0.0.1:8790)\n\nПричина: ' + e.message);
+    }
+  };
+
   const gotoTab = (t) => {
     setActiveTab(t);
     if (t === 'list') loadReceipts();
@@ -10017,7 +10040,13 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-15 · v208 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-16 · v209 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  <button
+                    onClick={startLocalAi}
+                    disabled={localAiStart && localAiStart.busy}
+                    title="Запустить/починить локальный AI: Ollama + OCR + туннели, свежие адреса подставятся автоматически"
+                    style={{ marginLeft: 6, border: 'none', background: (localAiStart && localAiStart.busy) ? '#95a5a6' : '#1e8449', color: '#fff', borderRadius: 7, padding: '3px 9px', fontSize: 12, fontWeight: 700, cursor: 'pointer', minHeight: 0 }}
+                  >{(localAiStart && localAiStart.busy) ? '⏳' : '🚀'}</button>
                   <button
                     onClick={configureMacOcr}
                     title="Задать адрес Mac OCR (HTTPS-туннель cloudflared на 127.0.0.1:8787)"
@@ -10030,7 +10059,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-15 · v208</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-16 · v209</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
@@ -11719,26 +11748,7 @@ ${bodyHtml}
                 </div>
                 <div style={{ display: 'flex', gap: 6, margin: '0 0 6px', flexWrap: 'wrap', alignItems: 'center' }}>
                   <button disabled={localAiStart && localAiStart.busy}
-                    onClick={async () => { // v196: одна кнопка — лаунчер на Mac поднимает Ollama+OCR+туннели
-                      setLocalAiStart({ busy: true });
-                      try {
-                        const r = await fetch('http://127.0.0.1:8790/start', { method: 'POST' });
-                        const dd = await r.json();
-                        if (!r.ok) throw new Error(dd.error || `Ошибка ${r.status}`);
-                        if (dd.ollama_url) {
-                          setLocalEmbedUrl(dd.ollama_url);
-                          try { localStorage.setItem('localEmbedUrl', dd.ollama_url); } catch (e) {}
-                        }
-                        if (dd.ocr_url) { // v198: сразу заносим туннель и в настройки OCR (state + localStorage)
-                          try { localStorage.setItem('mac_ocr_url_v1', dd.ocr_url); } catch (e) {}
-                          setMacOcrUrl(dd.ocr_url);
-                        }
-                        setLocalAiStart({ busy: false, done: true, ollama: dd.ollama, ocr: dd.ocr, ollama_url: dd.ollama_url, ocr_url: dd.ocr_url });
-                        loadItemLab();
-                      } catch (e) {
-                        setLocalAiStart({ busy: false, error: e.message });
-                      }
-                    }}
+                    onClick={startLocalAi} // v209: общая функция (была v196/198)
                     style={{ border: 'none', background: '#1e8449', color: '#fff', borderRadius: 8, padding: '7px 14px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
                     {localAiStart && localAiStart.busy ? '⏳ Запускаю (до 1 мин)…' : '🚀 Запустить локальный AI (Mac)'}
                   </button>
