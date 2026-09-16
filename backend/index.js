@@ -1,4 +1,4 @@
-// === BUILD MARKER v211-2026-09-16T1945 ===
+// === BUILD MARKER v212-2026-09-16T2225 ===
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -3185,7 +3185,15 @@ function parseAIResponse(text) {
         : (data.raw_text_ru || data.raw_text_translation || null)
     };
 
-    // v149+v157: контроль итога по сумме строк items.
+    // v147: модель вернула валидный JSON, но items потерялись/пусты — спасаем из сырого ответа
+    if (!result.items.length) {
+      const sv = salvageItemsFromJsonText(jsonStr);
+      if (sv.length) {
+        result.items = normalizeItems(sv);
+        console.log(`v147: items спасены из сырого ответа модели (${sv.length} шт.)`);
+      }
+    }
+    // v149+v157 (v212: ПОСЛЕ спасения items v147 — иначе итог не контролировался, когда позиции восстановлены из сырого ответа): контроль итога по сумме строк items.
     // а) итога нет/0 → итог = сумма строк;
     // б) итог В РАЗЫ меньше суммы позиций (модель выдернула случайную цифру — кейс 1.09 вместо 1099.26)
     //    → доверяем сумме строк (скидка >40% на чеке невозможна без отрицательных позиций, а они учтены в сумме).
@@ -3200,14 +3208,6 @@ function parseAIResponse(text) {
           console.log(`v157: итог ${t} несуразно меньше суммы позиций ${sum} — исправлен на сумму строк`);
           result.total_amount = sum;
         }
-      }
-    }
-    // v147: модель вернула валидный JSON, но items потерялись/пусты — спасаем из сырого ответа
-    if (!result.items.length) {
-      const sv = salvageItemsFromJsonText(jsonStr);
-      if (sv.length) {
-        result.items = normalizeItems(sv);
-        console.log(`v147: items спасены из сырого ответа модели (${sv.length} шт.)`);
       }
     }
     // Если модель «сжала» модуль ТОВАРЫ до заглушки "(109 artículos...)" — пересобираем из items
