@@ -1,4 +1,4 @@
-// === BUILD MARKER v208-2026-09-15T2030 ===
+// === BUILD MARKER v211-2026-09-16T1945 ===
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -7476,7 +7476,7 @@ app.get('/api/items/:id/similar', requireAuth, async (req, res) => {
     let embedFallbackUsed = false;
     if (out.length < 5 && embedRows.length) {
       const fb = embedRows.filter(r => {
-        if (simOf(r) < 0.75) return false; // v200: порог поднят (покрытие векторов растёт)
+        if (simOf(r) < 0.78) return false; // v211: порог 0.78 — каталог покрыт векторами на 100%
         const nm = normNm(r.name);
         if (esWords.length && !nm.includes(normNm(esWords[0]))) return false; // тип предмета обязателен
         return true;
