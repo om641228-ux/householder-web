@@ -1,4 +1,4 @@
-// === BUILD MARKER v216-2026-09-17T2010 ===
+// === BUILD MARKER v217-2026-09-18T1200 ===
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -5268,6 +5268,47 @@ function extractReolinkProducts(html) {
   return [...out.values()];
 }
 
+// v217: живые цены Reolink из shop-API (то же API, что дёргает сам сайт).
+// Ключ варианта = id товара из JSON коллекции (напр. duo-3v-poe-1-pack).
+// Пакетный запрос API не принимает — опрашиваем по одному ключу, по 5 параллельно.
+const REOLINK_PRICE_API_HEADERS = {
+  'User-Agent': REOLINK_UA.headers['User-Agent'],
+  'Accept': 'application/json',
+  'Referer': 'https://store.reolink.com/',
+  'Origin': 'https://store.reolink.com'
+};
+async function reolinkLivePrice(key) {
+  try {
+    const r = await axios.get('https://apis.reolink.com/v2/shop/variants/details/?country=ES&lang=es&keys=' + encodeURIComponent(key),
+      { headers: REOLINK_PRICE_API_HEADERS, timeout: 15000 });
+    const v = Array.isArray(r.data) ? r.data[0] : null;
+    const pr = v && v.price ? v.price : null;
+    if (!pr) return null;
+    const sale = parseFloat(pr.salePrice), reg = parseFloat(pr.price);
+    return {
+      price: isFinite(sale) && sale > 0 ? sale : null,
+      regular_price: isFinite(reg) && reg > 0 ? reg : null,
+      currency: (v.currency && v.currency.code) || 'EUR'
+    };
+  } catch (e) { return null; }
+}
+async function reolinkRefreshPrices(prods) {
+  let refreshed = 0;
+  for (let i = 0; i < prods.length; i += 5) {
+    const chunk = prods.slice(i, i + 5);
+    const results = await Promise.all(chunk.map(p => reolinkLivePrice(p.id)));
+    results.forEach((live, j) => {
+      if (live && live.price != null) {
+        chunk[j].price = live.price;
+        if (live.regular_price != null) chunk[j].regular_price = live.regular_price;
+        if (live.currency) chunk[j].currency = live.currency;
+        refreshed++;
+      }
+    });
+  }
+  return refreshed;
+}
+
 // Список разделов: sitemap-индекс reolink.com → product-collection файлы → уникальные коллекции (без локалей)
 app.get('/api/parse/reolink/collections', requireAuth, async (req, res) => {
   try {
@@ -5295,6 +5336,9 @@ app.post('/api/parse/reolink/sync', requireAuth, requireRole('admin', 'manager')
     if (html.length < 5000) throw new Error('Страница раздела подозрительно короткая — возможна блокировка');
     const prods = extractReolinkProducts(html);
     if (!prods.length) throw new Error('Товары на странице не найдены (структура изменилась?)');
+    let liveRefreshed = 0;
+    try { liveRefreshed = await reolinkRefreshPrices(prods); } // v217: живые цены из shop-API
+    catch (e) { console.warn('reolink live prices:', e.message); }
     let upserted = 0;
     for (let i = 0; i < prods.length; i += 500) {
       const rows = prods.slice(i, i + 500).map(p => ({
@@ -5329,7 +5373,7 @@ app.post('/api/parse/reolink/sync', requireAuth, requireRole('admin', 'manager')
         total: prods.length, with_photo: prods.filter(p => p.image).length, with_brand: prods.length, with_mpn: 0, with_price: prods.filter(p => p.price != null).length, sent: upserted
       });
     } catch (e) { /* журнал не критичен */ }
-    res.json({ ok: true, upserted, total: prods.length, with_price: prods.filter(p => p.price != null).length });
+    res.json({ ok: true, upserted, total: prods.length, with_price: prods.filter(p => p.price != null).length, live_prices: liveRefreshed });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

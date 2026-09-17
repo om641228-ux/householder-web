@@ -1,4 +1,4 @@
-// === BUILD MARKER v216-2026-09-17T2010 ===
+// === BUILD MARKER v217-2026-09-18T1200 ===
 // redeploy-trigger: 2026-09-10-v175-ext-watchdog
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import './App.css';
@@ -2246,7 +2246,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v216 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v217 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -3258,7 +3258,7 @@ function ParseTab({ token, isMobileView, canRun }) {
                         const r = await fetch(`${API_URL}/api/parse/reolink/sync?token=${token}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: c }) });
                         const j = await r.json();
                         if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
-                        setReoSync(prev => ({ ...prev, [c]: { status: 'ok', msg: `✅ ${j.upserted}` } }));
+                        setReoSync(prev => ({ ...prev, [c]: { status: 'ok', msg: `✅ ${j.upserted}${j.live_prices != null ? ' 💶' + j.live_prices : ''}` } }));
                         ok++;
                       } catch (e) { setReoSync(prev => ({ ...prev, [c]: { status: 'err', msg: '❌ ' + e.message } })); fail++; }
                     }
@@ -3282,7 +3282,7 @@ function ParseTab({ token, isMobileView, canRun }) {
                         const r = await fetch(`${API_URL}/api/parse/reolink/sync?token=${token}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: c }) });
                         const j = await r.json();
                         if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
-                        setReoSync(prev => ({ ...prev, [c]: { status: 'ok', msg: `✅ ${j.upserted}` } }));
+                        setReoSync(prev => ({ ...prev, [c]: { status: 'ok', msg: `✅ ${j.upserted}${j.live_prices != null ? ' 💶' + j.live_prices : ''}` } }));
                         catSearch({ page: 0 });
                       } catch (e) { setReoSync(prev => ({ ...prev, [c]: { status: 'err', msg: '❌ ' + e.message } })); }
                     }}
@@ -10137,7 +10137,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-17 · v216 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-18 · v217 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={startLocalAi}
                     disabled={localAiStart && localAiStart.busy}
@@ -10156,7 +10156,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-17 · v216</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-18 · v217</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
