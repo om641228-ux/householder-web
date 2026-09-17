@@ -1,4 +1,4 @@
-// === BUILD MARKER v215-2026-09-17T1920 ===
+// === BUILD MARKER v216-2026-09-17T2010 ===
 // redeploy-trigger: 2026-09-10-v175-ext-watchdog
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import './App.css';
@@ -2246,7 +2246,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v215 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v216 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -2720,6 +2720,7 @@ function ParseTab({ token, isMobileView, canRun }) {
     chafiras: { title: 'Chafiras', emoji: '🔩', host: 'chafiras.com', sitemaps: ['https://chafiras.com/1_es_0_sitemap.xml'] },
     worten:     { title: 'Worten Canarias',     emoji: '🛒', host: 'canarias.worten.es',     sitemaps: ['https://www.worten.pt/_/sitemap/sitemap_index_wortenic.xml'] }, // v165: /sitemap.xml отдаёт 403; рабочий индекс из robots.txt
     mercadona:  { title: 'Mercadona',           emoji: '🛒', host: 'tienda.mercadona.es',    sitemaps: [] }, // у Mercadona нет sitemap — каталог через их API
+    reolink:    { title: 'Reolink',             emoji: '📷', host: 'store.reolink.com',     sitemaps: [] }, // v216: товарного sitemap нет — каталог+цены из встроенного JSON коллекций
     tutrebol:   { title: 'TuTrebol',            emoji: '🍀', host: 'www.tutrebol.es',        sitemaps: ['https://www.tutrebol.es/sitemap_index_shop_1.xml'] }, // v170: PrestaShop, sitemap в .xml.gz — backend распакует
   };
   const [catStore, setCatStore] = useState('lm');
@@ -2727,6 +2728,9 @@ function ParseTab({ token, isMobileView, canRun }) {
   const [mcatTree, setMcatTree] = useState(null);   // Mercadona: разделы [{id, path}]
   const [mcatSync, setMcatSync] = useState({});     // id -> {status, msg}
   const [mcatAll, setMcatAll] = useState(false);
+  const [reoTree, setReoTree] = useState(null);     // v216 Reolink: разделы [slug]
+  const [reoSync, setReoSync] = useState({});       // slug -> {status, msg}
+  const [reoAll, setReoAll] = useState(false);
   const [catSync, setCatSync] = useState({}); // url -> {status:'run'|'ok'|'err', msg}
   const [catQ, setCatQ] = useState('');
   const [catSort, setCatSort] = useState({ key: '', dir: 'desc' }); // v130: сортировка каталога
@@ -3229,7 +3233,67 @@ function ParseTab({ token, isMobileView, canRun }) {
         <div onClick={() => setCatOpen(o => !o)} style={{ fontSize: 13, fontWeight: 700, marginBottom: catOpen ? 8 : 0, cursor: 'pointer', userSelect: 'none' }}>{catOpen ? '▾' : '▸'} {CAT_STORE.emoji} Каталог товаров ({CAT_STORE.title}){!catOpen && catPricedTotal != null ? ` · с ценой: ${catPricedTotal}` : ''}</div>
         <div onClick={() => setCatToolsOpen(o => !o)} style={{ fontSize: 12, fontWeight: 700, margin: '6px 0 2px', cursor: 'pointer', userSelect: 'none', color: '#6e6e73' }}>{catToolsOpen ? '▾' : '▸'} 🛠 Sitemap-синхронизация и разделы каталога</div>
         {catToolsOpen && (<>
-        {catStore === 'mercadona' ? (
+        {catStore === 'reolink' ? (
+          <div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <button onClick={async () => {
+                  setErr('');
+                  try {
+                    const r = await fetch(`${API_URL}/api/parse/reolink/collections?token=${token}`);
+                    const j = await r.json();
+                    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+                    setReoTree(j.collections || []);
+                  } catch (e) { alert('❌ ' + e.message); }
+                }}
+                style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #d0d0d5', background: '#fff', fontSize: 12, cursor: 'pointer' }}>
+                🌳 Загрузить разделы Reolink
+              </button>
+              {reoTree && reoTree.length > 0 && (
+                <button disabled={reoAll} onClick={async () => {
+                    setReoAll(true);
+                    let ok = 0, fail = 0;
+                    for (const c of reoTree) {
+                      setReoSync(prev => ({ ...prev, [c]: { status: 'run', msg: '…' } }));
+                      try {
+                        const r = await fetch(`${API_URL}/api/parse/reolink/sync?token=${token}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: c }) });
+                        const j = await r.json();
+                        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+                        setReoSync(prev => ({ ...prev, [c]: { status: 'ok', msg: `✅ ${j.upserted}` } }));
+                        ok++;
+                      } catch (e) { setReoSync(prev => ({ ...prev, [c]: { status: 'err', msg: '❌ ' + e.message } })); fail++; }
+                    }
+                    setReoAll(false);
+                    catSearch({ page: 0 });
+                    alert(`✅ Reolink: разделов ок: ${ok}` + (fail ? `, ошибок: ${fail}` : ''));
+                  }}
+                  style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #0071e3', background: reoAll ? '#e8f0fe' : '#0071e3', color: reoAll ? '#0071e3' : '#fff', fontSize: 12, cursor: 'pointer' }}>
+                  {reoAll ? '⏳ Синхронизация всех разделов…' : '⬇ Синхронизировать ВСЕ разделы (с ценами)'}
+                </button>
+              )}
+              <span style={{ fontSize: 11, color: '#8e8e93' }}>у Reolink нет товарного sitemap — каталог и цены (EUR) читаются из встроенного JSON страниц разделов store.reolink.com/es/…</span>
+            </div>
+            {reoTree && (
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 8, maxHeight: 200, overflowY: 'auto' }}>
+                {reoTree.map(c => (
+                  <button key={c} onClick={async () => {
+                      if (reoSync[c] && reoSync[c].status === 'run') return;
+                      setReoSync(prev => ({ ...prev, [c]: { status: 'run', msg: '…' } }));
+                      try {
+                        const r = await fetch(`${API_URL}/api/parse/reolink/sync?token=${token}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slug: c }) });
+                        const j = await r.json();
+                        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+                        setReoSync(prev => ({ ...prev, [c]: { status: 'ok', msg: `✅ ${j.upserted}` } }));
+                        catSearch({ page: 0 });
+                      } catch (e) { setReoSync(prev => ({ ...prev, [c]: { status: 'err', msg: '❌ ' + e.message } })); }
+                    }}
+                    style={{ fontSize: 11, padding: '2px 9px', borderRadius: 999, border: '1px solid #d0d0d5', background: reoSync[c] && reoSync[c].status === 'ok' ? '#e8f8ef' : '#f5f5f7', cursor: 'pointer' }}>
+                    {reoSync[c] && reoSync[c].status === 'run' ? '⏳ ' : ''}{c} {reoSync[c] ? reoSync[c].msg : ''}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : catStore === 'mercadona' ? (
           <div>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
               <button onClick={async () => {
@@ -5840,7 +5904,7 @@ function App() {
   });
   const [itemLabLoading, setItemLabLoading] = useState(false);
   const [embedRun, setEmbedRun] = useState(null);               // v190: прогон эмбеддингов {running, log: []}
-  const ITEM_STORES = [['', '🌐 Все магазины'], ['www.leroymerlin.es', '🗂 Leroy Merlin'], ['canarias.worten.es', '🛒 Worten'], ['canarias.mediamarkt.es', '🛒 MediaMarkt'], ['www.tutrebol.es', '🍀 TuTrebol'], ['tienda.mercadona.es', '🛒 Mercadona'], ['chafiras.com', '🔩 Chafiras']];
+  const ITEM_STORES = [['', '🌐 Все магазины'], ['www.leroymerlin.es', '🗂 Leroy Merlin'], ['canarias.worten.es', '🛒 Worten'], ['canarias.mediamarkt.es', '🛒 MediaMarkt'], ['www.tutrebol.es', '🍀 TuTrebol'], ['tienda.mercadona.es', '🛒 Mercadona'], ['chafiras.com', '🔩 Chafiras'], ['store.reolink.com', '📷 Reolink']];
   const [chatUnread, setChatUnread] = useState({}); // v83: непрочитанные по каналам
   const [cashQ, setCashQ] = useState('');           // v85: поиск по движениям (Cash)
   const [cashVals, setCashVals] = useState({});     // v85: редактируемые значения строк {id: {counterparty, operation_date, amount}}
@@ -10073,7 +10137,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-17 · v215 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-17 · v216 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={startLocalAi}
                     disabled={localAiStart && localAiStart.busy}
@@ -10092,7 +10156,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-17 · v215</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-17 · v216</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>

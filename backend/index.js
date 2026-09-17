@@ -1,4 +1,4 @@
-// === BUILD MARKER v215-2026-09-17T1920 ===
+// === BUILD MARKER v216-2026-09-17T2010 ===
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -283,6 +283,7 @@ const CORS_ALLOW = [
   /^https:\/\/([a-z0-9-]+\.)?worten\.pt$/,
   /^https:\/\/([a-z0-9-]+\.)?chafiras\.es$/,
   /^https:\/\/([a-z0-9-]+\.)?leroymerlin\.fr$/,
+  /^https:\/\/([a-z0-9-]+\.)?reolink\.com$/,
   /^https:\/\/([a-z0-9-]+\.)?aki\.es$/,
   /^https:\/\/([a-z0-9-]+\.)?bricodepot\.es$/,
   /^https:\/\/([a-z0-9-]+\.)?bauhaus\.es$/,
@@ -5241,6 +5242,97 @@ app.post('/api/parse/mercadona/sync', requireAuth, requireRole('admin', 'manager
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ================== v216: Reolink — каталог со встроенных JSON коллекций store.reolink.com ==================
+// У Reolink нет товарного sitemap: товары (название, цена EUR, фото, URL) вшиты в HTML
+// коллекционных страниц store.reolink.com/es/<раздел>/ как JSON-объекты.
+const REOLINK_UA = { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36', 'Accept-Language': 'es-ES,es;q=0.9' }, timeout: 60000 };
+
+function extractReolinkProducts(html) {
+  const out = new Map();
+  const re = /"id":"([^"]{3,120})","key":"[^"]{0,120}","name":"((?:[^"\\]|\\.)*)","color":"(?:[^"\\]|\\.)*","categories":\[[\s\S]{0,1500}?"currency":\{"code":"([A-Z]{3})"[\s\S]{0,200}?"href":"([^"]+)"[\s\S]{0,300}?"image":\{"pc":"([^"]*)"[\s\S]{0,200}?"price":\{"currentPrice":"([\d.]*)"(?:,"discountType":"[^"]*")?,"regularPrice":"([\d.]*)"/g;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const [, id, nameRaw, currency, href, image, cur, reg] = m;
+    if (out.has(id)) continue;
+    const name = nameRaw.replace(/\\u0026/g, '&').replace(/\\"/g, '"').trim();
+    const price = parseFloat(cur);
+    const regular = parseFloat(reg);
+    out.set(id, {
+      id, name, currency,
+      url: String(href || '').split('#')[0],
+      image: image || '',
+      price: isFinite(price) && price > 0 ? price : null,
+      regular_price: isFinite(reg) && regular > 0 ? regular : null
+    });
+  }
+  return [...out.values()];
+}
+
+// Список разделов: sitemap-индекс reolink.com → product-collection файлы → уникальные коллекции (без локалей)
+app.get('/api/parse/reolink/collections', requireAuth, async (req, res) => {
+  try {
+    const idx = await axios.get('https://reolink.com/sitemap.xml', REOLINK_UA);
+    const files = [...String(idx.data).matchAll(/<loc>(https:\/\/reolink\.com\/product-collection-sitemap-\d+\.xml)<\/loc>/g)].map(m => m[1]);
+    const slugs = new Set();
+    for (const f of files) {
+      try {
+        const r = await axios.get(f, REOLINK_UA);
+        for (const m of String(r.data).matchAll(/<loc>https:\/\/store\.reolink\.com\/([a-z0-9-]+)\/<\/loc>/g)) slugs.add(m[1]);
+      } catch (e) { console.warn('reolink collections:', f, e.message); }
+    }
+    res.json({ ok: true, collections: [...slugs].sort() });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Синк ОДНОГО раздела Reolink → parse_products (site = store.reolink.com), цены сразу есть (EUR)
+app.post('/api/parse/reolink/sync', requireAuth, requireRole('admin', 'manager'), async (req, res) => {
+  try {
+    const slug = String((req.body && req.body.slug) || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+    if (!slug) return res.status(400).json({ error: 'Нужен slug раздела (например battery-security-cameras)' });
+    await parseThrottle('https://store.reolink.com/' + slug + '/');
+    const r = await axios.get(`https://store.reolink.com/es/${slug}/`, REOLINK_UA);
+    const html = String(r.data || '');
+    if (html.length < 5000) throw new Error('Страница раздела подозрительно короткая — возможна блокировка');
+    const prods = extractReolinkProducts(html);
+    if (!prods.length) throw new Error('Товары на странице не найдены (структура изменилась?)');
+    let upserted = 0;
+    for (let i = 0; i < prods.length; i += 500) {
+      const rows = prods.slice(i, i + 500).map(p => ({
+        site: 'store.reolink.com',
+        url: p.url || ('https://reolink.com/es/product/' + p.id + '/'),
+        name: p.name.slice(0, 300),
+        image: p.image || null,
+        article: p.id.slice(0, 120),
+        brand: 'Reolink',
+        price: p.price,
+        currency: p.currency || 'EUR',
+        price_at: p.price != null ? new Date().toISOString() : null,
+        price_source: p.price != null ? 'reolink-store' : null,
+        category: slug,
+        last_seen: new Date().toISOString()
+      }));
+      const { error } = await supabaseAdmin.from('parse_products').upsert(rows, { onConflict: 'site,url' });
+      if (error) {
+        if (/does not exist/i.test(error.message || '')) return res.status(500).json({ error: 'Нет таблицы parse_products — выполните v119-парсинг.sql повторно' });
+        if (/column/i.test(error.message || '')) { // category может отсутствовать в старых базах — повтор без неё
+          const rows2 = rows.map(({ category, ...rest }) => rest);
+          const { error: e2 } = await supabaseAdmin.from('parse_products').upsert(rows2, { onConflict: 'site,url' });
+          if (e2) throw e2;
+        } else throw error;
+      }
+      upserted += rows.length;
+    }
+    if (typeof logActivity === 'function') logActivity(req.user, 'Парсинг', 'Синк Reolink', `раздел ${slug}: ${upserted} товаров`, req);
+    try {
+      await supabaseAdmin.from('parse_logs').insert({ site: 'store.reolink.com',
+        url: 'https://store.reolink.com/es/' + slug + '/', category: slug,
+        total: prods.length, with_photo: prods.filter(p => p.image).length, with_brand: prods.length, with_mpn: 0, with_price: prods.filter(p => p.price != null).length, sent: upserted
+      });
+    } catch (e) { /* журнал не критичен */ }
+    res.json({ ok: true, upserted, total: prods.length, with_price: prods.filter(p => p.price != null).length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/parse/catalog/categories', requireAuth, async (req, res) => {
   try {
     const site = String(req.query.site || '').trim();
@@ -7684,7 +7776,7 @@ app.get('/api/items/debug', requireAuth, async (req, res) => {
   } catch (e) { out.feedback = 'нет таблицы — выполните миграцию v188'; }
   out.embed_note = 'Это движок ЭМБЕДДИНГОВ (семантический поиск), а не распознавания: фото распознаёт модель, выбранная в шапке.';
   // v193: максимум информации для отладки
-  const SITES6 = ['www.leroymerlin.es', 'canarias.worten.es', 'canarias.mediamarkt.es', 'www.tutrebol.es', 'tienda.mercadona.es', 'chafiras.com'];
+  const SITES6 = ['www.leroymerlin.es', 'canarias.worten.es', 'canarias.mediamarkt.es', 'www.tutrebol.es', 'tienda.mercadona.es', 'chafiras.com', 'store.reolink.com'];
   out.catalog_by_site = {};
   for (const st of SITES6) {
     try { const { count } = await supabaseAdmin.from('parse_products').select('*', { count: 'exact', head: true }).eq('site', st); out.catalog_by_site[st] = count; } catch (e) {}
