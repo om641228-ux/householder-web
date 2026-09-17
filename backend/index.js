@@ -1,4 +1,4 @@
-// === BUILD MARKER v214-2026-09-16T2345 ===
+// === BUILD MARKER v215-2026-09-17T1920 ===
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -7840,6 +7840,24 @@ app.post('/api/parse/embed-catalog', requireAuth, requireRole('admin', 'manager'
   try {
     const lim = Math.min(500, Math.max(10, parseInt((req.body && req.body.limit) || '200', 10) || 200));
     const embedUrl = (req.body && String(req.body.embed_url || '').trim()) || null; // v194: адрес локального AI из UI
+    const target = String((req.body && req.body.target) || 'catalog'); // v215: 'items' — пакетный прогон ПРЕДМЕТОВ (home_items)
+    if (target === 'items') {
+      const { data: irows, error: ierr } = await supabaseAdmin.from('home_items').select('id,name_ru,name_es,brand,mpn').is('name_embed', null).limit(lim);
+      if (ierr) {
+        if (/name_embed|vector|schema cache/i.test(ierr.message || '')) return res.status(500).json({ error: 'Нужна миграция supabase-migration-v188-items-intel.sql (pgvector)', missing: true });
+        throw ierr;
+      }
+      let done = 0, failed = 0;
+      for (const r of irows || []) {
+        const vec = await embedText([r.name_es, r.name_ru, r.brand, r.mpn].filter(Boolean).join(' '), { urlOverride: embedUrl });
+        if (vec) {
+          const { error: ue } = await supabaseAdmin.from('home_items').update({ name_embed: JSON.stringify(vec) }).eq('id', r.id);
+          if (ue) failed++; else done++;
+        } else failed++;
+      }
+      logActivity(req.user, 'Предметы', 'эмбеддинги предметов', `проставлено ${done}, ошибок ${failed}`, req);
+      return res.json({ done, failed, target: 'items', left: (irows || []).length === lim ? 'вызовите ещё раз — есть ещё порция' : 'все предметы покрыты' });
+    }
     const mode = await getEmbedMode();
     if ((mode === 'local' || mode === 'auto') && !embedUrl && !process.env.LOCAL_EMBED_URL) {
       if (mode === 'local') return res.status(400).json({ error: 'Режим «только локальный», но адрес локального AI не задан: впишите его в поле «адрес локального AI» в карточке Хода 4 (например http://IP:11434 с доступом с сервера) или задайте LOCAL_EMBED_URL на бэкенде.' });

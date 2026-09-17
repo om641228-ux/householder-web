@@ -1,4 +1,4 @@
-// === BUILD MARKER v214-2026-09-16T2350 ===
+// === BUILD MARKER v215-2026-09-17T1920 ===
 // redeploy-trigger: 2026-09-10-v175-ext-watchdog
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import './App.css';
@@ -2246,7 +2246,7 @@ function DocsTab({ user, token }) {
               {docsUpload.phase === 'upload' && '📤 Загрузка на сервер…'}
               {docsUpload.phase === 'save' && '💾 Сохранение на сервере…'}
             </div>
-            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v214 ·</div>
+            <div style={{ fontSize: 11, color: '#b9b9bf', marginBottom: 2 }}>сборка · v215 ·</div>
             <div style={{ fontSize: 34, fontWeight: 800, color: '#0071e3', margin: '8px 0 2px' }}>{docsUpload.percent}%</div>
             <div style={{ fontSize: 13, color: '#555', marginBottom: 2 }}>
               {`Загружено ${docsUpload.done} из ${docsUpload.total} файлов · осталось ${Math.max(0, docsUpload.total - docsUpload.done)}`}
@@ -6488,6 +6488,30 @@ function App() {
     loadItemLab();
   };
 
+  // v215: пакетный прогон векторов ПРЕДМЕТОВ (home_items) — раньше вектора появлялись только при создании/перераспознавании
+  const runEmbedItems = async () => {
+    if (embedRun && embedRun.running) return;
+    setEmbedRun({ running: true, log: [], base: 0, total: 0, done: 0, t0: Date.now() });
+    let total = 0;
+    try {
+      for (let i = 0; i < 10; i++) {
+        const r = await fetch(`${API_URL}/api/parse/embed-catalog?token=${token}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ limit: 200, target: 'items', embed_url: localEmbedUrl || undefined })
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || `Ошибка ${r.status}`);
+        total += d.done || 0;
+        setEmbedRun(prev => ({ ...(prev || {}), log: [...(prev ? prev.log : []), `предметы, порция ${i + 1}: +${d.done} (ошибок ${d.failed}) — ${d.left}`] }));
+        if ((d.failed || 0) >= 10 && !(d.done || 0)) break;
+        if (d.left === 'все предметы покрыты') break;
+      }
+    } catch (e) {
+      setEmbedRun(prev => ({ running: false, log: [...(prev ? prev.log : []), '❌ ' + e.message] }));
+    }
+    setEmbedRun(prev => ({ running: false, log: [...(prev ? prev.log : []), `✅ предметы с векторами: +${total}`] }));
+    loadItemLab();
+  };
+
   // v197: фоновый прогон НА СЕРВЕРЕ до конца каталога — не зависит от вкладки
   const startEmbedAuto = async () => {
     if (embedRun && embedRun.running) return;
@@ -10049,7 +10073,7 @@ ${bodyHtml}
             <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {!isMobileView && (
                 <span style={{ fontSize: 11, color: '#95a5a6', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}>
-                  {'сборка 2026-09-16 · v214 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
+                  {'сборка 2026-09-17 · v215 · Mac OCR: ' + (macOcrUrl ? 'туннель' : '127.0.0.1:8787')}
                   <button
                     onClick={startLocalAi}
                     disabled={localAiStart && localAiStart.busy}
@@ -10068,7 +10092,7 @@ ${bodyHtml}
             </div>
           </div>
           {isMobileView && (
-            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-16 · v214</div>
+            <div style={{ fontSize: 10, color: '#b0b0b6', textAlign: 'right', padding: '0 8px 2px', lineHeight: 1.2 }}>2026-09-17 · v215</div>
           )}
           <style>{'.mini-header .tabs-inline,header .tabs-inline{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important}.mini-header .tabs-inline button,header .tabs-inline button{background:none !important;background-color:transparent !important;border:none !important;box-shadow:none !important;padding:6px 10px !important;font-size:14px !important;border-radius:0 !important}.mini-header .tabs-inline button.active,header .tabs-inline button.active{background:none !important;background-color:transparent !important;color:#0071e3 !important;border:none !important;border-bottom:2px solid #0071e3 !important;box-shadow:none !important;font-weight:700 !important}mark,.hl-mark{background:#ffeb3b !important;background-color:#ffeb3b !important;color:#000 !important;padding:0 2px;border-radius:2px;font-weight:600}.mini-header{overflow:visible !important;flex-wrap:wrap !important}.tabs-inline{flex-wrap:wrap !important;justify-content:center !important;row-gap:4px;max-width:100%;border-radius:14px !important;padding:5px 8px !important}.tabs-inline button{flex:0 0 auto !important}.header-right{flex-wrap:wrap !important;justify-content:flex-end}' + MOBILE_CSS}</style>
           <nav className="tabs-inline" style={{ background: "none", backgroundColor: "transparent", border: "none", boxShadow: "none", padding: "2px 0" }}>
@@ -11784,6 +11808,10 @@ ${bodyHtml}
                   <button onClick={() => runEmbedCatalog(false)} disabled={embedRun && embedRun.running}
                     style={{ border: 'none', background: '#7c3aed', color: '#fff', borderRadius: 7, padding: '7px 14px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
                     {embedRun && embedRun.running ? '⏳ Считаю…' : '▶ Прогнать порцию (200)'}
+                  </button>
+                  <button onClick={runEmbedItems} disabled={embedRun && embedRun.running}
+                    style={{ border: '1px solid #0a84ff', background: '#fff', color: '#0a84ff', borderRadius: 7, padding: '7px 14px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
+                    ▶ Прогнать предметы (все)
                   </button>
                   <button onClick={startEmbedAuto} disabled={embedRun && embedRun.running}
                     style={{ border: '1px solid #7c3aed', background: '#fff', color: '#7c3aed', borderRadius: 7, padding: '7px 14px', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
